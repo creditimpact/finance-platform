@@ -111,7 +111,12 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
         if line.strip()
     ]
     assert len(stored_lines) == 1
-    assert json.loads(stored_lines[0]) == result_payload
+    stored_payload = json.loads(stored_lines[0])
+    expected_payload = json.loads(json.dumps(result_payload))
+    context_expected = dict(expected_payload["analysis"]["context_hints"])
+    context_expected["topic"] = None
+    expected_payload["analysis"]["context_hints"] = context_expected
+    assert stored_payload == expected_payload
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]
@@ -129,6 +134,90 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     assert stage_calls == [(sid, runs_root)]
     assert barrier_calls == [sid]
     assert reconcile_calls == [(sid, runs_root)]
+
+
+def test_store_note_style_result_normalizes_analysis_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID905"
+    account_id = "idx-905"
+    runs_root = tmp_path / "runs"
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Please review my dispute."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.runflow_barriers_refresh", lambda _sid: None
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.reconcile_umbrella_barriers",
+        lambda _sid, runs_root=None: {},
+    )
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    baseline_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+
+    result_payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "analysis": {
+            "tone": {
+                "value": "Assertive",
+                "confidence": 0.82,
+                "risk_flags": ["Legal Threat"],
+            },
+            "context_hints": {
+                "topic": "Billing Error",
+                "timeframe": {"month": "March 5, 2024", "relative": "Last Year"},
+                "entities": {"creditor": "Capital Bank", "amount": 120.0},
+                "risk_flags": ["Needs Review"],
+            },
+            "emphasis": {
+                "values": ["Support Request"],
+                "risk_flags": ["Personal Data"],
+            },
+            "confidence": 0.91,
+            "risk_flags": ["Escalation Risk", "Escalation Risk"],
+        },
+        "prompt_salt": baseline_payload["prompt_salt"],
+        "note_hash": baseline_payload["note_hash"],
+        "note_metrics": baseline_payload["note_metrics"],
+        "evaluated_at": baseline_payload["evaluated_at"],
+        "fingerprint_hash": baseline_payload["fingerprint_hash"],
+    }
+
+    store_note_style_result(
+        sid,
+        account_id,
+        result_payload,
+        runs_root=runs_root,
+    )
+
+    stored_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    analysis = stored_payload["analysis"]
+
+    assert analysis["risk_flags"] == ["escalation_risk"]
+    assert analysis["tone"]["risk_flags"] == ["legal_threat"]
+
+    context = analysis["context_hints"]
+    assert context["topic"] == "billing_error"
+    assert context["risk_flags"] == ["needs_review"]
+    timeframe = context["timeframe"]
+    assert timeframe["month"] == "2024-03-05"
+    assert timeframe["relative"] == "last_year"
+
+    emphasis = analysis["emphasis"]
+    assert emphasis["risk_flags"] == ["personal_data"]
 
 
 def test_store_note_style_result_requires_all_accounts(
@@ -260,7 +349,11 @@ def test_store_note_style_result_logs_missing_fields(
     log_path = paths.log_file
     assert log_path.exists()
     contents = log_path.read_text(encoding="utf-8")
-    assert "missing_fields=confidence,tone,topic" in contents
+    assert (
+        "missing_fields="
+        "confidence,emphasis,entities,evaluated_at,fingerprint_hash,note_metrics,"
+        "risk_flags,timeframe,tone,topic"
+    ) in contents
     assert account_id in contents
 
     warnings = [

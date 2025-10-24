@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
+import re
 import time
 import uuid
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
@@ -89,6 +92,173 @@ def _atomic_write_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
         except FileNotFoundError:
             pass
     _fsync_directory(path.parent)
+
+
+def _to_snake_case(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    cleaned = re.sub(r"[^0-9A-Za-z]+", " ", text)
+    cleaned = cleaned.strip().lower()
+    return re.sub(r"\s+", "_", cleaned)
+
+
+_DATE_FULL_FORMATS: tuple[str, ...] = (
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%Y.%m.%d",
+    "%m/%d/%Y",
+    "%m-%d-%Y",
+    "%m.%d.%Y",
+    "%m/%d/%y",
+    "%m-%d-%y",
+    "%m.%d.%y",
+    "%B %d, %Y",
+    "%b %d, %Y",
+    "%B %d %Y",
+    "%b %d %Y",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%SZ",
+)
+
+_DATE_MONTH_FORMATS: tuple[str, ...] = (
+    "%Y-%m",
+    "%Y/%m",
+    "%Y.%m",
+    "%B %Y",
+    "%b %Y",
+    "%B-%Y",
+    "%b-%Y",
+)
+
+
+def _normalize_date_field(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return None
+    for fmt in _DATE_FULL_FORMATS:
+        try:
+            parsed = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        return parsed.date().isoformat()
+    if text.endswith("Z"):
+        try:
+            parsed = datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            return parsed.date().isoformat()
+    try:
+        parsed_iso = datetime.fromisoformat(text)
+    except ValueError:
+        parsed_iso = None
+    if parsed_iso is not None:
+        return parsed_iso.date().isoformat()
+    for fmt in _DATE_MONTH_FORMATS:
+        try:
+            parsed = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        return datetime(parsed.year, parsed.month, 1).date().isoformat()
+    return None
+
+
+def _ensure_mutable_mapping(value: Mapping[str, Any]) -> MutableMapping[str, Any]:
+    if isinstance(value, MutableMapping):
+        return value
+    return dict(value)
+
+
+def _normalize_risk_flags_list(values: Any) -> list[str]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        candidate = _to_snake_case(value)
+        if not candidate or candidate in seen:
+            continue
+        normalized.append(candidate)
+        seen.add(candidate)
+    return normalized
+
+
+def _normalize_context_section(context: MutableMapping[str, Any]) -> None:
+    if "risk_flags" in context:
+        context["risk_flags"] = _normalize_risk_flags_list(context.get("risk_flags"))
+    topic_value = context.get("topic")
+    if topic_value is None:
+        context["topic"] = None
+    else:
+        topic_normalized = _to_snake_case(topic_value)
+        context["topic"] = topic_normalized or None
+    timeframe_payload = context.get("timeframe")
+    if isinstance(timeframe_payload, Mapping):
+        timeframe_mutable = _ensure_mutable_mapping(timeframe_payload)
+        month_normalized = _normalize_date_field(timeframe_mutable.get("month"))
+        timeframe_mutable["month"] = month_normalized
+        relative_value = timeframe_mutable.get("relative")
+        if relative_value is None:
+            timeframe_mutable["relative"] = None
+        else:
+            relative_normalized = _to_snake_case(relative_value)
+            timeframe_mutable["relative"] = relative_normalized or None
+        context["timeframe"] = timeframe_mutable
+
+
+def _normalize_analysis_section(analysis: MutableMapping[str, Any]) -> None:
+    if "risk_flags" in analysis:
+        analysis["risk_flags"] = _normalize_risk_flags_list(analysis.get("risk_flags"))
+
+    tone_payload = analysis.get("tone")
+    if isinstance(tone_payload, Mapping):
+        tone_mutable = _ensure_mutable_mapping(tone_payload)
+        if "risk_flags" in tone_mutable:
+            tone_mutable["risk_flags"] = _normalize_risk_flags_list(
+                tone_mutable.get("risk_flags")
+            )
+        analysis["tone"] = tone_mutable
+
+    context_payload = analysis.get("context_hints")
+    if isinstance(context_payload, Mapping):
+        context_mutable = _ensure_mutable_mapping(context_payload)
+        _normalize_context_section(context_mutable)
+        analysis["context_hints"] = context_mutable
+
+    emphasis_payload = analysis.get("emphasis")
+    if isinstance(emphasis_payload, Mapping):
+        emphasis_mutable = _ensure_mutable_mapping(emphasis_payload)
+        if "risk_flags" in emphasis_mutable:
+            emphasis_mutable["risk_flags"] = _normalize_risk_flags_list(
+                emphasis_mutable.get("risk_flags")
+            )
+        analysis["emphasis"] = emphasis_mutable
+
+
+def _normalize_result_payload(payload: Mapping[str, Any]) -> MutableMapping[str, Any]:
+    normalized: MutableMapping[str, Any]
+    if isinstance(payload, MutableMapping):
+        normalized = copy.deepcopy(payload)
+    else:
+        normalized = copy.deepcopy(dict(payload))
+
+    analysis_payload = normalized.get("analysis")
+    if isinstance(analysis_payload, Mapping):
+        analysis_mutable = _ensure_mutable_mapping(analysis_payload)
+        _normalize_analysis_section(analysis_mutable)
+        normalized["analysis"] = analysis_mutable
+
+    return normalized
 
 
 def _relativize(path: Path, base: Path) -> str:
@@ -407,13 +577,15 @@ def store_note_style_result(
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
-    _atomic_write_jsonl(account_paths.result_file, payload)
+    normalized_payload = _normalize_result_payload(payload)
+
+    _atomic_write_jsonl(account_paths.result_file, normalized_payload)
     _validate_result_payload(
         sid=sid,
         account_id=account_id,
         paths=paths,
         account_paths=account_paths,
-        payload=payload,
+        payload=normalized_payload,
     )
     result_relative = _relative_to_base(account_paths.result_file, paths.base)
     log.info(
@@ -421,7 +593,7 @@ def store_note_style_result(
         sid,
         account_id,
         result_relative,
-        str(payload.get("prompt_salt") or ""),
+        str(normalized_payload.get("prompt_salt") or ""),
     )
 
     writer = NoteStyleIndexWriter(sid=sid, paths=paths)
@@ -430,7 +602,7 @@ def store_note_style_result(
         pack_path=account_paths.pack_file,
         result_path=account_paths.result_file,
         completed_at=completed_at,
-        note_hash=str(payload.get("note_hash") or "") or None,
+        note_hash=str(normalized_payload.get("note_hash") or "") or None,
     )
 
     packs_total = int(totals.get("total", 0))

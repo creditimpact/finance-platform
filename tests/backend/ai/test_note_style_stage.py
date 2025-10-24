@@ -339,17 +339,15 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     pack_messages = pack_payload["messages"]
     assert isinstance(pack_messages, list)
     assert pack_messages[0]["role"] == "system"
-    assert pack_messages[0]["content"].startswith(
+    system_content = pack_messages[0]["content"]
+    assert system_content.startswith(
         "You extract structured style from a customer's free-text note."
     )
-    assert pack_messages[0]["content"].strip().endswith(
-        f"Prompt salt: {result['prompt_salt']}"
-    )
+    assert f"Prompt salt: {result['prompt_salt']}" in system_content
+    assert "Context hints (orientation only):" in system_content
     assert pack_messages[1]["role"] == "user"
     user_payload = pack_messages[1]["content"]
-    assert isinstance(user_payload, dict)
-    metadata_payload = user_payload.get("metadata")
-    assert isinstance(metadata_payload, dict)
+    assert user_payload == {"note_text": sanitized}
     expected_context = {
         "identity": {
             "primary_issue": "late_payment",
@@ -476,17 +474,8 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    assert metadata_payload == {
-        "sid": sid,
-        "account_id": account_id,
-        "fingerprint_hash": expected_fingerprint_hash,
-        "channel": "frontend_review",
-        "lang": "auto",
-    }
-    assert user_payload["note_text"] == sanitized
-    assert user_payload["note_truncated"] is False
-    assert user_payload["account_context"] == expected_context
-    assert user_payload["bureaus_summary"] == expected_context["bureaus"]
+    assert pack_payload["account_context"] == expected_context
+    assert pack_payload["bureaus_summary"] == expected_context["bureaus"]
 
     assert 8 <= len(pack_payload["prompt_salt"]) <= 12
     assert pack_payload["note_hash"] == expected_note_hash
@@ -702,17 +691,15 @@ def test_note_style_stage_refresh_promotes_on_results(
         "sid": sid,
         "account_id": account_id,
         "analysis": {
-            "tone": {"value": "supportive", "confidence": 0.9, "risk_flags": []},
+            "tone": "supportive",
             "context_hints": {
-                "values": ["lender_fault"],
-                "confidence": 0.8,
-                "risk_flags": [],
+                "timeframe": {"month": None, "relative": None},
+                "topic": "lender_fault",
+                "entities": {"creditor": None, "amount": None},
             },
-            "emphasis": {
-                "values": ["help_request"],
-                "confidence": 0.7,
-                "risk_flags": [],
-            },
+            "emphasis": ["help_request"],
+            "confidence": 0.9,
+            "risk_flags": [],
         },
         "prompt_salt": "salt-value",
         "note_hash": "abc123",
@@ -833,7 +820,7 @@ def test_note_style_stage_minimal_smoke(
             "sid": sid,
             "account_id": strong_account,
             "analysis": {
-                "tone": {"value": "assertive", "confidence": 0.8, "risk_flags": []},
+                "tone": "assertive",
                 "context_hints": {
                     "timeframe": {"month": None, "relative": None},
                     "topic": "not_mine",
@@ -858,7 +845,7 @@ def test_note_style_stage_minimal_smoke(
             "sid": sid,
             "account_id": casual_account,
             "analysis": {
-                "tone": {"value": "conversational", "confidence": 0.7, "risk_flags": []},
+                "tone": "conversational",
                 "context_hints": {
                     "timeframe": {"month": None, "relative": "last_year"},
                     "topic": "payment_dispute",
@@ -1097,16 +1084,7 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    assert pack_user_payload["note_text"] == sanitized
-    assert pack_user_payload["note_truncated"] is False
-    metadata_payload = pack_user_payload.get("metadata")
-    assert metadata_payload == {
-        "sid": sid,
-        "account_id": account_id,
-        "fingerprint_hash": expected_fingerprint_hash,
-        "channel": "frontend_review",
-        "lang": "auto",
-    }
+    assert pack_user_payload == {"note_text": sanitized}
 
     assert pack_payload["note_hash"] == expected_note_hash
     assert pack_payload["fingerprint"] == expected_fingerprint
@@ -1164,9 +1142,8 @@ def test_note_style_stage_truncates_long_note(tmp_path: Path) -> None:
     result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
 
     user_payload = pack_payload["messages"][1]["content"]
-    assert user_payload["note_truncated"] is True
-    assert user_payload["note_text"] == truncated_expected
-    assert len(user_payload["note_text"]) == 2000
+    assert user_payload == {"note_text": truncated_expected}
+    assert len(truncated_expected) == 2000
 
     metrics = result_payload["note_metrics"]
     assert metrics == {

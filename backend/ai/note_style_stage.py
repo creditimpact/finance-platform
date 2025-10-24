@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - platform dependent
 from backend import config
 from backend.ai.manifest import ensure_note_style_section, register_note_style_build
 from backend.ai.note_style_logging import append_note_style_warning, log_structured_event
+from backend.ai.note_style.prompt import build_context_hint_text
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -1438,24 +1439,11 @@ def _pack_messages(
     bureaus_summary: Mapping[str, Any] | None,
 ) -> list[Mapping[str, Any]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt or "")
-    metadata: dict[str, Any] = {
-        "sid": sid,
-        "account_id": account_id,
-        "fingerprint_hash": fingerprint_hash,
-        "channel": "frontend_review",
-        "lang": "auto",
-    }
+    hint_text = build_context_hint_text(account_context, bureaus_summary)
+    if hint_text:
+        system_message = f"{system_message}\n{hint_text}"
 
-    user_content: dict[str, Any] = {
-        "note_text": note_text,
-        "note_truncated": note_truncated,
-        "metadata": metadata,
-    }
-
-    if account_context:
-        user_content["account_context"] = account_context
-    if bureaus_summary:
-        user_content["bureaus_summary"] = bureaus_summary
+    user_content: dict[str, Any] = {"note_text": note_text}
 
     return [
         {"role": "system", "content": system_message},

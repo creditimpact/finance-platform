@@ -13,6 +13,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from backend.ai.note_style.prompt import (
+    build_base_system_prompt,
+    build_context_hint_text,
+)
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     ensure_note_style_account_paths,
@@ -63,14 +67,19 @@ _DATE_FIELDS = {
 
 _BUREAU_PRIORITY = ("transunion", "experian", "equifax")
 
-_SYSTEM_MESSAGE = (
-    "You extract structured style from a customer's free-text note. Return JSON ONLY with schema: {\"tone\": <string>, "
-    "\"context_hints\": {\"timeframe\": {\"month\": <string|null>, \"relative\": <string|null>}, \"topic\": <string>, "
-    "\"entities\": {\"creditor\": <string|null>, \"amount\": <number|null>}}, \"emphasis\": [<string>...], \"confidence\": <float>, "
-    "\"risk_flags\": [<string>...]}. Rules: base decisions on note_text; use account_context and bureaus_summary only for orientation; "
-    "keep values short; lists ≤6; add [\"unsupported_claim\"] if the note asserts a legal claim with no supporting docs; for "
-    "short/ambiguous notes set confidence ≤0.5; respond with JSON only."
-)
+_BASE_SYSTEM_MESSAGE = build_base_system_prompt()
+
+
+def _build_system_message(
+    account_context: Mapping[str, Any] | None,
+    bureaus_summary: Mapping[str, Any] | None,
+) -> str:
+    """Return the system prompt decorated with compact context hints."""
+
+    hint_text = build_context_hint_text(account_context, bureaus_summary)
+    if hint_text:
+        return f"{_BASE_SYSTEM_MESSAGE}\n{hint_text}"
+    return _BASE_SYSTEM_MESSAGE
 
 
 class PackBuilderError(RuntimeError):
@@ -125,6 +134,8 @@ def build_pack(
         "word_len": len(note_text.split()),
     }
 
+    system_message = _build_system_message(account_context, bureaus_summary)
+
     pack_payload = {
         "sid": sid,
         "account_id": account_id,
@@ -134,15 +145,8 @@ def build_pack(
         "account_context": account_context,
         "bureaus_summary": bureaus_summary,
         "messages": [
-            {"role": "system", "content": _SYSTEM_MESSAGE},
-            {
-                "role": "user",
-                "content": {
-                    "note_text": note_text,
-                    "account_context": account_context,
-                    "bureaus_summary": bureaus_summary,
-                },
-            },
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": {"note_text": note_text}},
         ],
     }
 

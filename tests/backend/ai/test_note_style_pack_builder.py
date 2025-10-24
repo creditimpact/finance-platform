@@ -131,11 +131,9 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
 
     messages = pack_payload["messages"]
     assert messages[0]["role"] == "system"
+    assert "Context hints (orientation only):" in messages[0]["content"]
     assert messages[1]["role"] == "user"
-    user_content = messages[1]["content"]
-    assert user_content["note_text"] == pack_payload["note_text"]
-    assert user_content["account_context"] == pack_payload["account_context"]
-    assert user_content["bureaus_summary"] == pack_payload["bureaus_summary"]
+    assert messages[1]["content"] == {"note_text": pack_payload["note_text"]}
 
 
 def test_build_pack_requires_existing_artifacts(tmp_path: Path) -> None:

@@ -473,12 +473,9 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert metadata_payload == {
         "sid": sid,
         "account_id": account_id,
-        "fingerprint": expected_fingerprint,
         "fingerprint_hash": expected_fingerprint_hash,
-        "account_context": expected_context,
         "channel": "frontend_review",
         "lang": "auto",
-        "ui_allegations_selected": ["not_mine", "wrong_amount"],
     }
     assert user_payload["note_text"] == note
 
@@ -491,7 +488,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     )
     assert pack_payload["fingerprint"] == expected_fingerprint
     assert pack_payload["fingerprint_hash"] == expected_fingerprint_hash
-    assert pack_payload["account_context"] == expected_context
+    assert "account_context" not in pack_payload
     assert pack_payload["ui_allegations_selected"] == ["not_mine", "wrong_amount"]
     assert "extractor" not in pack_payload
     assert "analysis" not in result_payload
@@ -505,7 +502,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     }
     assert result_payload["fingerprint"] == expected_fingerprint
     assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
-    assert result_payload["account_context"] == expected_context
+    assert "account_context" not in result_payload
     assert result_payload["ui_allegations_selected"] == ["not_mine", "wrong_amount"]
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
@@ -595,12 +592,12 @@ def test_note_style_identity_primary_issue_absent(tmp_path: Path) -> None:
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
-    context = pack_payload.get("account_context", {})
-    identity = context.get("identity", {})
+    fingerprint = pack_payload["fingerprint"]
+    identity = fingerprint["identity"]
 
-    assert identity["primary_issue"] is None
-    assert identity["account_id"] == account_id
-    assert identity["reported_creditor"] == "Example Creditor"
+    assert identity.get("primary_issue") is None
+    assert fingerprint.get("account_id") == "acct-no-issue"
+    assert identity.get("reported_creditor") == "example-creditor"
 
 
 def test_note_style_stage_emits_structured_logs(
@@ -1005,15 +1002,12 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    expected_context: dict[str, Any] = {}
     assert pack_user_payload["note_text"] == note
     metadata_payload = pack_user_payload.get("metadata")
     assert metadata_payload == {
         "sid": sid,
         "account_id": account_id,
-        "fingerprint": expected_fingerprint,
         "fingerprint_hash": expected_fingerprint_hash,
-        "account_context": expected_context,
         "channel": "frontend_review",
         "lang": "auto",
     }
@@ -1021,7 +1015,7 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     assert pack_payload["note_hash"] == expected_note_hash
     assert pack_payload["fingerprint"] == expected_fingerprint
     assert pack_payload["fingerprint_hash"] == expected_fingerprint_hash
-    assert pack_payload["account_context"] == expected_context
+    assert "account_context" not in pack_payload
     assert result_payload["note_hash"] == expected_note_hash
     assert result_payload["source_hash"] == expected_hash
     assert result_payload["note_metrics"] == {
@@ -1030,7 +1024,7 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     }
     assert result_payload["fingerprint"] == expected_fingerprint
     assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
-    assert result_payload["account_context"] == expected_context
+    assert "account_context" not in result_payload
     assert note not in account_paths.result_file.read_text(encoding="utf-8")
 
 

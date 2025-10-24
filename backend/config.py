@@ -259,6 +259,9 @@ AI_HIERARCHY_VERSION = env_str("AI_HIERARCHY_VERSION", "v1")
 AI_REDACT_STRATEGY = os.getenv("AI_REDACT_STRATEGY", "hash_last4")
 
 NOTE_STYLE_ENABLED = env_bool("NOTE_STYLE_ENABLED", True)
+NOTE_STYLE_SEND_ON_RESPONSE_WRITE = env_bool(
+    "NOTE_STYLE_SEND_ON_RESPONSE_WRITE", False
+)
 NOTE_STYLE_MODEL = _coerce_non_empty_str("NOTE_STYLE_MODEL", "gpt-4o-mini")
 NOTE_STYLE_MAX_NOTE_CHARS = _coerce_positive_int(
     "NOTE_STYLE_MAX_NOTE_CHARS", 2000, min_value=1

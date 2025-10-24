@@ -71,7 +71,7 @@ from backend.runflow.decider import (
     refresh_frontend_stage_from_responses,
 )
 from backend.ai.note_style import schedule_prepare_and_send
-from backend.ai.note_style_stage import schedule_note_style_refresh
+from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.domain.claims import (
     CLAIM_FIELD_LINK_MAP,
     DOC_KEY_ALIAS_TO_CANONICAL,
@@ -2104,24 +2104,27 @@ def api_frontend_review_answer(sid: str, account_id: str):
 
     if config.NOTE_STYLE_ENABLED:
         try:
-            schedule_note_style_refresh(sid, account_id, runs_root=run_dir.parent)
+            build_note_style_pack_for_account(
+                sid, account_id, runs_root=run_dir.parent
+            )
         except Exception:  # pragma: no cover - defensive logging
             logger.warning(
-                "NOTE_STYLE_STAGE_SCHEDULE_FAILED sid=%s account_id=%s",
+                "NOTE_STYLE_BUILD_FAILED sid=%s account_id=%s",
                 sid,
                 account_id,
                 exc_info=True,
             )
 
-        try:
-            schedule_prepare_and_send(sid, runs_root=run_dir.parent)
-        except Exception:  # pragma: no cover - defensive logging
-            logger.warning(
-                "NOTE_STYLE_PREPARE_SCHEDULE_FAILED sid=%s account_id=%s",
-                sid,
-                account_id,
-                exc_info=True,
-            )
+        if config.NOTE_STYLE_SEND_ON_RESPONSE_WRITE:
+            try:
+                schedule_prepare_and_send(sid, runs_root=run_dir.parent)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "NOTE_STYLE_PREPARE_SCHEDULE_FAILED sid=%s account_id=%s",
+                    sid,
+                    account_id,
+                    exc_info=True,
+                )
 
     try:
         reconcile_umbrella_barriers(sid, runs_root=run_dir.parent)

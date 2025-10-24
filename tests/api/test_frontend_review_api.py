@@ -470,22 +470,26 @@ def test_frontend_review_submit_writes_response_file(api_client):
     assert not legacy_dir.exists()
 
 
-def test_frontend_review_submit_schedules_note_style(api_client, monkeypatch):
+def test_frontend_review_submit_builds_note_style_pack(api_client, monkeypatch):
     client, runs_root = api_client
     sid = "S780"
     account_id = "idx-009"
     (runs_root / sid).mkdir(parents=True, exist_ok=True)
 
-    refresh_calls: list[tuple[tuple, dict]] = []
-    prepare_calls: list[tuple[tuple, dict]] = []
-
+    build_calls: list[tuple[str, str, Path | None]] = []
     monkeypatch.setattr(
-        "backend.api.app.schedule_note_style_refresh",
-        lambda *args, **kwargs: refresh_calls.append((args, kwargs)),
+        "backend.api.app.build_note_style_pack_for_account",
+        lambda sid_arg, account_arg, *, runs_root=None: build_calls.append(
+            (sid_arg, account_arg, runs_root)
+        )
+        or {"status": "completed"},
     )
     monkeypatch.setattr(
         "backend.api.app.schedule_prepare_and_send",
-        lambda *args, **kwargs: prepare_calls.append((args, kwargs)),
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not run")),
+    )
+    monkeypatch.setattr(
+        "backend.api.app.config.NOTE_STYLE_SEND_ON_RESPONSE_WRITE", False
     )
 
     payload = {"answers": {"explanation": "note text"}}
@@ -496,9 +500,44 @@ def test_frontend_review_submit_schedules_note_style(api_client, monkeypatch):
     )
 
     assert response.status_code == 200
-    assert len(refresh_calls) == 1
-    assert len(prepare_calls) == 1
+    assert build_calls == [(sid, account_id, runs_root)]
 
+
+def test_frontend_review_submit_schedules_note_style_send_when_enabled(
+    api_client, monkeypatch
+):
+    client, runs_root = api_client
+    sid = "S781"
+    account_id = "idx-010"
+    (runs_root / sid).mkdir(parents=True, exist_ok=True)
+
+    build_calls: list[tuple[str, str, Path | None]] = []
+    monkeypatch.setattr(
+        "backend.api.app.build_note_style_pack_for_account",
+        lambda sid_arg, account_arg, *, runs_root=None: build_calls.append(
+            (sid_arg, account_arg, runs_root)
+        )
+        or {"status": "completed"},
+    )
+    prepare_calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        "backend.api.app.schedule_prepare_and_send",
+        lambda *args, **kwargs: prepare_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        "backend.api.app.config.NOTE_STYLE_SEND_ON_RESPONSE_WRITE", True
+    )
+
+    payload = {"answers": {"explanation": "note text"}}
+
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert build_calls == [(sid, account_id, runs_root)]
+    assert len(prepare_calls) == 1
     _, prepare_kwargs = prepare_calls[0]
     assert prepare_kwargs["runs_root"] == runs_root
 

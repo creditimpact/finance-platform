@@ -118,26 +118,6 @@ def ingest_note_style_result(
 
     existing_payload = _load_existing_payload(account_paths.result_file)
 
-    prompt_salt = coerce_text(pack_payload.get("prompt_salt"), preserve_case=True)
-    if not prompt_salt and isinstance(existing_payload, Mapping):
-        prompt_salt = coerce_text(
-            existing_payload.get("prompt_salt"), preserve_case=True
-        )
-
-    note_hash = coerce_text(pack_payload.get("note_hash"), preserve_case=True)
-    if not note_hash and isinstance(existing_payload, Mapping):
-        note_hash = coerce_text(
-            existing_payload.get("note_hash"), preserve_case=True
-        )
-
-    fingerprint_hash = coerce_text(
-        pack_payload.get("fingerprint_hash"), preserve_case=True
-    )
-    if not fingerprint_hash and isinstance(existing_payload, Mapping):
-        fingerprint_hash = coerce_text(
-            existing_payload.get("fingerprint_hash"), preserve_case=True
-        )
-
     parsed = _parse_response_payload(response_payload)
     analysis_payload: Mapping[str, Any]
     if isinstance(parsed.get("analysis"), Mapping):
@@ -151,11 +131,8 @@ def ingest_note_style_result(
     result_payload: MutableMapping[str, Any] = {
         "sid": sid,
         "account_id": str(account_id),
-        "prompt_salt": prompt_salt,
-        "note_hash": note_hash,
         "analysis": normalized_analysis,
         "evaluated_at": evaluated_at,
-        "fingerprint_hash": fingerprint_hash,
     }
 
     account_context_payload = pack_payload.get("account_context")
@@ -176,13 +153,7 @@ def ingest_note_style_result(
         if isinstance(metrics, Mapping):
             result_payload["note_metrics"] = dict(metrics)
 
-    log.info(
-        "STYLE_INGEST_RESULT sid=%s account_id=%s prompt_salt=%s note_hash=%s",
-        sid,
-        account_id,
-        prompt_salt,
-        note_hash,
-    )
+    log.info("STYLE_INGEST_RESULT sid=%s account_id=%s", sid, account_id)
 
     return store_note_style_result(
         sid,

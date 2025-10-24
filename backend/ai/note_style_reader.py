@@ -101,14 +101,10 @@ def get_style_metadata(
 
     emphasis = _sanitize_emphasis(analysis.get("emphasis"))
 
-    prompt_salt_raw = payload.get("prompt_salt")
-    prompt_salt = str(prompt_salt_raw).strip() if isinstance(prompt_salt_raw, str) else ""
-
     return {
         "tone": tone or "neutral",
         "topic": topic or "other",
         "emphasis": emphasis,
-        "prompt_salt": prompt_salt,
     }
 
 

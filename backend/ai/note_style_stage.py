@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import math
 import os
 import re
-import secrets
 import threading
 import time
 import uuid
@@ -63,7 +61,6 @@ _NOTE_STYLE_SYSTEM_PROMPT = (
     "Examples:\n"
     "  * note_text=\"\" → risk_flags [\"empty_note\"].\n"
     "  * note_text=\"They owe me $500 but I have no documents\" → add [\"unsupported_claim\"].\n"
-    "Prompt salt: {prompt_salt}\n"
 )
 
 _ALLOWED_TONES = {
@@ -219,7 +216,6 @@ class _LoadedResponseNote:
     note_raw: str
     note_sanitized: str
     source_path: Path
-    source_hash: str
     ui_allegations_selected: tuple[str, ...] = ()
 
 
@@ -985,15 +981,6 @@ def _build_account_fingerprint(
     return fingerprint
 
 
-def _compute_fingerprint_hash(fingerprint: Mapping[str, Any]) -> str:
-    serialized = json.dumps(
-        fingerprint, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    )
-    digest = hashlib.sha256()
-    digest.update(serialized.encode("utf-8"))
-    return digest.hexdigest()
-
-
 def discover_note_style_response_accounts(
     sid: str, *, runs_root: Path | str | None = None
 ) -> list[NoteStyleResponseAccount]:
@@ -1254,13 +1241,6 @@ def _unique(values: Iterable[str]) -> list[str]:
     return ordered
 
 
-def _source_hash(text: str) -> str:
-    normalized = " ".join(text.split()).strip().lower()
-    digest = hashlib.sha256()
-    digest.update(normalized.encode("utf-8"))
-    return digest.hexdigest()
-
-
 def _timeframe_bucket(timeframe: Mapping[str, Any] | None) -> str:
     if not isinstance(timeframe, Mapping):
         return "none"
@@ -1364,13 +1344,10 @@ def _log_style_discovery(
     account_id: str,
     response: PurePosixPath,
     status: str,
-    note_hash: str | None = None,
-    source_hash: str | None = None,
     char_len: int | None = None,
     word_len: int | None = None,
     truncated: bool | None = None,
     analysis: Mapping[str, Any] | None = None,
-    prompt_salt: str | None = None,
     reason: str | None = None,
 ) -> None:
     tone, topic, emphasis_values, confidence_value, risk_flags = _analysis_summary(analysis)
@@ -1379,13 +1356,11 @@ def _log_style_discovery(
         confidence_text = f"{confidence_value:.2f}"
 
     log.info(
-        "NOTE_STYLE_DISCOVERY_DETAIL sid=%s account_id=%s response=%s status=%s note_hash=%s source_hash=%s chars=%s words=%s truncated=%s tone=%s topic=%s emphasis=%s confidence=%s risk_flags=%s prompt_salt=%s reason=%s",
+        "NOTE_STYLE_DISCOVERY_DETAIL sid=%s account_id=%s response=%s status=%s chars=%s words=%s truncated=%s tone=%s topic=%s emphasis=%s confidence=%s risk_flags=%s reason=%s",
         sid,
         account_id,
         str(response),
         status,
-        note_hash or "",
-        source_hash or "",
         "" if char_len is None else char_len,
         "" if word_len is None else word_len,
         "" if truncated is None else truncated,
@@ -1394,16 +1369,8 @@ def _log_style_discovery(
         "|".join(emphasis_values),
         confidence_text,
         "|".join(risk_flags),
-        prompt_salt or "",
         reason or "",
     )
-
-
-def _note_hash(note_text: str) -> str:
-    normalized = _collapse_whitespace(unicodedata.normalize("NFKC", note_text))
-    digest = hashlib.sha256()
-    digest.update(normalized.encode("utf-8"))
-    return digest.hexdigest()
 
 
 def _prepare_note_text_for_model(note_text: str) -> tuple[str, bool]:
@@ -1417,28 +1384,16 @@ def _prepare_note_text_for_model(note_text: str) -> tuple[str, bool]:
     return sanitized, truncated
 
 
-def _random_prompt_salt() -> str:
-    if config.NOTE_STYLE_DISABLE_SALT:
-        return ""
-
-    length = secrets.choice(range(8, 13))
-    bytes_needed = math.ceil(length / 2)
-    value = secrets.token_hex(bytes_needed)
-    return value[:length]
-
-
 def _pack_messages(
     *,
     sid: str,
     account_id: str,
     note_text: str,
     note_truncated: bool,
-    prompt_salt: str | None,
-    fingerprint_hash: str,
     account_context: Mapping[str, Any] | None,
     bureaus_summary: Mapping[str, Any] | None,
 ) -> list[Mapping[str, Any]]:
-    system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt or "")
+    system_message = _NOTE_STYLE_SYSTEM_PROMPT
     hint_text = build_context_hint_text(account_context, bureaus_summary)
     if hint_text:
         system_message = f"{system_message}\n{hint_text}"
@@ -1871,7 +1826,6 @@ def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponse
             note_raw=empty,
             note_sanitized="",
             source_path=response_path,
-            source_hash=_source_hash(empty),
             ui_allegations_selected=(),
         )
 
@@ -1894,13 +1848,11 @@ def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponse
 
     note_raw, note_sanitized = _extract_note_text(payload)
     ui_allegations_selected = _extract_ui_allegations_selected(payload)
-    source_hash = _source_hash(note_sanitized)
     return _LoadedResponseNote(
         account_id=str(account_id),
         note_raw=note_raw,
         note_sanitized=note_sanitized,
         source_path=response_path,
-        source_hash=source_hash,
         ui_allegations_selected=ui_allegations_selected,
     )
 
@@ -1923,7 +1875,6 @@ def _serialize_entry(
     account_id: str,
     paths: NoteStylePaths,
     account_paths: NoteStyleAccountPaths,
-    note_hash: str,
     status: str,
     timestamp: str,
     result_path: Path | None = None,
@@ -1934,7 +1885,6 @@ def _serialize_entry(
         "lines": 1,
         "built_at": timestamp,
         "status": status,
-        "note_hash": note_hash,
     }
     if result_path is not None:
         entry["result_path"] = _relativize(result_path, paths.base)
@@ -1944,7 +1894,7 @@ def _serialize_entry(
 
 
 def _serialize_skip_entry(
-    *, account_id: str, note_hash: str, timestamp: str, status: str = "skipped_low_signal"
+    *, account_id: str, timestamp: str, status: str = "skipped_low_signal"
 ) -> dict[str, Any]:
     return {
         "account_id": account_id,
@@ -1952,7 +1902,6 @@ def _serialize_skip_entry(
         "lines": 0,
         "built_at": timestamp,
         "status": status,
-        "note_hash": note_hash,
         "result_path": "",
     }
 
@@ -2161,17 +2110,8 @@ def _update_index_for_account(
         result_value = str(entry.get("result_path") or "")
 
     index_relative = _relativize(paths.index_file, paths.base)
-    note_hash_value = ""
-    if entry is not None and isinstance(entry, Mapping):
-        note_hash_value = str(entry.get("note_hash") or entry.get("source_hash") or "")
-    elif removed_entry is not None:
-        note_hash_value = str(
-            removed_entry.get("note_hash")
-            or removed_entry.get("source_hash")
-            or ""
-        )
     log.info(
-        "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=%s status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result_path=%s note_hash=%s",
+        "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=%s status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result_path=%s",
         sid,
         account_id,
         action,
@@ -2182,7 +2122,6 @@ def _update_index_for_account(
         index_relative,
         pack_value,
         result_value,
-        note_hash_value,
     )
 
     return totals
@@ -2360,18 +2299,16 @@ def build_note_style_pack_for_account(
 
     note_sanitized = loaded_note.note_sanitized
     note_text_for_model, note_truncated = _prepare_note_text_for_model(note_sanitized)
-    source_hash = loaded_note.source_hash
     ui_allegations_selected = list(loaded_note.ui_allegations_selected)
-    note_hash = _note_hash(note_sanitized)
     char_len = len(note_text_for_model)
     word_len = len(note_text_for_model.split())
+    timestamp = _now_iso()
+
     if _is_low_signal_note(note_text_for_model):
-        timestamp = _now_iso()
         skip_status = "skipped_low_signal"
         _remove_account_artifacts(account_paths)
         entry = _serialize_skip_entry(
             account_id=account_id_str,
-            note_hash=note_hash,
             timestamp=timestamp,
             status=skip_status,
         )
@@ -2382,10 +2319,9 @@ def build_note_style_pack_for_account(
             sid=sid, runs_root=runs_root_path, totals=totals, index_path=paths.index_file
         )
         log.info(
-            "NOTE_STYLE_PACK_SKIPPED_LOW_SIGNAL sid=%s acc=%s note_hash=%s char_len=%s word_len=%s truncated=%s",
+            "NOTE_STYLE_PACK_SKIPPED_LOW_SIGNAL sid=%s acc=%s char_len=%s word_len=%s truncated=%s",
             sid,
             account_id_str,
-            note_hash,
             char_len,
             word_len,
             note_truncated,
@@ -2395,8 +2331,6 @@ def build_note_style_pack_for_account(
             account_id=account_id_str,
             response=response_rel,
             status=skip_status,
-            note_hash=note_hash,
-            source_hash=source_hash,
             char_len=char_len,
             word_len=word_len,
             truncated=note_truncated,
@@ -2405,97 +2339,24 @@ def build_note_style_pack_for_account(
         return {
             "status": skip_status,
             "reason": "low_signal",
-            "note_hash": note_hash,
             "packs_total": totals.get("total", 0),
             "packs_completed": totals.get("completed", 0),
         }
-    existing_index = _load_json_mapping(paths.index_file)
-    items = _index_items(existing_index)
-    existing_entry: Mapping[str, Any] | None = None
-    for item in items:
-        if str(item.get("account_id")) == str(account_id):
-            existing_entry = item
-            break
-
-    existing_result = _load_result_payload(account_paths.result_file)
-    existing_note_hash = ""
-    if isinstance(existing_entry, Mapping):
-        existing_note_hash = str(
-            existing_entry.get("note_hash")
-            or existing_entry.get("source_hash")
-            or ""
-        )
-    result_note_hash = ""
-    result_source_hash = ""
-    if isinstance(existing_result, Mapping):
-        result_note_hash = str(existing_result.get("note_hash") or "")
-        result_source_hash = str(existing_result.get("source_hash") or "")
-    skip_by_note_hash = (
-        config.NOTE_STYLE_IDEMPOTENT_BY_NOTE_HASH
-        and existing_note_hash == note_hash
-        and isinstance(existing_result, Mapping)
-        and (
-            result_note_hash == note_hash
-            or (result_source_hash and result_source_hash == source_hash)
-        )
-    )
-    skip_by_existing_result = (
-        not skip_by_note_hash
-        and config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS
-        and isinstance(existing_result, Mapping)
-    )
-
-    if skip_by_note_hash or skip_by_existing_result:
-        totals = _compute_totals(items)
-        skip_status = "unchanged" if skip_by_note_hash else "existing_result"
-        _record_stage_progress(
-            sid=sid,
-            runs_root=runs_root_path,
-            totals=totals,
-            index_path=paths.index_file,
-        )
-        prompt_salt_existing = (
-            str(existing_result.get("prompt_salt")) if isinstance(existing_result, Mapping) else ""
-        )
-        _log_style_discovery(
-            sid=sid,
-            account_id=account_id_str,
-            response=response_rel,
-            status=skip_status,
-            note_hash=note_hash,
-            source_hash=source_hash,
-            char_len=char_len,
-            word_len=word_len,
-            truncated=note_truncated,
-            prompt_salt=prompt_salt_existing,
-        )
-        return {
-            "status": skip_status,
-            "packs_total": totals.get("total", 0),
-            "packs_completed": totals.get("completed", 0),
-        }
-
-    prompt_salt = _random_prompt_salt()
     _log_style_discovery(
         sid=sid,
         account_id=account_id_str,
         response=response_rel,
         status="ready",
-        note_hash=note_hash,
-        source_hash=source_hash,
         char_len=char_len,
         word_len=word_len,
         truncated=note_truncated,
-        prompt_salt=prompt_salt,
     )
-    timestamp = _now_iso()
 
     debug_snapshot = {
         "sid": sid,
         "account_id": account_id_str,
         "collected_at": timestamp,
         "fingerprint": None,
-        "fingerprint_hash": "",
         "meta": meta_payload,
         "bureaus": bureaus_payload,
         "bureaus_summary": None,
@@ -2520,12 +2381,10 @@ def build_note_style_pack_for_account(
         tags_payload,
         bureaus_summary,
     )
-    fingerprint_hash = _compute_fingerprint_hash(fingerprint)
 
     debug_snapshot.update(
         {
             "fingerprint": fingerprint,
-            "fingerprint_hash": fingerprint_hash,
             "bureaus_summary": bureaus_summary,
             "account_context": account_context,
         }
@@ -2536,11 +2395,8 @@ def build_note_style_pack_for_account(
         "sid": sid,
         "account_id": str(account_id),
         "source_response_path": str(response_rel),
-        "note_hash": note_hash,
         "model": _NOTE_STYLE_MODEL,
-        "prompt_salt": prompt_salt,
         "fingerprint": fingerprint,
-        "fingerprint_hash": fingerprint_hash,
         "account_context": account_context,
         "bureaus_summary": bureaus_summary,
         "note_metrics": {"char_len": char_len, "word_len": word_len},
@@ -2549,8 +2405,6 @@ def build_note_style_pack_for_account(
             account_id=str(account_id),
             note_text=note_text_for_model,
             note_truncated=note_truncated,
-            prompt_salt=prompt_salt,
-            fingerprint_hash=fingerprint_hash,
             account_context=account_context,
             bureaus_summary=bureaus_summary,
         ),
@@ -2559,15 +2413,12 @@ def build_note_style_pack_for_account(
     result_payload = {
         "sid": sid,
         "account_id": str(account_id),
-        "prompt_salt": prompt_salt,
-        "note_hash": note_hash,
         "note_metrics": {
             "char_len": char_len,
             "word_len": word_len,
             "truncated": note_truncated,
         },
         "evaluated_at": timestamp,
-        "fingerprint_hash": fingerprint_hash,
         "account_context": account_context,
         "bureaus_summary": bureaus_summary,
     }
@@ -2590,19 +2441,15 @@ def build_note_style_pack_for_account(
     pack_relative = _relativize(account_paths.pack_file, paths.base)
     result_relative = _relativize(account_paths.result_file, paths.base)
     log.info(
-        "NOTE_STYLE_PACK_BUILT sid=%s acc=%s pack=%s result=%s note_hash=%s prompt_salt=%s source_hash=%s char_len=%s word_len=%s truncated=%s model=%s fingerprint=%s",
+        "NOTE_STYLE_PACK_BUILT sid=%s acc=%s pack=%s result=%s char_len=%s word_len=%s truncated=%s model=%s",
         sid,
         account_id_str,
         pack_relative,
         result_relative,
-        note_hash,
-        prompt_salt,
-        source_hash,
         char_len,
         word_len,
         note_truncated,
         _NOTE_STYLE_MODEL,
-        fingerprint,
     )
     log_structured_event(
         "NOTE_STYLE_PACK_BUILT",
@@ -2611,12 +2458,8 @@ def build_note_style_pack_for_account(
         account_id=account_id_str,
         pack_path=pack_relative,
         result_path=result_relative,
-        note_hash=note_hash,
-        prompt_salt=prompt_salt,
-        source_hash=source_hash,
         model=_NOTE_STYLE_MODEL,
         note_metrics=result_payload.get("note_metrics"),
-        fingerprint_hash=fingerprint_hash,
     )
 
     entry = _serialize_entry(
@@ -2624,7 +2467,6 @@ def build_note_style_pack_for_account(
         account_id=str(account_id),
         paths=paths,
         account_paths=account_paths,
-        note_hash=note_hash,
         status="built",
         timestamp=timestamp,
     )
@@ -2640,8 +2482,6 @@ def build_note_style_pack_for_account(
         "status": "completed",
         "packs_total": totals.get("total", 0),
         "packs_completed": totals.get("completed", 0),
-        "prompt_salt": prompt_salt,
-        "note_hash": note_hash,
     }
 
 

@@ -394,15 +394,6 @@ def _load_pack_payload_for_logging(pack_path: Path) -> Mapping[str, Any] | None:
     return None
 
 
-def _load_pack_fingerprint_hash(pack_path: Path) -> str | None:
-    payload = _load_pack_payload_for_logging(pack_path)
-    if isinstance(payload, Mapping):
-        fingerprint_hash = payload.get("fingerprint_hash")
-        if fingerprint_hash:
-            return str(fingerprint_hash)
-    return None
-
-
 def _load_pack_note_metrics(pack_path: Path) -> Mapping[str, Any] | None:
     payload = _load_pack_payload_for_logging(pack_path)
     if isinstance(payload, Mapping):
@@ -714,10 +705,6 @@ def _validate_result_payload(
     missing_fields: list[str] = []
     analysis_payload = payload.get("analysis")
 
-    fingerprint_hash = str(payload.get("fingerprint_hash") or "").strip()
-    if not fingerprint_hash:
-        missing_fields.append("fingerprint_hash")
-
     evaluated_at = str(payload.get("evaluated_at") or "").strip()
     if not evaluated_at:
         missing_fields.append("evaluated_at")
@@ -902,7 +889,6 @@ class NoteStyleIndexWriter:
         pack_path: Path | None,
         result_path: Path | None,
         completed_at: str | None = None,
-        note_hash: str | None = None,
     ) -> tuple[Mapping[str, Any], dict[str, int]]:
         document = self._load_document()
         key, entries = self._extract_entries(document)
@@ -927,8 +913,6 @@ class NoteStyleIndexWriter:
                     entry_payload.setdefault(
                         "pack", _relativize(pack_path, self._paths.base)
                     )
-                if note_hash:
-                    entry_payload.setdefault("note_hash", note_hash)
                 entry_payload.pop("error", None)
                 updated_entry = entry_payload
             rewritten.append(entry_payload)
@@ -947,8 +931,6 @@ class NoteStyleIndexWriter:
                 )
             else:
                 entry_payload["result_path"] = ""
-            if note_hash:
-                entry_payload["note_hash"] = note_hash
             rewritten.append(entry_payload)
             updated_entry = entry_payload
 
@@ -970,9 +952,8 @@ class NoteStyleIndexWriter:
         result_value = (
             str(updated_entry.get("result_path") or "") if updated_entry else ""
         )
-        note_hash_value = str(updated_entry.get("note_hash") or "") if updated_entry else ""
         log.info(
-            "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=completed status=%s packs_total=%s packs_completed=%s packs_failed=%s skipped=%s index=%s pack=%s result_path=%s note_hash=%s",
+            "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=completed status=%s packs_total=%s packs_completed=%s packs_failed=%s skipped=%s index=%s pack=%s result_path=%s",
             self.sid,
             normalized_account,
             status_text,
@@ -983,7 +964,6 @@ class NoteStyleIndexWriter:
             index_relative,
             pack_value,
             result_value,
-            note_hash_value,
         )
         return updated_entry, totals, skipped_count
 
@@ -1296,33 +1276,11 @@ def store_note_style_result(
         sid=sid,
         account_id=account_id,
         result_path=result_relative,
-        prompt_salt=str(normalized_payload.get("prompt_salt") or ""),
         note_metrics=note_metrics_payload,
         tone=tone_value,
         confidence=confidence_value,
         risk_flags=risk_flags_payload,
-        fingerprint_hash=str(normalized_payload.get("fingerprint_hash") or ""),
     )
-
-    pack_fingerprint_hash = _load_pack_fingerprint_hash(account_paths.pack_file)
-    result_fingerprint_hash = str(normalized_payload.get("fingerprint_hash") or "").strip()
-    if (
-        pack_fingerprint_hash
-        and result_fingerprint_hash
-        and pack_fingerprint_hash != result_fingerprint_hash
-    ):
-        pack_relative = _relative_to_base(account_paths.pack_file, paths.base)
-        log_structured_event(
-            "NOTE_STYLE_FINGERPRINT_MISMATCH",
-            level=logging.WARNING,
-            logger=log,
-            sid=sid,
-            account_id=account_id,
-            pack_path=pack_relative,
-            result_path=result_relative,
-            pack_fingerprint_hash=pack_fingerprint_hash,
-            result_fingerprint_hash=result_fingerprint_hash,
-        )
 
     writer = NoteStyleIndexWriter(sid=sid, paths=paths)
     updated_entry, totals, skipped_count = writer.mark_completed(
@@ -1330,7 +1288,6 @@ def store_note_style_result(
         pack_path=account_paths.pack_file,
         result_path=account_paths.result_file,
         completed_at=completed_at,
-        note_hash=str(normalized_payload.get("note_hash") or "") or None,
     )
     _refresh_after_index_update(
         sid=sid,

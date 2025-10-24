@@ -114,7 +114,7 @@ def test_note_style_sender_sends_built_pack(
     assert timeframe.get("month") in {None, "2024-04-01"}
     entities = context["entities"]
     assert entities["creditor"] == "capital one"
-    assert entities["amount"] is None
+    assert entities["amount"] == pytest.approx(123.45)
     assert analysis["risk_flags"] == [
         "follow_up",
         "duplicate",

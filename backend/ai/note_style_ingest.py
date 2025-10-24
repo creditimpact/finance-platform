@@ -3,23 +3,17 @@
 from __future__ import annotations
 
 import json
-import json
 import logging
-import math
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from backend.ai.note_style_results import store_note_style_result
-
 from backend.core.ai.paths import NoteStyleAccountPaths
+from backend.note_style.validator import coerce_text, validate_analysis_payload
 
 
 log = logging.getLogger(__name__)
-
-_LOWER_SNAKE_PATTERN = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
-_MAX_EMPHASIS_ITEMS = 6
 
 
 def _now_iso() -> str:
@@ -48,164 +42,6 @@ def _load_existing_payload(path: Path) -> Mapping[str, Any] | None:
     return payload if isinstance(payload, Mapping) else None
 
 
-def _coerce_str(value: Any, *, preserve_case: bool = False) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (bytes, bytearray)):
-        try:
-            text = value.decode("utf-8", errors="ignore")
-        except Exception:
-            text = ""
-    else:
-        text = str(value)
-    text = text.strip()
-    return text if preserve_case else text.lower()
-
-
-def _require_string(value: Any, *, field: str) -> str:
-    text = _coerce_str(value, preserve_case=True)
-    if not text:
-        raise ValueError(f"{field} must be a non-empty string")
-    return text
-
-
-def _sanitize_emphasis(values: Any) -> list[str]:
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
-        return []
-    seen: set[str] = set()
-    sanitized: list[str] = []
-    for entry in values:
-        text = _coerce_str(entry, preserve_case=True)
-        if not text:
-            continue
-        if text in seen:
-            continue
-        sanitized.append(text)
-        seen.add(text)
-        if len(sanitized) >= _MAX_EMPHASIS_ITEMS:
-            break
-    return sanitized
-
-
-_RISK_FLAG_SANITIZE_PATTERN = re.compile(r"[^a-z0-9]+")
-
-
-def _normalize_risk_flag(value: Any) -> str:
-    text = _coerce_str(value)
-    if not text:
-        return ""
-    sanitized = _RISK_FLAG_SANITIZE_PATTERN.sub("_", text)
-    sanitized = sanitized.strip("_")
-    sanitized = re.sub(r"_+", "_", sanitized)
-    return sanitized
-
-
-def _sanitize_risk_flags(values: Any) -> list[str]:
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
-        return []
-    seen: set[str] = set()
-    flags: list[str] = []
-    for entry in values:
-        normalized = _normalize_risk_flag(entry)
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        flags.append(normalized)
-    return flags
-
-
-def _sanitize_confidence(value: Any) -> float:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("confidence must be a number between 0 and 1") from exc
-    if math.isnan(numeric) or math.isinf(numeric):
-        raise ValueError("confidence must be a finite number")
-    if numeric < 0 or numeric > 1:
-        raise ValueError("confidence must be within [0, 1]")
-    return round(numeric, 3)
-
-
-def _sanitize_amount(value: Any) -> float | str | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        numeric = float(value)
-        if math.isnan(numeric) or math.isinf(numeric):
-            raise ValueError("context_hints.entities.amount must be finite")
-        return numeric
-    text = _coerce_str(value, preserve_case=True)
-    return text or None
-
-
-def _sanitize_context(context: Any) -> dict[str, Any]:
-    if not isinstance(context, Mapping):
-        raise ValueError("context_hints must be an object")
-
-    timeframe_payload = context.get("timeframe")
-    timeframe: dict[str, Any] = {"month": None, "relative": None}
-    if timeframe_payload is not None:
-        if not isinstance(timeframe_payload, Mapping):
-            raise ValueError("context_hints.timeframe must be an object")
-        month = _coerce_str(
-            timeframe_payload.get("month"), preserve_case=True
-        )
-        relative = _coerce_str(
-            timeframe_payload.get("relative"), preserve_case=True
-        )
-        timeframe["month"] = month or None
-        timeframe["relative"] = relative or None
-
-    topic = _require_string(context.get("topic"), field="context_hints.topic")
-
-    entities_payload = context.get("entities")
-    entities: dict[str, Any] = {"creditor": None, "amount": None}
-    if entities_payload is not None:
-        if not isinstance(entities_payload, Mapping):
-            raise ValueError("context_hints.entities must be an object")
-        creditor = _coerce_str(
-            entities_payload.get("creditor"), preserve_case=True
-        )
-        entities["creditor"] = creditor or None
-        amount_value = _sanitize_amount(entities_payload.get("amount"))
-        entities["amount"] = amount_value
-
-    return {
-        "timeframe": timeframe,
-        "topic": topic,
-        "entities": entities,
-    }
-
-
-def _normalize_analysis(payload: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(payload, Mapping):
-        raise ValueError("analysis payload must be an object")
-
-    tone = _require_string(payload.get("tone"), field="tone")
-    context = _sanitize_context(payload.get("context_hints"))
-    emphasis = _sanitize_emphasis(payload.get("emphasis"))
-
-    if "confidence" not in payload:
-        raise ValueError("confidence is required")
-    confidence = _sanitize_confidence(payload.get("confidence"))
-    risk_flags = _sanitize_risk_flags(payload.get("risk_flags"))
-
-    return {
-        "tone": tone,
-        "context_hints": context,
-        "emphasis": emphasis,
-        "confidence": confidence,
-        "risk_flags": risk_flags,
-    }
-
-
-def _strip_code_fence(text: str) -> str:
-    lines = text.strip().splitlines()
-    if lines and lines[0].startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].startswith("```"):
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
 
 
 def _extract_response_content(response_payload: Any) -> str:
@@ -260,18 +96,8 @@ def _parse_response_payload(response_payload: Any) -> Mapping[str, Any]:
     text = _extract_response_content(response_payload)
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError:
-        sanitized = _strip_code_fence(text)
-        start = sanitized.find("{")
-        end = sanitized.rfind("}")
-        if start >= 0 and end > start:
-            snippet = sanitized[start : end + 1]
-            try:
-                parsed = json.loads(snippet)
-            except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-                raise ValueError("Model response is not valid JSON") from exc
-        else:
-            raise ValueError("Model response is not valid JSON")
+    except json.JSONDecodeError as exc:
+        raise ValueError("Model response is not valid JSON") from exc
 
     if isinstance(parsed, Mapping):
         return parsed
@@ -292,23 +118,23 @@ def ingest_note_style_result(
 
     existing_payload = _load_existing_payload(account_paths.result_file)
 
-    prompt_salt = _coerce_str(pack_payload.get("prompt_salt"), preserve_case=True)
+    prompt_salt = coerce_text(pack_payload.get("prompt_salt"), preserve_case=True)
     if not prompt_salt and isinstance(existing_payload, Mapping):
-        prompt_salt = _coerce_str(
+        prompt_salt = coerce_text(
             existing_payload.get("prompt_salt"), preserve_case=True
         )
 
-    note_hash = _coerce_str(pack_payload.get("note_hash"), preserve_case=True)
+    note_hash = coerce_text(pack_payload.get("note_hash"), preserve_case=True)
     if not note_hash and isinstance(existing_payload, Mapping):
-        note_hash = _coerce_str(
+        note_hash = coerce_text(
             existing_payload.get("note_hash"), preserve_case=True
         )
 
-    fingerprint_hash = _coerce_str(
+    fingerprint_hash = coerce_text(
         pack_payload.get("fingerprint_hash"), preserve_case=True
     )
     if not fingerprint_hash and isinstance(existing_payload, Mapping):
-        fingerprint_hash = _coerce_str(
+        fingerprint_hash = coerce_text(
             existing_payload.get("fingerprint_hash"), preserve_case=True
         )
 
@@ -319,7 +145,7 @@ def ingest_note_style_result(
     else:
         analysis_payload = parsed
 
-    normalized_analysis = _normalize_analysis(analysis_payload)
+    normalized_analysis = validate_analysis_payload(analysis_payload)
     evaluated_at = _now_iso()
 
     result_payload: MutableMapping[str, Any] = {

@@ -218,26 +218,63 @@ def _extract_response_text(response_payload: Any) -> str:
 def _write_raw_response(
     *,
     account_paths: NoteStyleAccountPaths,
-    sid: str,
-    account_id: str,
-    pack_path: Path,
     response_payload: Any,
-    error: Exception | str | None,
-) -> None:
-    payload = {
-        "sid": sid,
-        "account_id": account_id,
-        "pack_path": str(pack_path),
-        "recorded_at": _now_iso(),
-        "error": str(error) if error else "",
-        "response": _safe_json_payload(response_payload),
-        "response_text": _extract_response_text(response_payload),
-    }
+) -> Path:
+    """Persist the raw model content for debugging."""
 
-    account_paths.result_raw_file.parent.mkdir(parents=True, exist_ok=True)
-    with account_paths.result_raw_file.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    base_path = account_paths.result_raw_file
+    base_path.parent.mkdir(parents=True, exist_ok=True)
+
+    text_content = _extract_response_text(response_payload)
+    text_to_write = text_content if isinstance(text_content, str) else ""
+    stripped = text_to_write.strip()
+
+    target_path = base_path
+    if stripped:
+        try:
+            json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+        else:
+            target_path = base_path.with_suffix(".json")
+            if text_to_write and not text_to_write.endswith("\n"):
+                text_to_write = f"{text_to_write}\n"
+    if target_path == base_path:
+        if stripped:
+            if text_to_write and not text_to_write.endswith("\n"):
+                text_to_write = f"{text_to_write}\n"
+        else:
+            safe_payload = _safe_json_payload(response_payload)
+            target_path = base_path.with_suffix(".json")
+            text_to_write = json.dumps(safe_payload, ensure_ascii=False, indent=2)
+            text_to_write += "\n"
+
+    with target_path.open("w", encoding="utf-8") as handle:
+        handle.write(text_to_write)
+
+    alternate = base_path.with_suffix(".json")
+    for candidate in (base_path, alternate):
+        if candidate != target_path and candidate.exists():
+            try:
+                candidate.unlink()
+            except OSError:
+                log.debug(
+                    "STYLE_SEND_RAW_CLEANUP_FAILED path=%s", candidate, exc_info=True
+                )
+
+    return target_path
+
+
+def _write_invalid_result_marker(
+    *, account_paths: NoteStyleAccountPaths, reason: str
+) -> Path:
+    marker = {"error": "invalid_result", "reason": reason, "at": _now_iso()}
+    result_path = account_paths.result_file
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    with result_path.open("w", encoding="utf-8") as handle:
+        json.dump(marker, handle, ensure_ascii=False)
         handle.write("\n")
+    return result_path
 
 
 def send_note_style_packs_for_sid(
@@ -387,20 +424,20 @@ def send_note_style_packs_for_sid(
                     account_id,
                     exc_info=True,
                 )
-                _write_raw_response(
+                raw_path = _write_raw_response(
                     account_paths=account_paths,
-                    sid=sid,
-                    account_id=account_id,
-                    pack_path=pack_path,
                     response_payload=response,
-                    error=exc,
                 )
                 reason_text = str(exc).strip() or exc.__class__.__name__
+                marker_path = _write_invalid_result_marker(
+                    account_paths=account_paths, reason=reason_text
+                )
                 log.warning(
-                    "[NOTE_STYLE] RESULT_INVALID account=%s reason=%s raw_path=%s",
+                    "[NOTE_STYLE] RESULT_INVALID account=%s reason=%s raw_path=%s result_path=%s",
                     account_id,
                     reason_text,
-                    account_paths.result_raw_file.resolve().as_posix(),
+                    raw_path.resolve().as_posix(),
+                    marker_path.resolve().as_posix(),
                 )
                 record_note_style_failure(
                     sid,
@@ -419,11 +456,7 @@ def send_note_style_packs_for_sid(
                 )
                 _write_raw_response(
                     account_paths=account_paths,
-                    sid=sid,
-                    account_id=account_id,
-                    pack_path=pack_path,
                     response_payload=response,
-                    error=exc,
                 )
                 record_note_style_failure(
                     sid,

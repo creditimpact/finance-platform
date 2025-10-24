@@ -62,7 +62,7 @@ def test_note_style_account_paths_match_expected(tmp_path: Path) -> None:
     expected_pack = paths.packs_dir / "style_acc_idx-001.jsonl"
     expected_result = paths.results_dir / "acc_idx-001.result.jsonl"
     expected_debug = paths.debug_dir / "idx-001.context.json"
-    expected_raw = paths.results_raw_dir / "acc_idx-001.raw.json"
+    expected_raw = paths.results_raw_dir / "acc_idx-001.raw.txt"
 
     assert account_paths.account_id == "idx-001"
     assert account_paths.pack_file == expected_pack

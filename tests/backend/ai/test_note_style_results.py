@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,24 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
         "NOTE_STYLE_STAGE_REFRESH_DETAIL" in message for message in messages
     )
     assert any("[Runflow] Umbrella barriers:" in message for message in messages)
+
+    structured_records = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_results"
+        and record.getMessage().startswith("{")
+    ]
+    structured_event = next(
+        (
+            entry
+            for entry in structured_records
+            if entry.get("event") == "NOTE_STYLE_RESULTS_WRITTEN"
+        ),
+        None,
+    )
+    assert structured_event is not None
+    assert structured_event.get("note_metrics")
+    assert structured_event.get("risk_flags") is not None
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -365,3 +384,83 @@ def test_store_note_style_result_logs_missing_fields(
         if record.name == "backend.ai.note_style_results"
     ]
     assert any("NOTE_STYLE_RESULT_VALIDATION_FAILED" in message for message in warnings)
+
+
+def test_store_note_style_result_warns_on_fingerprint_mismatch(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    sid = "SID991"
+    account_id = "idx-991"
+    runs_root = tmp_path / "runs"
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Account paid in full."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    pack_payload = json.loads(
+        account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
+    )
+    pack_payload["fingerprint_hash"] = "pack-hash"
+    account_paths.pack_file.write_text(
+        json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    baseline_result = json.loads(
+        account_paths.result_file.read_text(encoding="utf-8").splitlines()[0]
+    )
+
+    result_payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "analysis": {
+            "tone": "neutral",
+            "context_hints": {
+                "topic": "other",
+                "timeframe": {"month": None, "relative": None},
+                "entities": {"creditor": None, "amount": None},
+                "risk_flags": [],
+            },
+            "emphasis": [],
+            "confidence": 0.25,
+            "risk_flags": [],
+        },
+        "prompt_salt": baseline_result["prompt_salt"],
+        "note_hash": baseline_result["note_hash"],
+        "note_metrics": baseline_result["note_metrics"],
+        "evaluated_at": baseline_result["evaluated_at"],
+        "fingerprint_hash": "result-hash",
+    }
+
+    caplog.set_level("WARNING", logger="backend.ai.note_style_results")
+    store_note_style_result(
+        sid,
+        account_id,
+        result_payload,
+        runs_root=runs_root,
+    )
+
+    structured_warnings = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_results"
+        and record.levelno >= logging.WARNING
+        and record.getMessage().startswith("{")
+    ]
+
+    assert any(
+        entry.get("event") == "NOTE_STYLE_FINGERPRINT_MISMATCH"
+        and entry.get("pack_fingerprint_hash") == "pack-hash"
+        and entry.get("result_fingerprint_hash") == "result-hash"
+        for entry in structured_warnings
+    )

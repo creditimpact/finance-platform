@@ -640,6 +640,18 @@ def test_note_style_stage_emits_structured_logs(
     )
     assert any("NOTE_STYLE_REFRESH" in message for message in messages)
 
+    structured_records = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_stage"
+        and record.getMessage().startswith("{")
+    ]
+    assert any(
+        entry.get("event") == "NOTE_STYLE_PACK_BUILT"
+        and entry.get("prompt_salt") == result["prompt_salt"]
+        and entry.get("note_metrics")
+    for entry in structured_records)
+
 
 def test_note_style_stage_refresh_promotes_on_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

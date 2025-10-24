@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 from backend.ai.note_style_ingest import ingest_note_style_result
+from backend.ai.note_style_results import store_note_style_result
 from backend.ai.note_style_logging import log_structured_event
 from backend.core.ai.paths import (
     ensure_note_style_account_paths,
@@ -133,6 +134,30 @@ def _coerce_result_path(value: Any) -> Path | None:
         return None
 
 
+def _load_existing_result(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.warning("STYLE_SEND_RESULT_READ_FAILED path=%s", path, exc_info=True)
+        return None
+
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    try:
+        payload = json.loads(lines[0])
+    except json.JSONDecodeError:
+        log.warning("STYLE_SEND_RESULT_INVALID_JSON path=%s", path, exc_info=True)
+        return None
+
+    if isinstance(payload, Mapping):
+        return payload
+    return None
+
+
 def send_note_style_packs_for_sid(
     sid: str,
     *,
@@ -185,6 +210,34 @@ def send_note_style_packs_for_sid(
         pack_payload = _load_pack_payload(pack_path)
         model = str(pack_payload.get("model") or "")
         messages = _coerce_messages(pack_payload)
+        pack_note_hash = str(pack_payload.get("note_hash") or "")
+
+        existing_result = _load_existing_result(account_paths.result_file)
+        existing_note_hash = ""
+        analysis_ready = False
+        evaluated_at: str | None = None
+        if isinstance(existing_result, Mapping):
+            existing_note_hash = str(existing_result.get("note_hash") or "")
+            evaluated_at_value = existing_result.get("evaluated_at")
+            if isinstance(evaluated_at_value, str) and evaluated_at_value:
+                evaluated_at = evaluated_at_value
+            analysis_payload = existing_result.get("analysis")
+            if isinstance(analysis_payload, Mapping) and analysis_payload:
+                analysis_ready = True
+
+        if analysis_ready and existing_note_hash and existing_note_hash == pack_note_hash:
+            log.info(
+                "STYLE_SEND_SKIPPED sid=%s account_id=%s reason=existing_result", sid, account_id
+            )
+            store_note_style_result(
+                sid=sid,
+                account_id=account_id,
+                payload=dict(existing_result),  # type: ignore[arg-type]
+                runs_root=runs_root_path,
+                completed_at=evaluated_at,
+            )
+            processed.append(account_id)
+            continue
 
         start = time.perf_counter()
         try:

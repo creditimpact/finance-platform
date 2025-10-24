@@ -185,6 +185,74 @@ def test_note_style_sender_skips_completed_entries(
     assert len(client.calls) == 1
 
 
+def test_note_style_sender_skips_when_existing_result_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID200"
+    account_id = "idx-200"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Already fixed, thanks."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    pack_payload = json.loads(
+        account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
+    )
+    baseline_result = json.loads(
+        account_paths.result_file.read_text(encoding="utf-8").splitlines()[0]
+    )
+    final_result = dict(baseline_result)
+    final_result.update(
+        {
+            "evaluated_at": "2024-01-02T03:04:05Z",
+            "analysis": {
+                "tone": "neutral",
+                "context_hints": {
+                    "timeframe": {"month": None, "relative": None},
+                    "topic": "other",
+                    "entities": {"creditor": None, "amount": None},
+                },
+                "emphasis": [],
+                "confidence": 0.7,
+                "risk_flags": ["follow_up"],
+            },
+        }
+    )
+    account_paths.result_file.write_text(
+        json.dumps(final_result, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    index_payload["packs"][0]["status"] = "built"
+    paths.index_file.write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
+
+    client = _StubClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+
+    assert processed == [account_id]
+    assert len(client.calls) == 0
+
+    updated_index = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    entry = updated_index["packs"][0]
+    assert entry["status"] == "completed"
+    assert entry.get("note_hash") == pack_payload["note_hash"]
+    assert entry.get("result_path") == account_paths.result_file.relative_to(paths.base).as_posix()
+
 def test_note_style_sender_raises_when_pack_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

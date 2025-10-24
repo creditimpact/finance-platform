@@ -2102,25 +2102,26 @@ def api_frontend_review_answer(sid: str, account_id: str):
             exc_info=True,
         )
 
-    try:
-        schedule_note_style_refresh(sid, account_id, runs_root=run_dir.parent)
-    except Exception:  # pragma: no cover - defensive logging
-        logger.warning(
-            "NOTE_STYLE_STAGE_SCHEDULE_FAILED sid=%s account_id=%s",
-            sid,
-            account_id,
-            exc_info=True,
-        )
+    if config.NOTE_STYLE_ENABLED:
+        try:
+            schedule_note_style_refresh(sid, account_id, runs_root=run_dir.parent)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "NOTE_STYLE_STAGE_SCHEDULE_FAILED sid=%s account_id=%s",
+                sid,
+                account_id,
+                exc_info=True,
+            )
 
-    try:
-        schedule_prepare_and_send(sid, runs_root=run_dir.parent)
-    except Exception:  # pragma: no cover - defensive logging
-        logger.warning(
-            "NOTE_STYLE_PREPARE_SCHEDULE_FAILED sid=%s account_id=%s",
-            sid,
-            account_id,
-            exc_info=True,
-        )
+        try:
+            schedule_prepare_and_send(sid, runs_root=run_dir.parent)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "NOTE_STYLE_PREPARE_SCHEDULE_FAILED sid=%s account_id=%s",
+                sid,
+                account_id,
+                exc_info=True,
+            )
 
     try:
         reconcile_umbrella_barriers(sid, runs_root=run_dir.parent)

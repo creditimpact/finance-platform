@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from backend import config
 from backend.ai.manifest import ensure_note_style_section
 from backend.ai.note_style_stage import (
     build_note_style_pack_for_account,
@@ -53,6 +54,17 @@ def prepare_and_send(
     sid_text = str(sid or "").strip()
     if not sid_text:
         raise ValueError("sid is required")
+
+    if not config.NOTE_STYLE_ENABLED:
+        log.info("NOTE_STYLE_DISABLED sid=%s", sid_text)
+        return {
+            "sid": sid_text,
+            "accounts_discovered": 0,
+            "packs_built": 0,
+            "skipped": 0,
+            "processed_accounts": [],
+            "statuses": {},
+        }
 
     runs_root_path = _resolve_runs_root(runs_root)
     ensure_note_style_section(sid_text, runs_root=runs_root_path)
@@ -154,6 +166,10 @@ def schedule_prepare_and_send(
 
     sid_text = str(sid or "").strip()
     if not sid_text:
+        return
+
+    if not config.NOTE_STYLE_ENABLED:
+        log.info("NOTE_STYLE_DISABLED sid=%s", sid_text)
         return
 
     delay = _debounce_delay_seconds()

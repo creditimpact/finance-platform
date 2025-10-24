@@ -258,6 +258,12 @@ AI_MAX_RETRIES = env_int("AI_MAX_RETRIES", 1)
 AI_HIERARCHY_VERSION = env_str("AI_HIERARCHY_VERSION", "v1")
 AI_REDACT_STRATEGY = os.getenv("AI_REDACT_STRATEGY", "hash_last4")
 
+NOTE_STYLE_ENABLED = env_bool("NOTE_STYLE_ENABLED", True)
+NOTE_STYLE_MODEL = _coerce_non_empty_str("NOTE_STYLE_MODEL", "gpt-4o-mini")
+NOTE_STYLE_MAX_NOTE_CHARS = _coerce_positive_int(
+    "NOTE_STYLE_MAX_NOTE_CHARS", 2000, min_value=1
+)
+
 _raw_t1, _raw_t2, _raw_t3 = _load_keyword_lists()
 
 TIER1_KEYWORDS = _raw_t1 if ENABLE_TIER1_KEYWORDS else {}

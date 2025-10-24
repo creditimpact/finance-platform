@@ -109,34 +109,40 @@ def ingest_note_style_result(
         "evaluated_at": evaluated_at,
     }
 
-    account_context_payload = pack_payload.get("account_context")
-    if account_context_payload is not None:
-        result_payload["account_context"] = account_context_payload
-
-    bureaus_summary_payload = pack_payload.get("bureaus_summary")
-    if bureaus_summary_payload is not None:
-        result_payload["bureaus_summary"] = bureaus_summary_payload
-
     metrics_payload: MutableMapping[str, Any] | None = None
-    analysis_input = pack_payload.get("analysis_input")
-    if isinstance(analysis_input, Mapping):
-        note_candidate: Any = (
-            analysis_input.get("customer_note")
-            or analysis_input.get("note_text")
-            or analysis_input.get("note")
+    try:
+        if account_paths.result_file.is_file():
+            snapshot = json.loads(
+                account_paths.result_file.read_text(encoding="utf-8")
+            )
+            metrics = snapshot.get("note_metrics") if isinstance(snapshot, Mapping) else None
+            if isinstance(metrics, Mapping):
+                metrics_payload = dict(metrics)
+    except FileNotFoundError:
+        metrics_payload = None
+    except OSError:
+        log.warning(
+            "STYLE_INGEST_LOAD_RESULT_FAILED sid=%s account_id=%s", sid, account_id, exc_info=True
         )
-        if isinstance(note_candidate, str):
-            truncated = bool(analysis_input.get("note_truncated"))
-            metrics_payload = {
-                "char_len": len(note_candidate),
-                "word_len": len(note_candidate.split()),
-                "truncated": truncated,
-            }
+    except json.JSONDecodeError:
+        log.warning(
+            "STYLE_INGEST_RESULT_INVALID_JSON sid=%s account_id=%s", sid, account_id, exc_info=True
+        )
 
     if metrics_payload is None:
-        metrics = pack_payload.get("note_metrics")
-        if isinstance(metrics, Mapping):
-            metrics_payload = dict(metrics)
+        messages = pack_payload.get("messages")
+        if isinstance(messages, Sequence) and len(messages) >= 2:
+            user_message = messages[1]
+            if isinstance(user_message, Mapping):
+                content = user_message.get("content")
+                if isinstance(content, Mapping):
+                    note_candidate = content.get("note_text")
+                    if isinstance(note_candidate, str):
+                        metrics_payload = {
+                            "char_len": len(note_candidate),
+                            "word_len": len(note_candidate.split()),
+                            "truncated": False,
+                        }
 
     if metrics_payload is not None:
         result_payload["note_metrics"] = metrics_payload

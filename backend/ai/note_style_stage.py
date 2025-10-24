@@ -26,7 +26,6 @@ except ImportError:  # pragma: no cover - platform dependent
 from backend import config
 from backend.ai.manifest import ensure_note_style_section, register_note_style_build
 from backend.ai.note_style_logging import append_note_style_warning, log_structured_event
-from backend.ai.note_style.prompt import build_context_hint_text
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -879,6 +878,16 @@ def _resolve_meta_name(meta: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _resolve_account_display_name(meta: Mapping[str, Any]) -> str:
+    candidate = _clean_value(meta.get("account_display_name"))
+    if candidate:
+        return candidate
+    fallback = _resolve_meta_name(meta)
+    if fallback:
+        return fallback
+    return ""
+
+
 def _first_bureau_value(
     bureaus: Mapping[str, Mapping[str, Any]], field: str
 ) -> str:
@@ -905,6 +914,32 @@ def _has_bureau_conflicts(
         if len(values) > 1:
             return True
     return False
+
+
+_PACK_BUREAU_FIELDS = (
+    "account_type",
+    "account_status",
+    "payment_status",
+    "creditor_type",
+    "date_opened",
+    "date_reported",
+    "date_of_last_activity",
+    "closed_date",
+    "last_verified",
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+)
+
+
+def _build_pack_bureau_fields(
+    bureaus: Mapping[str, Mapping[str, Any]]
+) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for field in _PACK_BUREAU_FIELDS:
+        value = _first_bureau_value(bureaus, field)
+        fields[field] = value or ""
+    return fields
 
 
 def _build_account_fingerprint(
@@ -1425,16 +1460,19 @@ def _prepare_note_text_for_model(note_text: str) -> tuple[str, bool]:
 
 def _pack_messages(
     *,
-    analysis_input: Mapping[str, Any],
-    account_context: Mapping[str, Any] | None,
-    bureaus_summary: Mapping[str, Any] | None,
+    note_text: str,
+    account_display_name: str,
+    primary_issue: str,
+    bureau_fields: Mapping[str, str],
 ) -> list[Mapping[str, Any]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT
-    hint_text = build_context_hint_text(account_context, bureaus_summary)
-    if hint_text:
-        system_message = f"{system_message}\n{hint_text}"
 
-    user_content = dict(analysis_input)
+    user_content = {
+        "note_text": note_text,
+        "account_display_name": account_display_name,
+        "primary_issue": primary_issue,
+        "bureau_fields": dict(bureau_fields),
+    }
 
     return [
         {"role": "system", "content": system_message},
@@ -2443,24 +2481,21 @@ def build_note_style_pack_for_account(
     account_context = _build_account_context(
         meta_payload, bureaus_payload, tags_payload, bureaus_summary
     )
-    meta_name = _resolve_meta_name(meta_payload)
     primary_issue = _select_primary_issue(tags_payload)
-
-    analysis_input: dict[str, Any] = {"customer_note": note_text_for_model}
-    if note_truncated:
-        analysis_input["note_truncated"] = True
-    if meta_name:
-        analysis_input["meta_name"] = meta_name
-    if primary_issue:
-        analysis_input["primary_issue"] = primary_issue
-    if isinstance(bureaus_summary, Mapping) and bureaus_summary:
-        analysis_input["bureaus"] = bureaus_summary
+    account_display_name = _resolve_account_display_name(meta_payload)
+    bureau_fields = _build_pack_bureau_fields(bureaus_payload)
 
     debug_snapshot.update(
         {
             "bureaus_summary": bureaus_summary,
             "account_context": account_context,
-            "analysis_input": analysis_input,
+            "pack_inputs": {
+                "note_text": note_text_for_model,
+                "note_truncated": note_truncated,
+                "account_display_name": account_display_name,
+                "primary_issue": primary_issue,
+                "bureau_fields": bureau_fields,
+            },
         }
     )
     _write_json(account_paths.debug_file, debug_snapshot)
@@ -2469,13 +2504,11 @@ def build_note_style_pack_for_account(
         "sid": sid,
         "account_id": str(account_id),
         "model": _NOTE_STYLE_MODEL,
-        "account_context": account_context,
-        "bureaus_summary": bureaus_summary,
-        "analysis_input": analysis_input,
         "messages": _pack_messages(
-            analysis_input=analysis_input,
-            account_context=account_context,
-            bureaus_summary=bureaus_summary,
+            note_text=note_text_for_model,
+            account_display_name=account_display_name,
+            primary_issue=primary_issue or "",
+            bureau_fields=bureau_fields,
         ),
         "built_at": timestamp,
     }
@@ -2488,8 +2521,6 @@ def build_note_style_pack_for_account(
             "truncated": note_truncated,
         },
         "evaluated_at": timestamp,
-        "account_context": account_context,
-        "bureaus_summary": bureaus_summary,
     }
 
     _write_jsonl(account_paths.pack_file, pack_payload)

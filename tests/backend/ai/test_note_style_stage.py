@@ -321,16 +321,13 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
 
     user_message = pack_payload["messages"][1]
     assert user_message["role"] == "user"
-    assert user_message["content"]["customer_note"] == sanitized
-    assert user_message["content"]["meta_name"] == "Capital One"
-    assert user_message["content"]["primary_issue"] == "late_payment"
-    assert "bureaus" in user_message["content"]
-
-    analysis_input = pack_payload["analysis_input"]
-    assert analysis_input["customer_note"] == sanitized
-    assert analysis_input["meta_name"] == "Capital One"
-    assert analysis_input["primary_issue"] == "late_payment"
-    assert "bureaus" in analysis_input
+    content = user_message["content"]
+    assert content["note_text"] == sanitized
+    assert content["account_display_name"] == "Capital One"
+    assert content["primary_issue"] == "late_payment"
+    assert "bureau_fields" in content
+    assert content["bureau_fields"]["account_type"] == "Credit Card"
+    assert content["bureau_fields"]["account_status"] == "Closed"
     assert "note_metrics" not in pack_payload
     assert "note_hash" not in pack_payload
     assert "prompt_salt" not in pack_payload
@@ -339,6 +336,8 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert result_payload["sid"] == sid
     assert result_payload["account_id"] == account_id
     assert result_payload["note_metrics"]["char_len"] == len(sanitized)
+    assert "account_context" not in result_payload
+    assert "bureaus_summary" not in result_payload
     assert "note_hash" not in result_payload
     assert "prompt_salt" not in result_payload
     assert "fingerprint_hash" not in result_payload

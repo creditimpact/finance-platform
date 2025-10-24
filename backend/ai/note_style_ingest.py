@@ -100,49 +100,22 @@ def ingest_note_style_result(
         analysis_payload = parsed
 
     normalized_analysis = validate_analysis_payload(analysis_payload)
-    evaluated_at = _now_iso()
 
     result_payload: MutableMapping[str, Any] = {
         "sid": sid,
         "account_id": str(account_id),
         "analysis": normalized_analysis,
-        "evaluated_at": evaluated_at,
     }
 
     metrics_payload: MutableMapping[str, Any] | None = None
-    try:
-        if account_paths.result_file.is_file():
-            snapshot = json.loads(
-                account_paths.result_file.read_text(encoding="utf-8")
-            )
-            metrics = snapshot.get("note_metrics") if isinstance(snapshot, Mapping) else None
-            if isinstance(metrics, Mapping):
-                metrics_payload = dict(metrics)
-    except FileNotFoundError:
-        metrics_payload = None
-    except OSError:
-        log.warning(
-            "STYLE_INGEST_LOAD_RESULT_FAILED sid=%s account_id=%s", sid, account_id, exc_info=True
-        )
-    except json.JSONDecodeError:
-        log.warning(
-            "STYLE_INGEST_RESULT_INVALID_JSON sid=%s account_id=%s", sid, account_id, exc_info=True
-        )
-
-    if metrics_payload is None:
-        messages = pack_payload.get("messages")
-        if isinstance(messages, Sequence) and len(messages) >= 2:
-            user_message = messages[1]
-            if isinstance(user_message, Mapping):
-                content = user_message.get("content")
-                if isinstance(content, Mapping):
-                    note_candidate = content.get("note_text")
-                    if isinstance(note_candidate, str):
-                        metrics_payload = {
-                            "char_len": len(note_candidate),
-                            "word_len": len(note_candidate.split()),
-                            "truncated": False,
-                        }
+    context_candidate = pack_payload.get("context")
+    if isinstance(context_candidate, Mapping):
+        note_candidate = context_candidate.get("note_text")
+        if isinstance(note_candidate, str):
+            metrics_payload = {
+                "char_len": len(note_candidate),
+                "word_len": len(note_candidate.split()),
+            }
 
     if metrics_payload is not None:
         result_payload["note_metrics"] = metrics_payload
@@ -154,7 +127,7 @@ def ingest_note_style_result(
         account_id,
         result_payload,
         runs_root=runs_root,
-        completed_at=evaluated_at,
+        completed_at=_now_iso(),
     )
 
 

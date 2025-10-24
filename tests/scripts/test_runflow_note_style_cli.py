@@ -29,8 +29,7 @@ def _sample_result_payload() -> Mapping[str, object]:
             "confidence": 0.82,
             "risk_flags": ["follow_up"],
         },
-        "evaluated_at": "2024-01-02T00:00:00Z",
-        "note_metrics": {"char_len": 42, "word_len": 9, "truncated": False},
+        "note_metrics": {"char_len": 42, "word_len": 9},
     }
 
 

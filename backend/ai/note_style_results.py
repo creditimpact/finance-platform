@@ -326,17 +326,24 @@ def _normalize_analysis_section(analysis: MutableMapping[str, Any]) -> None:
 
 
 def _normalize_result_payload(payload: Mapping[str, Any]) -> MutableMapping[str, Any]:
-    normalized: MutableMapping[str, Any]
-    if isinstance(payload, MutableMapping):
-        normalized = copy.deepcopy(payload)
-    else:
-        normalized = copy.deepcopy(dict(payload))
+    normalized: MutableMapping[str, Any] = {
+        "sid": str(payload.get("sid") or "").strip(),
+        "account_id": str(payload.get("account_id") or "").strip(),
+    }
 
-    analysis_payload = normalized.get("analysis")
+    analysis_payload = payload.get("analysis")
     if isinstance(analysis_payload, Mapping):
         analysis_mutable = _ensure_mutable_mapping(analysis_payload)
         _normalize_analysis_section(analysis_mutable)
         normalized["analysis"] = analysis_mutable
+    elif analysis_payload is None:
+        normalized["analysis"] = None
+
+    metrics_payload = payload.get("note_metrics")
+    if isinstance(metrics_payload, Mapping):
+        sanitized_metrics = _sanitize_note_metrics(metrics_payload)
+        if sanitized_metrics is not None:
+            normalized["note_metrics"] = sanitized_metrics
 
     return normalized
 
@@ -397,9 +404,9 @@ def _load_pack_payload_for_logging(pack_path: Path) -> Mapping[str, Any] | None:
 def _load_pack_note_metrics(pack_path: Path) -> Mapping[str, Any] | None:
     payload = _load_pack_payload_for_logging(pack_path)
     if isinstance(payload, Mapping):
-        metrics = payload.get("note_metrics")
-        if isinstance(metrics, Mapping):
-            return dict(metrics)
+        sanitized = _sanitize_note_metrics(payload.get("note_metrics"))
+        if sanitized is not None:
+            return sanitized
     return None
 
 
@@ -407,6 +414,11 @@ def _load_pack_note_text(pack_path: Path) -> str | None:
     payload = _load_pack_payload_for_logging(pack_path)
     if not isinstance(payload, Mapping):
         return None
+    context_payload = payload.get("context")
+    if isinstance(context_payload, Mapping):
+        note_candidate = context_payload.get("note_text")
+        if isinstance(note_candidate, str):
+            return note_candidate
     messages = payload.get("messages")
     if not isinstance(messages, Sequence):
         return None
@@ -465,24 +477,43 @@ def _detect_unsupported_claim(note_text: str) -> bool:
     return any(pattern in normalized for pattern in _NO_DOCUMENT_PATTERNS)
 
 
+def _sanitize_note_metrics(candidate: Any) -> dict[str, int] | None:
+    if not isinstance(candidate, Mapping):
+        return None
+    char_len = _coerce_positive_int(candidate.get("char_len"))
+    word_len = _coerce_positive_int(candidate.get("word_len"))
+    if char_len is None or word_len is None:
+        return None
+    return {"char_len": char_len, "word_len": word_len}
+
+
 def _resolve_note_metrics(
     payload: MutableMapping[str, Any],
     *,
-    existing_note_metrics: Mapping[str, Any] | None,
     pack_path: Path,
 ) -> Mapping[str, Any] | None:
     note_metrics_candidate = payload.get("note_metrics")
     if isinstance(note_metrics_candidate, Mapping):
-        return dict(note_metrics_candidate)
-    if isinstance(existing_note_metrics, Mapping):
-        metrics_copy = dict(existing_note_metrics)
-        payload["note_metrics"] = metrics_copy
-        return metrics_copy
+        sanitized = _sanitize_note_metrics(note_metrics_candidate)
+        if sanitized is not None:
+            payload["note_metrics"] = sanitized
+            return sanitized
     pack_metrics = _load_pack_note_metrics(pack_path)
     if isinstance(pack_metrics, Mapping):
-        metrics_copy = dict(pack_metrics)
-        payload["note_metrics"] = metrics_copy
-        return metrics_copy
+        sanitized_pack = _sanitize_note_metrics(pack_metrics)
+        if sanitized_pack is not None:
+            payload["note_metrics"] = sanitized_pack
+            return sanitized_pack
+    note_text = _load_pack_note_text(pack_path)
+    if isinstance(note_text, str):
+        fallback_metrics = {
+            "char_len": len(note_text),
+            "word_len": len(note_text.split()),
+        }
+        sanitized_fallback = _sanitize_note_metrics(fallback_metrics)
+        if sanitized_fallback is not None:
+            payload["note_metrics"] = sanitized_fallback
+            return sanitized_fallback
     return None
 
 
@@ -704,21 +735,22 @@ def _validate_result_payload(
 ) -> None:
     missing_fields: list[str] = []
     analysis_payload = payload.get("analysis")
-
-    evaluated_at = str(payload.get("evaluated_at") or "").strip()
-    if not evaluated_at:
-        missing_fields.append("evaluated_at")
+    sid_value = str(payload.get("sid") or "").strip()
+    if not sid_value:
+        missing_fields.append("sid")
+    account_value = str(payload.get("account_id") or "").strip()
+    if not account_value:
+        missing_fields.append("account_id")
 
     note_metrics = payload.get("note_metrics")
-    if isinstance(note_metrics, Mapping):
-        char_len = note_metrics.get("char_len")
-        word_len = note_metrics.get("word_len")
-        if not isinstance(char_len, (int, float)):
-            missing_fields.append("note_metrics.char_len")
-        if not isinstance(word_len, (int, float)):
-            missing_fields.append("note_metrics.word_len")
-    else:
-        missing_fields.append("note_metrics")
+    sanitized_metrics = (
+        _sanitize_note_metrics(note_metrics) if isinstance(note_metrics, Mapping) else None
+    )
+    if sanitized_metrics is None:
+        missing_fields.extend([
+            "note_metrics.char_len",
+            "note_metrics.word_len",
+        ])
 
     if isinstance(analysis_payload, Mapping):
         tone = str(analysis_payload.get("tone") or "").strip()
@@ -1198,31 +1230,10 @@ def store_note_style_result(
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
-    existing_note_metrics: Mapping[str, Any] | None = None
-    try:
-        existing_raw = account_paths.result_file.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        existing_raw = ""
-    if existing_raw:
-        for line in existing_raw.splitlines():
-            candidate = line.strip()
-            if not candidate:
-                continue
-            try:
-                existing_payload = json.loads(candidate)
-            except json.JSONDecodeError:
-                existing_payload = None
-            if isinstance(existing_payload, Mapping):
-                metrics = existing_payload.get("note_metrics")
-                if isinstance(metrics, Mapping):
-                    existing_note_metrics = dict(metrics)
-            break
-
     normalized_payload = _normalize_result_payload(payload)
 
     note_metrics_payload = _resolve_note_metrics(
         normalized_payload,
-        existing_note_metrics=existing_note_metrics,
         pack_path=account_paths.pack_file,
     )
 

@@ -302,7 +302,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     user_payload = json.loads(pack_messages[1]["content"])
     expected_context = {
         "identity": {
-            "primary_issue": None,
+            "primary_issue": "late_payment",
             "account_id": account_id,
             "reported_creditor": "Capital One",
         },
@@ -469,6 +469,65 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert summary["packs_total"] == 1
     assert summary["metrics"]["packs_total"] == 1
     assert summary["results"]["completed"] == 0
+
+
+def test_note_style_identity_primary_issue_absent(tmp_path: Path) -> None:
+    sid = "SIDPRI0"
+    account_id = "acct-no-issue"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    account_dir = run_dir / "cases" / "accounts" / "10"
+    response_dir = run_dir / "frontend" / "review" / "responses"
+    note = "The report is inaccurate and needs review."
+
+    summary_payload = {"account_id": account_id}
+    bureaus_payload = {
+        "transunion": {
+            "reported_creditor": "Example Creditor",
+            "account_status": "Open",
+        }
+    }
+    meta_payload = {"account_id": account_id, "heading_guess": "Example Creditor"}
+    tags_payload = [{"kind": "note", "type": "call_customer"}]
+
+    account_dir.mkdir(parents=True, exist_ok=True)
+    (account_dir / "summary.json").write_text(
+        json.dumps(summary_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "meta.json").write_text(
+        json.dumps(meta_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps(tags_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": note},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
+    context = pack_payload.get("account_context", {})
+    identity = context.get("identity", {})
+
+    assert identity["primary_issue"] is None
+    assert identity["account_id"] == account_id
+    assert identity["reported_creditor"] == "Example Creditor"
 
 
 def test_note_style_stage_emits_structured_logs(

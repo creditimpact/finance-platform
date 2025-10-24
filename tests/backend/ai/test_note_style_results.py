@@ -55,7 +55,7 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
         return {}
 
     monkeypatch.setattr(
-        "backend.ai.note_style_results.refresh_note_style_stage_from_index", _fake_refresh
+        "backend.ai.note_style_results.refresh_note_style_stage_from_results", _fake_refresh
     )
     monkeypatch.setattr(
         "backend.ai.note_style_results.runflow_barriers_refresh", _fake_barriers
@@ -341,7 +341,7 @@ def test_store_note_style_result_requires_all_accounts(
     runflow_path = runs_root / sid / "runflow.json"
     runflow_payload = json.loads(runflow_path.read_text(encoding="utf-8"))
     stage_payload = runflow_payload["stages"]["note_style"]
-    assert stage_payload["status"] == "built"
+    assert stage_payload["status"] == "success"
     assert stage_payload["results"]["results_total"] == 2
     assert stage_payload["results"]["completed"] == 1
     assert stage_payload["results"]["failed"] == 0

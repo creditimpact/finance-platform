@@ -8,8 +8,9 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Literal, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, Literal, Mapping, Optional, Sequence, Tuple
 
+from backend import config
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import (
     _apply_umbrella_barriers,
@@ -1191,9 +1192,16 @@ def _apply_validation_stage_promotion(
 
 
 def _apply_note_style_stage_promotion(
-    data: dict[str, Any], run_dir: Path
+    data: dict[str, Any],
+    run_dir: Path,
+    *,
+    results_override: tuple[int, int, int] | None = None,
+    allow_partial_success: bool = False,
 ) -> tuple[bool, bool, dict[str, int]]:
-    total, completed, failed, ready = _note_style_results_progress(run_dir)
+    if results_override is None:
+        total, completed, failed, _ready = _note_style_results_progress(run_dir)
+    else:
+        total, completed, failed = results_override
     total_value = max(total, 0)
     completed_value = max(min(completed, total_value), 0)
     failed_value = max(failed, 0)
@@ -1208,6 +1216,8 @@ def _apply_note_style_stage_promotion(
     elif total_value == 0:
         status_value = "success"
     elif completed_value == total_value:
+        status_value = "success"
+    elif allow_partial_success:
         status_value = "success"
     else:
         status_value = "built"
@@ -1310,6 +1320,295 @@ def _apply_note_style_stage_promotion(
 
     stages["note_style"] = stage_payload
     return (True, promoted, log_context)
+
+
+def _note_style_result_status_from_payload(payload: Mapping[str, Any]) -> str | None:
+    status_value = payload.get("status")
+    if isinstance(status_value, str):
+        normalized = status_value.strip().lower()
+        if normalized in {"completed", "success"}:
+            return "completed"
+        if normalized in {"failed", "error"}:
+            return "failed"
+
+    if payload.get("error") not in (None, "", {}):
+        return "failed"
+
+    analysis_payload = payload.get("analysis")
+    if isinstance(analysis_payload, Mapping) and analysis_payload:
+        return "completed"
+
+    return None
+
+
+def _parse_note_style_result_payload(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return None
+
+    for line in raw.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, Mapping):
+            return payload
+    return None
+
+
+def _infer_note_style_result_status(path: Path) -> str | None:
+    name = path.name.lower()
+    if name.endswith(".failed.jsonl") or name.endswith(".failed.json"):
+        return "failed"
+    if name.endswith(".error.jsonl") or name.endswith(".error.json"):
+        return "failed"
+    if name.endswith(".result.jsonl") or name.endswith(".result.json"):
+        payload = _parse_note_style_result_payload(path)
+        if payload is None:
+            return None
+        status = _note_style_result_status_from_payload(payload)
+        if status is not None:
+            return status
+        return None
+
+    payload = _parse_note_style_result_payload(path)
+    if payload is None:
+        return None
+    return _note_style_result_status_from_payload(payload)
+
+
+def _iter_note_style_result_files(results_dir: Path) -> Iterable[Path]:
+    try:
+        entries = list(results_dir.iterdir())
+    except FileNotFoundError:
+        return []
+    except NotADirectoryError:
+        return []
+
+    return [
+        path
+        for path in entries
+        if path.is_file()
+        and not path.name.startswith(".")
+        and not path.name.endswith(".tmp")
+    ]
+
+
+def _normalize_note_style_result_account(name: str) -> str:
+    text = name
+    if text.endswith(".jsonl"):
+        text = text[: -len(".jsonl")]
+    if text.endswith(".json"):
+        text = text[: -len(".json")]
+    if text.endswith(".result"):
+        text = text[: -len(".result")]
+    if text.startswith("acc_"):
+        text = text[len("acc_") :]
+    return text
+
+
+def _note_style_index_status_mapping(run_dir: Path) -> dict[str, str]:
+    index_path = (run_dir / config.NOTE_STYLE_STAGE_DIR / "index.json").resolve()
+    document = _load_json_mapping(index_path)
+    if not isinstance(document, Mapping):
+        return {}
+
+    entries: Sequence[Mapping[str, Any]] = ()
+    packs_payload = document.get("packs")
+    if isinstance(packs_payload, Sequence):
+        entries = [entry for entry in packs_payload if isinstance(entry, Mapping)]
+    else:
+        items_payload = document.get("items")
+        if isinstance(items_payload, Sequence):
+            entries = [entry for entry in items_payload if isinstance(entry, Mapping)]
+
+    statuses: dict[str, str] = {}
+    for entry in entries:
+        account_value = entry.get("account_id")
+        if not isinstance(account_value, str):
+            continue
+        statuses[account_value.strip()] = str(entry.get("status") or "")
+
+    return statuses
+
+
+def _note_style_counts_from_results_dir(run_dir: Path) -> Tuple[int, int, int]:
+    results_dir = (run_dir / config.NOTE_STYLE_RESULTS_DIR).resolve()
+
+    index_statuses = _note_style_index_status_mapping(run_dir)
+
+    completed = 0
+    failed = 0
+    total = 0
+
+    for path in _iter_note_style_result_files(results_dir):
+        account_key = _normalize_note_style_result_account(path.name)
+        normalized_status = ""
+        if account_key:
+            normalized_status = index_statuses.get(account_key, "").strip().lower()
+
+        if normalized_status in {"skipped", "skipped_low_signal"}:
+            continue
+
+        if normalized_status in {"failed", "error"}:
+            failed += 1
+            total += 1
+            continue
+
+        if normalized_status in {"completed", "success"}:
+            completed += 1
+            total += 1
+            continue
+
+        status = _infer_note_style_result_status(path)
+        if status == "failed":
+            failed += 1
+            total += 1
+            continue
+        if status == "completed":
+            completed += 1
+            total += 1
+            continue
+
+        if account_key:
+            fallback_status = index_statuses.get(account_key, "").strip().lower()
+            if fallback_status in {"failed", "error"}:
+                failed += 1
+                total += 1
+                continue
+            if fallback_status in {"completed", "success"}:
+                completed += 1
+                total += 1
+                continue
+
+        if "result" in path.name.lower():
+            total += 1
+
+    return (total, completed, failed)
+
+
+def refresh_note_style_stage_from_results(
+    sid: str, runs_root: Optional[str | Path] = None
+) -> Tuple[int, int, int]:
+    """Update the note_style stage entry based on stored results."""
+
+    path = _runflow_path(sid, runs_root)
+    run_dir = path.parent
+    total, completed, failed = _note_style_counts_from_results_dir(run_dir)
+    data = _load_runflow(path, sid)
+
+    updated, promoted, log_context = _apply_note_style_stage_promotion(
+        data,
+        run_dir,
+        results_override=(total, completed, failed),
+        allow_partial_success=True,
+    )
+    if not updated:
+        return (total, completed, failed)
+
+    latest_snapshot = _load_runflow(path, sid)
+    data = _merge_runflow_snapshots(latest_snapshot, data)
+
+    timestamp = _now_iso()
+    data["snapshot_version"] = _next_snapshot_version(
+        latest_snapshot.get("snapshot_version"), data.get("snapshot_version")
+    )
+    data["last_writer"] = "refresh_note_style_stage_from_results"
+    data["updated_at"] = timestamp
+
+    _atomic_write_json(path, data)
+
+    if _runflow_events_enabled():
+        stage_info: Mapping[str, Any] | None = None
+        stages_payload = data.get("stages")
+        if isinstance(stages_payload, Mapping):
+            candidate = stages_payload.get("note_style")
+            if isinstance(candidate, Mapping):
+                stage_info = candidate
+
+        event_ts = timestamp
+        status_text = ""
+        empty_ok_flag = False
+        metrics_event: dict[str, int] = {}
+        results_event: dict[str, int] = {}
+
+        if stage_info is not None:
+            last_at_value = stage_info.get("last_at")
+            if isinstance(last_at_value, str) and last_at_value:
+                event_ts = last_at_value
+            status_value = stage_info.get("status")
+            if isinstance(status_value, str):
+                status_text = status_value
+            empty_ok_flag = bool(stage_info.get("empty_ok"))
+
+            metrics_payload = stage_info.get("metrics")
+            if isinstance(metrics_payload, Mapping):
+                packs_total_value = _coerce_int(metrics_payload.get("packs_total"))
+                if packs_total_value is not None:
+                    metrics_event["packs_total"] = packs_total_value
+
+            results_payload = stage_info.get("results")
+            if isinstance(results_payload, Mapping):
+                for key in ("results_total", "completed", "failed"):
+                    value = _coerce_int(results_payload.get(key))
+                    if value is not None:
+                        results_event[key] = value
+
+        events_path = run_dir / "runflow_events.jsonl"
+        event_payload: dict[str, Any] = {
+            "ts": event_ts,
+            "event": "note_style_stage_refresh",
+            "sid": sid,
+            "stage": "note_style",
+            "status": status_text,
+            "empty_ok": empty_ok_flag,
+        }
+        if metrics_event:
+            event_payload["metrics"] = dict(metrics_event)
+            packs_total_value = metrics_event.get("packs_total")
+            if packs_total_value is not None:
+                event_payload["packs_total"] = packs_total_value
+        if results_event:
+            event_payload["results"] = dict(results_event)
+            results_total_value = results_event.get("results_total")
+            if results_total_value is not None:
+                event_payload["results_total"] = results_total_value
+            completed_value = results_event.get("completed")
+            if completed_value is not None:
+                event_payload["results_completed"] = completed_value
+            failed_value = results_event.get("failed")
+            if failed_value is not None:
+                event_payload["results_failed"] = failed_value
+
+        try:
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            with events_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event_payload, ensure_ascii=False))
+                handle.write("\n")
+        except OSError:
+            log.warning(
+                "NOTE_STYLE_STAGE_EVENT_WRITE_FAILED sid=%s path=%s",
+                sid,
+                events_path,
+                exc_info=True,
+            )
+
+    if promoted:
+        log.info(
+            "NOTE_STYLE_STAGE_PROMOTED sid=%s total=%s completed=%s failed=%s",
+            sid,
+            log_context["total"],
+            log_context["completed"],
+            log_context["failed"],
+        )
+
+    runflow_refresh_umbrella_barriers(sid)
+
+    return (total, completed, failed)
 
 
 def _apply_frontend_stage_promotion(

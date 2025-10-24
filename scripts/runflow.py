@@ -24,7 +24,7 @@ from backend.validation.index_schema import ValidationIndex, ValidationPackRecor
 
 from backend.runflow.decider import (
     refresh_validation_stage_from_index,
-    refresh_note_style_stage_from_index,
+    refresh_note_style_stage_from_results,
     reconcile_umbrella_barriers,
     runflow_refresh_umbrella_barriers,
     _validation_record_has_results,
@@ -193,7 +193,7 @@ def _cmd_note_style_refresh(args: argparse.Namespace) -> int:
 
     runs_root = _resolve_runs_root(getattr(args, "runs_root", None))
 
-    refresh_note_style_stage_from_index(sid, runs_root=runs_root)
+    refresh_note_style_stage_from_results(sid, runs_root=runs_root)
     runflow_refresh_umbrella_barriers(sid)
     reconcile_umbrella_barriers(sid, runs_root=runs_root)
 

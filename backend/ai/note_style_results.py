@@ -29,7 +29,7 @@ from backend.core.runflow import runflow_barriers_refresh
 from backend.runflow.decider import (
     record_stage,
     reconcile_umbrella_barriers,
-    refresh_note_style_stage_from_index,
+    refresh_note_style_stage_from_results,
 )
 
 log = logging.getLogger(__name__)
@@ -1095,29 +1095,11 @@ def _refresh_after_index_update(
         "failed": packs_failed,
     }
 
-    log.info(
-        "NOTE_STYLE_REFRESH sid=%s ready=%s total=%s completed=%s failed=%s skipped=%s",
-        sid,
-        ready,
-        packs_total,
-        packs_completed,
-        packs_failed,
-        skipped_count,
-    )
-    log_structured_event(
-        "NOTE_STYLE_REFRESH",
-        logger=log,
-        sid=sid,
-        ready=ready,
-        status=stage_status,
-        packs_total=packs_total,
-        packs_completed=packs_completed,
-        packs_failed=packs_failed,
-        packs_skipped=skipped_count,
-    )
-
+    results_override: tuple[int, int, int] | None = None
     try:
-        refresh_note_style_stage_from_index(sid, runs_root=runs_root_path)
+        results_override = refresh_note_style_stage_from_results(
+            sid, runs_root=runs_root_path
+        )
     except Exception:  # pragma: no cover - defensive logging
         log.warning(
             "NOTE_STYLE_STAGE_REFRESH_FAILED sid=%s", sid, exc_info=True
@@ -1151,6 +1133,48 @@ def _refresh_after_index_update(
                 sid,
                 _structured_repr(barrier_state),
             )
+
+    if results_override is not None:
+        packs_total, packs_completed, packs_failed = results_override
+        if packs_total > 0 and packs_failed > 0:
+            stage_status = "error"
+        elif packs_total == 0:
+            stage_status = "success"
+        elif packs_completed == packs_total:
+            stage_status = "success"
+        else:
+            stage_status = "built"
+
+        empty_ok = packs_total == 0
+        ready = stage_status == "success"
+        counts = {"packs_total": packs_total}
+        metrics = {"packs_total": packs_total}
+        results_counts = {
+            "results_total": packs_total,
+            "completed": packs_completed,
+            "failed": packs_failed,
+        }
+
+    log.info(
+        "NOTE_STYLE_REFRESH sid=%s ready=%s total=%s completed=%s failed=%s skipped=%s",
+        sid,
+        ready,
+        packs_total,
+        packs_completed,
+        packs_failed,
+        skipped_count,
+    )
+    log_structured_event(
+        "NOTE_STYLE_REFRESH",
+        logger=log,
+        sid=sid,
+        ready=ready,
+        status=stage_status,
+        packs_total=packs_total,
+        packs_completed=packs_completed,
+        packs_failed=packs_failed,
+        packs_skipped=skipped_count,
+    )
 
     try:
         record_stage(

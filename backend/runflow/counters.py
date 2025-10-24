@@ -311,13 +311,24 @@ def merge_scored_pairs_count(base_dir: Path) -> Optional[int]:
     return None
 
 
-def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
-    """Return aggregate counters for note_style stage artifacts."""
+def _normalize_note_style_result_name(name: str) -> str:
+    text = name
+    if text.endswith(".jsonl"):
+        text = text[: -len(".jsonl")]
+    if text.endswith(".json"):
+        text = text[: -len(".json")]
+    if text.endswith(".result"):
+        text = text[: -len(".result")]
+    if text.startswith("acc_"):
+        text = text[len("acc_") :]
+    return text
 
+
+def _load_note_style_index_statuses(base_dir: Path) -> dict[str, str]:
     index_path = base_dir / "ai_packs" / "note_style" / "index.json"
     document = _load_document(index_path)
-    if document is None:
-        return None
+    if not isinstance(document, Mapping):
+        return {}
 
     entries: Sequence[Mapping[str, Any]] = ()
     packs_payload = document.get("packs")
@@ -328,32 +339,102 @@ def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
         if isinstance(items_payload, Sequence):
             entries = [entry for entry in items_payload if isinstance(entry, Mapping)]
 
+    statuses: dict[str, str] = {}
+    for entry in entries:
+        account_value = entry.get("account_id")
+        if not isinstance(account_value, str):
+            continue
+        statuses[account_value.strip()] = str(entry.get("status") or "")
+
+    return statuses
+
+
+def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
+    """Return aggregate counters for note_style stage artifacts."""
+
+    results_dir = base_dir / "ai_packs" / "note_style" / "results"
+    try:
+        entries = list(results_dir.iterdir())
+    except FileNotFoundError:
+        entries = []
+    except NotADirectoryError:
+        entries = []
+
+    index_statuses = _load_note_style_index_statuses(base_dir)
+
     total = 0
     completed = 0
     failed = 0
-    for entry in entries:
-        status_text = _normalize_entry_text(entry.get("status")).lower()
-        if status_text in {"", "skipped", "skipped_low_signal"}:
+
+    for path in entries:
+        if not path.is_file():
             continue
-        total += 1
-        if status_text in {"completed", "success"}:
-            completed += 1
-        elif status_text in {"failed", "error"}:
+        normalized_name = _normalize_entry_text(path.name).lower()
+        if normalized_name.endswith(".tmp"):
+            continue
+        if not (normalized_name.endswith(".json") or normalized_name.endswith(".jsonl")):
+            continue
+
+        account_key = _normalize_note_style_result_name(path.name)
+        normalized_status = ""
+        if account_key:
+            normalized_status = _normalize_entry_text(
+                index_statuses.get(account_key, "")
+            ).lower()
+
+        if normalized_status in {"skipped", "skipped_low_signal"}:
+            continue
+
+        if normalized_status in {"failed", "error"}:
             failed += 1
+            total += 1
+            continue
 
-    if not entries:
-        totals_payload = document.get("totals")
-        if isinstance(totals_payload, Mapping):
-            total = _coerce_int(totals_payload.get("total")) or 0
-            completed = _coerce_int(totals_payload.get("completed")) or 0
-            failed = _coerce_int(totals_payload.get("failed")) or 0
+        if normalized_status in {"completed", "success"}:
+            completed += 1
+            total += 1
+            continue
 
-    result: dict[str, int] = {}
-    result["packs_total"] = max(total, 0)
-    result["packs_completed"] = max(completed, 0)
-    result["packs_failed"] = max(failed, 0)
+        payload = _load_document(path)
+        status_value = ""
+        if isinstance(payload, Mapping):
+            status_value = _normalize_entry_text(payload.get("status")).lower()
 
-    return result
+        if status_value in {"failed", "error"}:
+            failed += 1
+            total += 1
+            continue
+
+        if status_value in {"completed", "success"}:
+            completed += 1
+            total += 1
+            continue
+
+        error_payload = payload.get("error") if isinstance(payload, Mapping) else None
+        if error_payload not in (None, "", {}):
+            failed += 1
+            total += 1
+            continue
+
+        analysis_payload = (
+            payload.get("analysis") if isinstance(payload, Mapping) else None
+        )
+        if isinstance(analysis_payload, Mapping) and analysis_payload:
+            completed += 1
+            total += 1
+            continue
+
+        if "result" in normalized_name:
+            total += 1
+
+    if total == 0:
+        return {"packs_total": 0, "packs_completed": 0, "packs_failed": 0}
+
+    return {
+        "packs_total": total,
+        "packs_completed": completed,
+        "packs_failed": failed,
+    }
 
 
 def runflow_validation_findings_total(base_dir: Path) -> Optional[int]:

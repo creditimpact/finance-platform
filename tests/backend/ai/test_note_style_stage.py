@@ -400,10 +400,51 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
             },
         },
     }
-    expected_fingerprint = (
-        "issuer:capital-one|issues:late-payment|reported:capital-one-bank|type:credit-card|"
-        "status:closed|payment:late-30-days|creditor:bank|tail:1234"
-    )
+    expected_fingerprint = {
+        "account_id": "idx-001",
+        "identity": {
+            "issuer": "capital-one",
+            "reported_creditor": "capital-one-bank",
+            "account_tail": "1234",
+        },
+        "core_issue": {"primary": "late-payment", "all": ["late-payment"]},
+        "financial": {
+            "account_type": "credit-card",
+            "account_status": "closed",
+            "payment_status": "late-30-days",
+            "creditor_type": "bank",
+            "balance_owed": "100",
+            "high_balance": "200",
+            "past_due_amount": "0",
+        },
+        "dates": {
+            "opened": "2020-01-15",
+            "reported": "2024-03-10",
+            "last_activity": "2024-02-05",
+            "closed": "2023-12-31",
+            "last_verified": "2024-03-01",
+        },
+        "disagreements": {
+            "has_disagreements": True,
+            "fields": {
+                "account_status": {
+                    "equifax": "Open",
+                    "experian": "Closed",
+                    "transunion": "Closed",
+                },
+                "high_balance": {
+                    "equifax": "250",
+                    "experian": "200",
+                    "transunion": "200",
+                },
+                "past_due_amount": {
+                    "equifax": "25",
+                    "experian": "0",
+                    "transunion": "0",
+                },
+            },
+        },
+    }
     assert user_payload == {
         "sid": sid,
         "account_id": account_id,
@@ -920,7 +961,10 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     assert pack_payload["prompt_salt"] == result_payload["prompt_salt"] == result["prompt_salt"]
 
     pack_user_payload = json.loads(pack_payload["messages"][1]["content"])
-    expected_fingerprint = "account:idx-004"
+    expected_fingerprint = {
+        "account_id": "idx-004",
+        "disagreements": {"has_disagreements": False, "fields": {}},
+    }
     expected_context: dict[str, Any] = {}
     assert pack_user_payload == {
         "sid": sid,

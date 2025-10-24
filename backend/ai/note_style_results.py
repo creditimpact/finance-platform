@@ -38,6 +38,12 @@ log = logging.getLogger(__name__)
 _SHORT_NOTE_WORD_LIMIT = 12
 _SHORT_NOTE_CHAR_LIMIT = 90
 _MAX_ANALYSIS_LIST_ITEMS = 6
+_INDEX_HASH_FIELDS = (
+    "note_hash",
+    "fingerprint_hash",
+    "prompt_salt",
+    "source_hash",
+)
 _UNSUPPORTED_CLAIM_KEYWORDS = (
     "legal",  # general legal language
     "lawsuit",
@@ -399,6 +405,93 @@ def _load_pack_payload_for_logging(pack_path: Path) -> Mapping[str, Any] | None:
             return payload
         break
     return None
+
+
+def _looks_like_analysis_payload(candidate: Mapping[str, Any]) -> bool:
+    if not isinstance(candidate, Mapping):
+        return False
+
+    tone_value = candidate.get("tone")
+    if not isinstance(tone_value, str) or not tone_value.strip():
+        return False
+
+    context_payload = candidate.get("context_hints")
+    if not isinstance(context_payload, Mapping):
+        return False
+
+    timeframe_payload = context_payload.get("timeframe")
+    if not isinstance(timeframe_payload, Mapping):
+        return False
+    if "month" not in timeframe_payload or "relative" not in timeframe_payload:
+        return False
+
+    entities_payload = context_payload.get("entities")
+    if not isinstance(entities_payload, Mapping):
+        return False
+    if "creditor" not in entities_payload or "amount" not in entities_payload:
+        return False
+
+    emphasis_payload = candidate.get("emphasis")
+    if not (
+        isinstance(emphasis_payload, Sequence)
+        and not isinstance(emphasis_payload, (str, bytes, bytearray))
+    ):
+        return False
+
+    confidence_value = _coerce_float(candidate.get("confidence"))
+    if confidence_value is None:
+        return False
+
+    risk_flags_payload = candidate.get("risk_flags")
+    if risk_flags_payload is None:
+        return False
+    if not (
+        isinstance(risk_flags_payload, Sequence)
+        and not isinstance(risk_flags_payload, (str, bytes, bytearray))
+    ):
+        return False
+
+    return True
+
+
+def _result_file_contains_valid_analysis(result_path: Path | None) -> bool:
+    if result_path is None or not result_path.exists():
+        return False
+
+    try:
+        with result_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    log.warning(
+                        "NOTE_STYLE_RESULT_PARSE_FAILED path=%s",
+                        result_path,
+                        exc_info=True,
+                    )
+                    return False
+                if not isinstance(payload, Mapping):
+                    return False
+                if _looks_like_analysis_payload(payload):
+                    return True
+                analysis_payload = payload.get("analysis")
+                if isinstance(analysis_payload, Mapping) and _looks_like_analysis_payload(
+                    analysis_payload
+                ):
+                    return True
+                return False
+    except FileNotFoundError:
+        return False
+    except OSError:
+        log.warning(
+            "NOTE_STYLE_RESULT_READ_FAILED path=%s", result_path, exc_info=True
+        )
+        return False
+
+    return False
 
 
 def _load_pack_note_metrics(pack_path: Path) -> Mapping[str, Any] | None:
@@ -921,20 +1014,29 @@ class NoteStyleIndexWriter:
         pack_path: Path | None,
         result_path: Path | None,
         completed_at: str | None = None,
-    ) -> tuple[Mapping[str, Any], dict[str, int]]:
+    ) -> tuple[Mapping[str, Any] | None, dict[str, int], int, bool]:
         document = self._load_document()
         key, entries = self._extract_entries(document)
 
         timestamp = completed_at or _now_iso()
         normalized_account = str(account_id)
+        analysis_valid = _result_file_contains_valid_analysis(result_path)
 
         rewritten: list[dict[str, Any]] = []
         updated_entry: dict[str, Any] | None = None
         for entry in entries:
             entry_payload = dict(entry)
+            for field in _INDEX_HASH_FIELDS:
+                entry_payload.pop(field, None)
             if str(entry_payload.get("account_id") or "") == normalized_account:
-                entry_payload["status"] = "completed"
-                entry_payload["completed_at"] = timestamp
+                if analysis_valid:
+                    entry_payload["status"] = "completed"
+                    entry_payload["completed_at"] = timestamp
+                else:
+                    status_text = str(entry_payload.get("status") or "").strip().lower()
+                    if status_text in {"completed", "success"}:
+                        entry_payload["status"] = "pending"
+                    entry_payload.pop("completed_at", None)
                 if result_path is not None:
                     entry_payload["result_path"] = _relativize(
                         result_path, self._paths.base
@@ -950,11 +1052,12 @@ class NoteStyleIndexWriter:
             rewritten.append(entry_payload)
 
         if updated_entry is None:
-            entry_payload = {
-                "account_id": normalized_account,
-                "status": "completed",
-                "completed_at": timestamp,
-            }
+            entry_payload = {"account_id": normalized_account}
+            if analysis_valid:
+                entry_payload["status"] = "completed"
+                entry_payload["completed_at"] = timestamp
+            else:
+                entry_payload["status"] = "pending"
             if pack_path is not None:
                 entry_payload["pack"] = _relativize(pack_path, self._paths.base)
             if result_path is not None:
@@ -997,7 +1100,14 @@ class NoteStyleIndexWriter:
             pack_value,
             result_value,
         )
-        return updated_entry, totals, skipped_count
+        if result_path is not None and not analysis_valid:
+            log.warning(
+                "NOTE_STYLE_RESULT_ANALYSIS_MISSING sid=%s account_id=%s path=%s",
+                self.sid,
+                normalized_account,
+                _relative_to_base(result_path, self._paths.base),
+            )
+        return updated_entry, totals, skipped_count, analysis_valid
 
     def mark_failed(
         self,
@@ -1294,21 +1404,29 @@ def store_note_style_result(
     )
 
     writer = NoteStyleIndexWriter(sid=sid, paths=paths)
-    updated_entry, totals, skipped_count = writer.mark_completed(
+    updated_entry, totals, skipped_count, analysis_valid = writer.mark_completed(
         account_id,
         pack_path=account_paths.pack_file,
         result_path=account_paths.result_file,
         completed_at=completed_at,
     )
-    _refresh_after_index_update(
-        sid=sid,
-        account_id=account_id,
-        runs_root_path=runs_root_path,
-        paths=paths,
-        updated_entry=updated_entry,
-        totals=totals,
-        skipped_count=skipped_count,
-    )
+    if analysis_valid:
+        _refresh_after_index_update(
+            sid=sid,
+            account_id=account_id,
+            runs_root_path=runs_root_path,
+            paths=paths,
+            updated_entry=updated_entry,
+            totals=totals,
+            skipped_count=skipped_count,
+        )
+    else:
+        log.warning(
+            "NOTE_STYLE_REFRESH_DEFERRED sid=%s account_id=%s reason=%s",
+            sid,
+            account_id,
+            "analysis_missing",
+        )
 
     return account_paths.result_file
 

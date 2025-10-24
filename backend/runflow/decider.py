@@ -1203,9 +1203,11 @@ def _apply_note_style_stage_promotion(
     existing = stages.get("note_style") if isinstance(stages, Mapping) else None
     previous_status = _stage_status(stages, "note_style")
 
-    if failed_value > 0 and total_value > 0:
+    if total_value > 0 and failed_value > 0:
         status_value = "error"
-    elif ready or empty_ok:
+    elif total_value == 0:
+        status_value = "success"
+    elif completed_value == total_value:
         status_value = "success"
     else:
         status_value = "built"
@@ -1552,7 +1554,6 @@ def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
     total = 0
     completed = 0
     failed = 0
-    ready = True
 
     for entry in entries:
         raw_status = entry.get("status")
@@ -1568,9 +1569,6 @@ def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
             completed += 1
         elif status == "failed":
             failed += 1
-            ready = False
-        else:
-            ready = False
 
     if not entries:
         totals_payload = document.get("totals")
@@ -1578,14 +1576,13 @@ def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
             total = _coerce_int(totals_payload.get("total")) or 0
             completed = _coerce_int(totals_payload.get("completed")) or 0
             failed = _coerce_int(totals_payload.get("failed")) or 0
-            ready = completed == total and failed == 0
         else:
             return (0, 0, 0, True)
 
     if total == 0:
         return (0, 0, failed or 0, True)
 
-    ready = ready and completed == total and failed == 0
+    ready = completed == total and failed == 0
     return (total, completed, failed or 0, ready)
 
 

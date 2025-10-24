@@ -502,7 +502,11 @@ class NoteStyleIndexWriter:
                 entry_payload["status"] = "completed"
                 entry_payload["completed_at"] = timestamp
                 if result_path is not None:
-                    entry_payload["result"] = _relativize(result_path, self._paths.base)
+                    entry_payload["result_path"] = _relativize(
+                        result_path, self._paths.base
+                    )
+                else:
+                    entry_payload.setdefault("result_path", "")
                 if pack_path is not None:
                     entry_payload.setdefault(
                         "pack", _relativize(pack_path, self._paths.base)
@@ -522,7 +526,11 @@ class NoteStyleIndexWriter:
             if pack_path is not None:
                 entry_payload["pack"] = _relativize(pack_path, self._paths.base)
             if result_path is not None:
-                entry_payload["result"] = _relativize(result_path, self._paths.base)
+                entry_payload["result_path"] = _relativize(
+                    result_path, self._paths.base
+                )
+            else:
+                entry_payload["result_path"] = ""
             if note_hash:
                 entry_payload["note_hash"] = note_hash
             rewritten.append(entry_payload)
@@ -543,10 +551,12 @@ class NoteStyleIndexWriter:
         index_relative = _relative_to_base(self._index_path, self._paths.base)
         status_text = str(updated_entry.get("status") or "") if updated_entry else ""
         pack_value = str(updated_entry.get("pack") or "") if updated_entry else ""
-        result_value = str(updated_entry.get("result") or "") if updated_entry else ""
+        result_value = (
+            str(updated_entry.get("result_path") or "") if updated_entry else ""
+        )
         note_hash_value = str(updated_entry.get("note_hash") or "") if updated_entry else ""
         log.info(
-            "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=completed status=%s packs_total=%s packs_completed=%s packs_failed=%s skipped=%s index=%s pack=%s result=%s note_hash=%s",
+            "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=completed status=%s packs_total=%s packs_completed=%s packs_failed=%s skipped=%s index=%s pack=%s result_path=%s note_hash=%s",
             self.sid,
             normalized_account,
             status_text,
@@ -609,9 +619,11 @@ def store_note_style_result(
     packs_completed = int(totals.get("completed", 0))
     packs_failed = int(totals.get("failed", 0))
 
-    if packs_failed > 0 and packs_total > 0:
+    if packs_total > 0 and packs_failed > 0:
         stage_status = "error"
-    elif packs_total == 0 or packs_completed >= packs_total:
+    elif packs_total == 0:
+        stage_status = "success"
+    elif packs_completed == packs_total:
         stage_status = "success"
     else:
         stage_status = "built"
@@ -654,6 +666,20 @@ def store_note_style_result(
             totals.get("completed", 0),
             totals.get("failed", 0),
         )
+        try:
+            barrier_state = reconcile_umbrella_barriers(
+                sid, runs_root=runs_root_path
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "NOTE_STYLE_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
+            )
+        else:
+            log.info(
+                "[Runflow] Umbrella barriers: sid=%s stage=note_style state=%s",
+                sid,
+                _structured_repr(barrier_state),
+            )
 
     try:
         record_stage(
@@ -674,19 +700,6 @@ def store_note_style_result(
     except Exception:  # pragma: no cover - defensive logging
         log.warning(
             "NOTE_STYLE_BARRIERS_REFRESH_FAILED sid=%s", sid, exc_info=True
-        )
-
-    try:
-        barrier_state = reconcile_umbrella_barriers(sid, runs_root=runs_root_path)
-    except Exception:  # pragma: no cover - defensive logging
-        log.warning(
-            "NOTE_STYLE_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
-        )
-    else:
-        log.info(
-            "[Runflow] Umbrella barriers: sid=%s stage=note_style state=%s",
-            sid,
-            _structured_repr(barrier_state),
         )
 
     return account_paths.result_file

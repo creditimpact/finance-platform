@@ -1184,7 +1184,7 @@ def _validate_account_artifacts(
     if not account_paths.pack_file.is_file():
         missing.append("pack")
     if not account_paths.result_file.is_file():
-        missing.append("result")
+        missing.append("result_path")
 
     if not missing:
         return
@@ -1898,7 +1898,9 @@ def _serialize_entry(
         "note_hash": note_hash,
     }
     if result_path is not None:
-        entry["result"] = _relativize(result_path, paths.base)
+        entry["result_path"] = _relativize(result_path, paths.base)
+    else:
+        entry["result_path"] = ""
     return entry
 
 
@@ -1912,6 +1914,7 @@ def _serialize_skip_entry(
         "built_at": timestamp,
         "status": status,
         "note_hash": note_hash,
+        "result_path": "",
     }
 
 
@@ -2107,12 +2110,12 @@ def _update_index_for_account(
             action = "noop"
         status_text = "removed" if removed_flag else ""
         pack_value = str((removed_entry or {}).get("pack") or "")
-        result_value = str((removed_entry or {}).get("result") or "")
+        result_value = str((removed_entry or {}).get("result_path") or "")
     else:
         action = "updated" if replaced_flag else "created" if created_flag else "noop"
         status_text = _normalize_text(entry.get("status")) if isinstance(entry, Mapping) else ""
         pack_value = str(entry.get("pack") or "")
-        result_value = str(entry.get("result") or "")
+        result_value = str(entry.get("result_path") or "")
 
     index_relative = _relativize(paths.index_file, paths.base)
     note_hash_value = ""
@@ -2125,7 +2128,7 @@ def _update_index_for_account(
             or ""
         )
     log.info(
-        "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=%s status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s note_hash=%s",
+        "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=%s status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result_path=%s note_hash=%s",
         sid,
         account_id,
         action,
@@ -2190,9 +2193,11 @@ def _record_stage_progress(
         index_path
     )
 
-    if packs_failed > 0 and packs_total > 0:
+    if packs_total > 0 and packs_failed > 0:
         status: str = "error"
-    elif packs_total == 0 or packs_completed >= packs_total:
+    elif packs_total == 0:
+        status = "success"
+    elif packs_completed == packs_total:
         status = "success"
     else:
         status = "built"

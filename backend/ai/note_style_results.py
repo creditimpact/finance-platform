@@ -772,6 +772,197 @@ class NoteStyleIndexWriter:
         )
         return updated_entry, totals, skipped_count
 
+    def mark_failed(
+        self,
+        account_id: str,
+        *,
+        pack_path: Path | None,
+        error: str | None = None,
+    ) -> tuple[Mapping[str, Any], dict[str, int]]:
+        document = self._load_document()
+        key, entries = self._extract_entries(document)
+
+        timestamp = _now_iso()
+        normalized_account = str(account_id)
+
+        rewritten: list[dict[str, Any]] = []
+        updated_entry: dict[str, Any] | None = None
+        for entry in entries:
+            entry_payload = dict(entry)
+            if str(entry_payload.get("account_id") or "") == normalized_account:
+                entry_payload["status"] = "failed"
+                entry_payload["failed_at"] = timestamp
+                if error:
+                    entry_payload["error"] = str(error)
+                else:
+                    entry_payload.pop("error", None)
+                if pack_path is not None:
+                    entry_payload.setdefault(
+                        "pack", _relativize(pack_path, self._paths.base)
+                    )
+                entry_payload.setdefault("result_path", "")
+                updated_entry = entry_payload
+            rewritten.append(entry_payload)
+
+        if updated_entry is None:
+            entry_payload = {
+                "account_id": normalized_account,
+                "status": "failed",
+                "failed_at": timestamp,
+                "result_path": "",
+            }
+            if pack_path is not None:
+                entry_payload["pack"] = _relativize(pack_path, self._paths.base)
+            if error:
+                entry_payload["error"] = str(error)
+            rewritten.append(entry_payload)
+            updated_entry = entry_payload
+
+        rewritten.sort(key=lambda item: str(item.get("account_id") or ""))
+        document[key] = rewritten
+        document["totals"] = _compute_totals(rewritten)
+        skipped_count = sum(
+            1
+            for entry in rewritten
+            if str(entry.get("status") or "").strip().lower()
+            in {"skipped", "skipped_low_signal"}
+        )
+
+        self._atomic_write_index(document)
+        totals = document["totals"]
+
+        index_relative = _relative_to_base(self._index_path, self._paths.base)
+        status_text = str(updated_entry.get("status") or "") if updated_entry else ""
+        pack_value = str(updated_entry.get("pack") or "") if updated_entry else ""
+        error_value = str(updated_entry.get("error") or "") if updated_entry else ""
+        log.info(
+            "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=failed status=%s packs_total=%s packs_completed=%s packs_failed=%s skipped=%s index=%s pack=%s error=%s",
+            self.sid,
+            normalized_account,
+            status_text,
+            totals.get("total", 0),
+            totals.get("completed", 0),
+            totals.get("failed", 0),
+            skipped_count,
+            index_relative,
+            pack_value,
+            error_value,
+        )
+        return updated_entry, totals, skipped_count
+
+
+def _refresh_after_index_update(
+    *,
+    sid: str,
+    account_id: str,
+    runs_root_path: Path,
+    paths: NoteStylePaths,
+    updated_entry: Mapping[str, Any] | None,
+    totals: Mapping[str, Any],
+    skipped_count: int,
+) -> None:
+    packs_total = int(totals.get("total", 0))
+    packs_completed = int(totals.get("completed", 0))
+    packs_failed = int(totals.get("failed", 0))
+
+    if packs_total > 0 and packs_failed > 0:
+        stage_status = "error"
+    elif packs_total == 0:
+        stage_status = "success"
+    elif packs_completed == packs_total:
+        stage_status = "success"
+    else:
+        stage_status = "built"
+
+    empty_ok = packs_total == 0
+    ready = stage_status == "success"
+
+    counts = {"packs_total": packs_total}
+    metrics = {"packs_total": packs_total}
+    results_counts = {
+        "results_total": packs_total,
+        "completed": packs_completed,
+        "failed": packs_failed,
+    }
+
+    log.info(
+        "NOTE_STYLE_REFRESH sid=%s ready=%s total=%s completed=%s failed=%s skipped=%s",
+        sid,
+        ready,
+        packs_total,
+        packs_completed,
+        packs_failed,
+        skipped_count,
+    )
+    log_structured_event(
+        "NOTE_STYLE_REFRESH",
+        logger=log,
+        sid=sid,
+        ready=ready,
+        status=stage_status,
+        packs_total=packs_total,
+        packs_completed=packs_completed,
+        packs_failed=packs_failed,
+        packs_skipped=skipped_count,
+    )
+
+    try:
+        refresh_note_style_stage_from_index(sid, runs_root=runs_root_path)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "NOTE_STYLE_STAGE_REFRESH_FAILED sid=%s", sid, exc_info=True
+        )
+    else:
+        status_text = (
+            str(updated_entry.get("status") or "")
+            if isinstance(updated_entry, Mapping)
+            else ""
+        )
+        log.info(
+            "NOTE_STYLE_STAGE_REFRESH_DETAIL sid=%s account_id=%s stage_status=%s packs_total=%s results_completed=%s results_failed=%s",
+            sid,
+            account_id,
+            status_text,
+            totals.get("total", 0),
+            totals.get("completed", 0),
+            totals.get("failed", 0),
+        )
+        try:
+            barrier_state = reconcile_umbrella_barriers(
+                sid, runs_root=runs_root_path
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "NOTE_STYLE_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
+            )
+        else:
+            log.info(
+                "[Runflow] Umbrella barriers: sid=%s stage=note_style state=%s",
+                sid,
+                _structured_repr(barrier_state),
+            )
+
+    try:
+        record_stage(
+            sid,
+            "note_style",
+            status=stage_status,
+            counts=counts,
+            empty_ok=empty_ok,
+            metrics=metrics,
+            results=results_counts,
+            runs_root=runs_root_path,
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning("NOTE_STYLE_STAGE_RECORD_FAILED sid=%s", sid, exc_info=True)
+
+    try:
+        runflow_barriers_refresh(sid)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "NOTE_STYLE_BARRIERS_REFRESH_FAILED sid=%s", sid, exc_info=True
+        )
+
 
 def store_note_style_result(
     sid: str,
@@ -896,106 +1087,69 @@ def store_note_style_result(
         completed_at=completed_at,
         note_hash=str(normalized_payload.get("note_hash") or "") or None,
     )
-
-    packs_total = int(totals.get("total", 0))
-    packs_completed = int(totals.get("completed", 0))
-    packs_failed = int(totals.get("failed", 0))
-
-    if packs_total > 0 and packs_failed > 0:
-        stage_status = "error"
-    elif packs_total == 0:
-        stage_status = "success"
-    elif packs_completed == packs_total:
-        stage_status = "success"
-    else:
-        stage_status = "built"
-
-    empty_ok = packs_total == 0
-    ready = stage_status == "success"
-
-    counts = {"packs_total": packs_total}
-    metrics = {"packs_total": packs_total}
-    results_counts = {
-        "results_total": packs_total,
-        "completed": packs_completed,
-        "failed": packs_failed,
-    }
-
-    log.info(
-        "NOTE_STYLE_REFRESH sid=%s ready=%s total=%s completed=%s failed=%s skipped=%s",
-        sid,
-        ready,
-        packs_total,
-        packs_completed,
-        packs_failed,
-        skipped_count,
-    )
-    log_structured_event(
-        "NOTE_STYLE_REFRESH",
-        logger=log,
+    _refresh_after_index_update(
         sid=sid,
-        ready=ready,
-        status=stage_status,
-        packs_total=packs_total,
-        packs_completed=packs_completed,
-        packs_failed=packs_failed,
-        packs_skipped=skipped_count,
+        account_id=account_id,
+        runs_root_path=runs_root_path,
+        paths=paths,
+        updated_entry=updated_entry,
+        totals=totals,
+        skipped_count=skipped_count,
     )
-
-    try:
-        refresh_note_style_stage_from_index(sid, runs_root=runs_root_path)
-    except Exception:  # pragma: no cover - defensive logging
-        log.warning(
-            "NOTE_STYLE_STAGE_REFRESH_FAILED sid=%s", sid, exc_info=True
-        )
-    else:
-        status_text = str(updated_entry.get("status") or "") if isinstance(updated_entry, Mapping) else ""
-        log.info(
-            "NOTE_STYLE_STAGE_REFRESH_DETAIL sid=%s account_id=%s stage_status=%s packs_total=%s results_completed=%s results_failed=%s",
-            sid,
-            account_id,
-            status_text,
-            totals.get("total", 0),
-            totals.get("completed", 0),
-            totals.get("failed", 0),
-        )
-        try:
-            barrier_state = reconcile_umbrella_barriers(
-                sid, runs_root=runs_root_path
-            )
-        except Exception:  # pragma: no cover - defensive logging
-            log.warning(
-                "NOTE_STYLE_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
-            )
-        else:
-            log.info(
-                "[Runflow] Umbrella barriers: sid=%s stage=note_style state=%s",
-                sid,
-                _structured_repr(barrier_state),
-            )
-
-    try:
-        record_stage(
-            sid,
-            "note_style",
-            status=stage_status,
-            counts=counts,
-            empty_ok=empty_ok,
-            metrics=metrics,
-            results=results_counts,
-            runs_root=runs_root_path,
-        )
-    except Exception:  # pragma: no cover - defensive logging
-        log.warning("NOTE_STYLE_STAGE_RECORD_FAILED sid=%s", sid, exc_info=True)
-
-    try:
-        runflow_barriers_refresh(sid)
-    except Exception:  # pragma: no cover - defensive logging
-        log.warning(
-            "NOTE_STYLE_BARRIERS_REFRESH_FAILED sid=%s", sid, exc_info=True
-        )
 
     return account_paths.result_file
 
 
-__all__ = ["NoteStyleIndexWriter", "store_note_style_result"]
+def record_note_style_failure(
+    sid: str,
+    account_id: str,
+    *,
+    runs_root: Path | str | None = None,
+    error: str | None = None,
+) -> Path:
+    """Record a failed note_style model attempt for ``account_id``."""
+
+    runs_root_path = _resolve_runs_root(runs_root)
+    ensure_note_style_section(sid, runs_root=runs_root_path)
+    paths = ensure_note_style_paths(runs_root_path, sid, create=True)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
+
+    writer = NoteStyleIndexWriter(sid=sid, paths=paths)
+    updated_entry, totals, skipped_count = writer.mark_failed(
+        account_id,
+        pack_path=account_paths.pack_file,
+        error=error,
+    )
+
+    log.info(
+        "NOTE_STYLE_RESULT_FAILED sid=%s acc=%s error=%s",
+        sid,
+        account_id,
+        error or "",
+    )
+    log_structured_event(
+        "NOTE_STYLE_RESULT_FAILED",
+        logger=log,
+        sid=sid,
+        account_id=account_id,
+        error=error or "",
+    )
+
+    _refresh_after_index_update(
+        sid=sid,
+        account_id=account_id,
+        runs_root_path=runs_root_path,
+        paths=paths,
+        updated_entry=updated_entry,
+        totals=totals,
+        skipped_count=skipped_count,
+    )
+
+    return account_paths.result_file
+
+
+__all__ = [
+    "NoteStyleIndexWriter",
+    "record_note_style_failure",
+    "store_note_style_result",
+]

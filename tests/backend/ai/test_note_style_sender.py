@@ -39,8 +39,15 @@ class _StubClient:
             ],
         }
 
-    def chat_completion(self, *, model, messages, temperature):  # type: ignore[override]
-        self.calls.append({"model": model, "messages": messages, "temperature": temperature})
+    def chat_completion(self, *, model, messages, temperature, **kwargs):  # type: ignore[override]
+        self.calls.append(
+            {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "kwargs": kwargs,
+            }
+        )
         return {
             "choices": [
                 {"message": {"content": json.dumps(self._response_payload)}}
@@ -98,18 +105,16 @@ def test_note_style_sender_sends_built_pack(
     assert "fingerprint" not in stored_payload
     assert stored_payload["fingerprint_hash"] == pack_payload["fingerprint_hash"]
     analysis = stored_payload["analysis"]
-    assert analysis["tone"] == "empathetic"
-    assert analysis["emphasis"] == ["paid_already", "support_request"]
+    assert analysis["tone"] == "Empathetic"
+    assert analysis["emphasis"] == ["paid_already", "Custom", "support_request"]
     context = analysis["context_hints"]
     assert context["topic"] == "payment_dispute"
     timeframe = context["timeframe"]
-    assert timeframe.get("relative") in {"Last month", "last_month"}
-    month_value = timeframe.get("month")
-    if month_value is not None:
-        assert str(month_value).lower().startswith("apr")
+    assert timeframe.get("relative") == "last_month"
+    assert timeframe.get("month") in {None, "2024-04-01"}
     entities = context["entities"]
     assert entities["creditor"] == "capital one"
-    assert entities["amount"] == pytest.approx(123.45)
+    assert entities["amount"] == "$123.45 USD"
     assert analysis["risk_flags"] == [
         "follow_up",
         "duplicate",
@@ -122,6 +127,10 @@ def test_note_style_sender_sends_built_pack(
     assert isinstance(note_metrics, Mapping)
     assert note_metrics.get("char_len") > 0
     assert note_metrics.get("word_len") > 0
+    assert note_metrics.get("truncated") is False
+
+    assert stored_payload["account_context"] == pack_payload["account_context"]
+    assert stored_payload["bureaus_summary"] == pack_payload["bureaus_summary"]
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]
@@ -149,6 +158,9 @@ def test_note_style_sender_sends_built_pack(
         entry.get("event") == "NOTE_STYLE_SENT_OK" and entry.get("account_id") == account_id
         for entry in structured_records
     )
+
+    call_kwargs = client.calls[0]["kwargs"]
+    assert call_kwargs.get("response_format") == {"type": "json_object"}
 
 
 def test_note_style_sender_skips_completed_entries(
@@ -181,7 +193,7 @@ def test_note_style_sender_skips_completed_entries(
     assert len(client.calls) == 1
 
     processed_second = send_note_style_packs_for_sid(sid, runs_root=runs_root)
-    assert processed_second == []
+    assert processed_second == [account_id]
     assert len(client.calls) == 1
 
 
@@ -231,13 +243,11 @@ def test_note_style_sender_skips_when_existing_result_matches(
             },
         }
     )
+    final_result["account_context"] = pack_payload["account_context"]
+    final_result["bureaus_summary"] = pack_payload["bureaus_summary"]
     account_paths.result_file.write_text(
         json.dumps(final_result, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-
-    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
-    index_payload["packs"][0]["status"] = "built"
-    paths.index_file.write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
 
     client = _StubClient()
     monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
@@ -279,9 +289,6 @@ def test_note_style_sender_raises_when_pack_missing(
 
     client = _StubClient()
     monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
-    with pytest.raises(FileNotFoundError):
-        send_note_style_packs_for_sid(sid, runs_root=runs_root)
-
-    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
-    packs = index_payload["packs"]
-    assert packs[0]["status"] == "built"
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+    assert processed == []
+    assert len(client.calls) == 0

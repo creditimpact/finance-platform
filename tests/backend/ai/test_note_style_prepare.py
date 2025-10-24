@@ -29,8 +29,15 @@ class _StubClient:
             "risk_flags": ["follow_up"],
         }
 
-    def chat_completion(self, *, model, messages, temperature):  # type: ignore[override]
-        self.calls.append({"model": model, "messages": messages, "temperature": temperature})
+    def chat_completion(self, *, model, messages, temperature, **kwargs):  # type: ignore[override]
+        self.calls.append(
+            {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "kwargs": kwargs,
+            }
+        )
         return {
             "choices": [
                 {"message": {"content": json.dumps(self._response_payload)}}
@@ -85,7 +92,11 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
     stored_payload = json.loads(result_lines[0])
     assert stored_payload["sid"] == sid
     assert stored_payload["account_id"] == account_id
-    assert stored_payload["analysis"]["tone"] == "empathetic"
+    assert stored_payload["analysis"]["tone"] == "Empathetic"
+    pack_payload = json.loads(pack_lines[0])
+    assert stored_payload["account_context"] == pack_payload["account_context"]
+    assert stored_payload["bureaus_summary"] == pack_payload["bureaus_summary"]
+    assert client.calls[0]["kwargs"].get("response_format") == {"type": "json_object"}
 
     runflow_path = run_dir / "runflow.json"
     assert runflow_path.is_file()

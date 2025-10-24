@@ -801,11 +801,17 @@ def _validate_result_payload(
         parts.append(f"missing_artifacts={artifact_text}")
 
     detail = " ".join(parts) if parts else "validation_warning"
+    raw_hint = account_paths.result_raw_file
+    if not raw_hint.exists():
+        json_candidate = raw_hint.with_suffix(".json")
+        if json_candidate.exists():
+            raw_hint = json_candidate
+
     log.warning(
         "[NOTE_STYLE] RESULT_INVALID account=%s reason=%s raw_path=%s",
         account_id,
         detail,
-        account_paths.result_raw_file.resolve().as_posix(),
+        raw_hint.resolve().as_posix(),
     )
     append_note_style_warning(
         _note_style_log_path(paths),

@@ -299,7 +299,7 @@ def ensure_note_style_account_paths(
     normalized = normalize_note_style_account_id(account_id)
     pack_path = paths.packs_dir / note_style_pack_filename(normalized)
     result_path = paths.results_dir / note_style_result_filename(normalized)
-    raw_result_path = paths.results_raw_dir / f"acc_{normalized}.raw.json"
+    raw_result_path = paths.results_raw_dir / f"acc_{normalized}.raw.txt"
     debug_path = paths.debug_dir / f"{normalized}.context.json"
 
     if create:

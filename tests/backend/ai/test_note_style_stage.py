@@ -299,7 +299,10 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         f"Prompt salt: {result['prompt_salt']}"
     )
     assert pack_messages[1]["role"] == "user"
-    user_payload = json.loads(pack_messages[1]["content"])
+    user_payload = pack_messages[1]["content"]
+    assert isinstance(user_payload, dict)
+    metadata_payload = user_payload.get("metadata")
+    assert isinstance(metadata_payload, dict)
     expected_context = {
         "identity": {
             "primary_issue": "late_payment",
@@ -445,14 +448,15 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
             },
         },
     }
-    assert user_payload == {
+    assert metadata_payload == {
         "sid": sid,
         "account_id": account_id,
-        "note_text": note,
         "fingerprint": expected_fingerprint,
         "account_context": expected_context,
-        "metadata": {"lang": "auto", "channel": "frontend_review"},
+        "channel": "frontend_review",
+        "lang": "auto",
     }
+    assert user_payload["note_text"] == note
 
     assert 8 <= len(pack_payload["prompt_salt"]) <= 12
     assert pack_payload["note_hash"] == expected_note_hash

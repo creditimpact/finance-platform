@@ -63,8 +63,13 @@ def test_discover_note_style_accounts_returns_sorted_entries(tmp_path: Path) -> 
     first = responses_dir / "idx-002.result.json"
     second = responses_dir / "Account 5!!.result.json"
     third = responses_dir / "idx-001.result.json"
-    for path in (first, second, third):
-        path.write_text("{}", encoding="utf-8")
+    first_payload = {"answers": {"explain": "This is the second account."}}
+    second_payload = {"note": "Customer provided additional context."}
+    third_payload = {"answers": [{"note": "Short note"}]}
+    for path, payload in zip(
+        (first, second, third), (first_payload, second_payload, third_payload)
+    ):
+        _write_response(path, payload)
 
     # Write a file that should be ignored by discovery
     (responses_dir / "idx-003.summary.json").write_text("{}", encoding="utf-8")
@@ -86,6 +91,24 @@ def test_discover_note_style_accounts_returns_sorted_entries(tmp_path: Path) -> 
     assert account_entry.response_relative.as_posix() == (
         f"runs/{sid}/frontend/review/responses/{second.name}"
     )
+
+
+def test_discover_note_style_accounts_requires_note_field(tmp_path: Path) -> None:
+    sid = "SID102"
+    responses_dir = tmp_path / sid / "frontend" / "review" / "responses"
+    responses_dir.mkdir(parents=True, exist_ok=True)
+
+    first = responses_dir / "idx-000.result.json"
+    second = responses_dir / "idx-001.result.json"
+    missing = responses_dir / "idx-002.result.json"
+
+    _write_response(first, {"note": ""})
+    _write_response(second, {"answers": {"explain": "Customer provided a note."}})
+    _write_response(missing, {"summary": "This is not a customer response."})
+
+    results = discover_note_style_response_accounts(sid, runs_root=tmp_path)
+
+    assert [entry.account_id for entry in results] == ["idx-000", "idx-001"]
 
 
 def test_note_style_stage_skips_zero_length_response(tmp_path: Path) -> None:

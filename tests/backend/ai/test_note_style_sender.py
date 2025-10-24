@@ -96,6 +96,7 @@ def test_note_style_sender_sends_built_pack(
     )
     assert stored_payload["prompt_salt"] == pack_payload["prompt_salt"]
     assert stored_payload["fingerprint"] == pack_payload["fingerprint"]
+    assert stored_payload["fingerprint_hash"] == pack_payload["fingerprint_hash"]
     assert stored_payload["account_context"] == pack_payload["account_context"]
 
     analysis = stored_payload["analysis"]

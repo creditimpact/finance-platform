@@ -359,6 +359,10 @@ def ingest_note_style_result(
         if isinstance(fingerprint, Mapping):
             result_payload["fingerprint"] = dict(fingerprint)
 
+        fingerprint_hash = existing_payload.get("fingerprint_hash")
+        if isinstance(fingerprint_hash, str) and fingerprint_hash.strip():
+            result_payload["fingerprint_hash"] = fingerprint_hash.strip()
+
         account_context = existing_payload.get("account_context")
         if isinstance(account_context, Mapping):
             result_payload["account_context"] = dict(account_context)

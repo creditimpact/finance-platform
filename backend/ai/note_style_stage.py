@@ -864,6 +864,34 @@ def _build_account_context(
     return context
 
 
+def _first_bureau_value(
+    bureaus: Mapping[str, Mapping[str, Any]], field: str
+) -> str:
+    for _, payload in sorted(bureaus.items(), key=lambda item: item[0]):
+        if not isinstance(payload, Mapping):
+            continue
+        candidate = _normalize_bureau_field(field, payload.get(field))
+        if candidate:
+            return candidate
+    return ""
+
+
+def _has_bureau_conflicts(
+    bureaus: Mapping[str, Mapping[str, Any]], fields: Sequence[str]
+) -> bool:
+    for field in fields:
+        values: set[str] = set()
+        for payload in bureaus.values():
+            if not isinstance(payload, Mapping):
+                continue
+            candidate = _normalize_bureau_field(field, payload.get(field))
+            if candidate:
+                values.add(candidate)
+        if len(values) > 1:
+            return True
+    return False
+
+
 def _build_account_fingerprint(
     account_id: str,
     meta: Mapping[str, Any],
@@ -871,27 +899,13 @@ def _build_account_fingerprint(
     tags: Sequence[Mapping[str, Any]],
     bureaus_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    majority_values: Mapping[str, Any] = {}
     if bureaus_summary is None:
         bureaus_summary = _summarize_bureaus(bureaus)
-
-    majority_values: Mapping[str, Any] = {}
-    disagreements_payload: Mapping[str, Mapping[str, str]] = {}
     if isinstance(bureaus_summary, Mapping):
         majority_payload = bureaus_summary.get("majority_values")
         if isinstance(majority_payload, Mapping):
             majority_values = majority_payload
-        disagreements_candidate = bureaus_summary.get("disagreements")
-        if isinstance(disagreements_candidate, Mapping):
-            disagreements_payload = {
-                str(field): {
-                    str(bureau): str(value)
-                    for bureau, value in mapping.items()
-                    if str(value)
-                }
-                for field, mapping in disagreements_candidate.items()
-                if isinstance(mapping, Mapping)
-            }
-
     fingerprint: dict[str, Any] = {}
 
     normalized_account_id = _clean_value(meta.get("account_id")) or account_id
@@ -899,18 +913,11 @@ def _build_account_fingerprint(
     fingerprint["account_id"] = account_id_slug
 
     identity_section: dict[str, Any] = {}
-    issuer_value = ""
-    for key in ("issuer_slug", "issuer_canonical", "heading_guess", "issuer_variant"):
-        candidate = _clean_value(meta.get(key))
-        if candidate:
-            issuer_value = _slugify(candidate)
-            break
-    if issuer_value:
-        identity_section["issuer"] = issuer_value
-
-    reported_creditor = _clean_value(majority_values.get("reported_creditor"))
+    reported_creditor = _clean_value(meta.get("heading_guess"))
     if not reported_creditor:
-        reported_creditor = _clean_value(meta.get("heading_guess"))
+        reported_creditor = _clean_value(majority_values.get("reported_creditor"))
+    if not reported_creditor:
+        reported_creditor = _first_bureau_value(bureaus, "reported_creditor")
     if reported_creditor:
         identity_section["reported_creditor"] = _slugify(reported_creditor)
 
@@ -921,58 +928,59 @@ def _build_account_fingerprint(
     if identity_section:
         fingerprint["identity"] = identity_section
 
-    issue_section: dict[str, Any] = {}
     primary_issue = _select_primary_issue(tags)
     if primary_issue:
-        issue_section["primary"] = _slugify(primary_issue)
-    issue_slugs: list[str] = []
-    for issue in _collect_issue_tags(tags):
-        slug = _slugify(issue)
-        if slug:
-            issue_slugs.append(slug)
-    if issue_slugs:
-        issue_section["all"] = sorted(set(issue_slugs))
-    if issue_section:
-        fingerprint["core_issue"] = issue_section
+        fingerprint["core_issue"] = _slugify(primary_issue)
 
+    financial_fields = ("account_type", "account_status", "payment_status")
     financial_section: dict[str, Any] = {}
-    for field in ("account_type", "account_status", "payment_status", "creditor_type"):
+    for field in financial_fields:
         value = _clean_value(majority_values.get(field))
+        if not value:
+            value = _first_bureau_value(bureaus, field)
         if value:
             financial_section[field] = _slugify(value)
-    for field in ("balance_owed", "high_balance", "past_due_amount"):
-        value = _clean_value(majority_values.get(field))
-        if value:
-            financial_section[field] = value
     if financial_section:
         fingerprint["financial"] = financial_section
 
-    dates_section: dict[str, Any] = {}
-    date_fields = {
-        "date_opened": "opened",
-        "date_reported": "reported",
-        "date_of_last_activity": "last_activity",
-        "closed_date": "closed",
-        "last_verified": "last_verified",
-    }
-    for source_field, target_field in date_fields.items():
-        value = _clean_value(majority_values.get(source_field))
-        if value:
-            dates_section[target_field] = value
-    if dates_section:
-        fingerprint["dates"] = dates_section
+    date_section: dict[str, Any] = {}
+    opened_value = _clean_value(majority_values.get("date_opened"))
+    if not opened_value:
+        opened_value = _normalize_date_value(
+            _first_bureau_value(bureaus, "date_opened")
+        )
+    if opened_value:
+        date_section["opened"] = opened_value
+    last_activity_value = _clean_value(majority_values.get("date_of_last_activity"))
+    if not last_activity_value:
+        last_activity_value = _normalize_date_value(
+            _first_bureau_value(bureaus, "date_of_last_activity")
+        )
+    if last_activity_value:
+        date_section["last_activity"] = last_activity_value
+    if date_section:
+        fingerprint["dates"] = date_section
 
-    disagreements_section = {
-        "has_disagreements": bool(disagreements_payload),
-        "fields": {
-            field: dict(sorted(values.items(), key=lambda item: item[0]))
-            for field, values in disagreements_payload.items()
-            if values
-        },
-    }
-    fingerprint["disagreements"] = disagreements_section
+    fields_to_compare = (
+        "reported_creditor",
+        "account_type",
+        "account_status",
+        "payment_status",
+        "date_opened",
+        "date_of_last_activity",
+    )
+    fingerprint["disagreements"] = _has_bureau_conflicts(bureaus, fields_to_compare)
 
     return fingerprint
+
+
+def _compute_fingerprint_hash(fingerprint: Mapping[str, Any]) -> str:
+    serialized = json.dumps(
+        fingerprint, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    digest = hashlib.sha256()
+    digest.update(serialized.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def discover_note_style_response_accounts(
@@ -1377,6 +1385,7 @@ def _pack_messages(
     note_text: str,
     prompt_salt: str,
     fingerprint: Mapping[str, Any],
+    fingerprint_hash: str,
     account_context: Mapping[str, Any],
     ui_allegations_selected: Sequence[str] | None = None,
 ) -> list[Mapping[str, Any]]:
@@ -1385,6 +1394,7 @@ def _pack_messages(
         "sid": sid,
         "account_id": account_id,
         "fingerprint": fingerprint,
+        "fingerprint_hash": fingerprint_hash,
         "account_context": account_context,
         "channel": "frontend_review",
         "lang": "auto",
@@ -2418,6 +2428,7 @@ def build_note_style_pack_for_account(
         tags_payload,
         bureaus_summary,
     )
+    fingerprint_hash = _compute_fingerprint_hash(fingerprint)
 
     pack_payload = {
         "sid": sid,
@@ -2427,6 +2438,7 @@ def build_note_style_pack_for_account(
         "model": _NOTE_STYLE_MODEL,
         "prompt_salt": prompt_salt,
         "fingerprint": fingerprint,
+        "fingerprint_hash": fingerprint_hash,
         "account_context": account_context,
         "messages": _pack_messages(
             sid=sid,
@@ -2434,6 +2446,7 @@ def build_note_style_pack_for_account(
             note_text=note_raw,
             prompt_salt=prompt_salt,
             fingerprint=fingerprint,
+            fingerprint_hash=fingerprint_hash,
             account_context=account_context,
             ui_allegations_selected=ui_allegations_selected,
         ),
@@ -2448,6 +2461,7 @@ def build_note_style_pack_for_account(
         "note_metrics": {"char_len": char_len, "word_len": word_len},
         "evaluated_at": timestamp,
         "fingerprint": fingerprint,
+        "fingerprint_hash": fingerprint_hash,
         "account_context": account_context,
     }
 

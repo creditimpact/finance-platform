@@ -447,52 +447,34 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     expected_fingerprint = {
         "account_id": "idx-001",
         "identity": {
-            "issuer": "capital-one",
-            "reported_creditor": "capital-one-bank",
+            "reported_creditor": "capital-one",
             "account_tail": "1234",
         },
-        "core_issue": {"primary": "late-payment", "all": ["late-payment"]},
+        "core_issue": "late-payment",
         "financial": {
             "account_type": "credit-card",
             "account_status": "closed",
             "payment_status": "late-30-days",
-            "creditor_type": "bank",
-            "balance_owed": "100",
-            "high_balance": "200",
-            "past_due_amount": "0",
         },
         "dates": {
             "opened": "2020-01-15",
-            "reported": "2024-03-10",
             "last_activity": "2024-02-05",
-            "closed": "2023-12-31",
-            "last_verified": "2024-03-01",
         },
-        "disagreements": {
-            "has_disagreements": True,
-            "fields": {
-                "account_status": {
-                    "equifax": "Open",
-                    "experian": "Closed",
-                    "transunion": "Closed",
-                },
-                "high_balance": {
-                    "equifax": "250",
-                    "experian": "200",
-                    "transunion": "200",
-                },
-                "past_due_amount": {
-                    "equifax": "25",
-                    "experian": "0",
-                    "transunion": "0",
-                },
-            },
-        },
+        "disagreements": True,
     }
+    expected_fingerprint_hash = hashlib.sha256(
+        json.dumps(
+            expected_fingerprint,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     assert metadata_payload == {
         "sid": sid,
         "account_id": account_id,
         "fingerprint": expected_fingerprint,
+        "fingerprint_hash": expected_fingerprint_hash,
         "account_context": expected_context,
         "channel": "frontend_review",
         "lang": "auto",
@@ -508,6 +490,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         == f"runs/{sid}/frontend/review/responses/{account_id}.result.json"
     )
     assert pack_payload["fingerprint"] == expected_fingerprint
+    assert pack_payload["fingerprint_hash"] == expected_fingerprint_hash
     assert pack_payload["account_context"] == expected_context
     assert pack_payload["ui_allegations_selected"] == ["not_mine", "wrong_amount"]
     assert "extractor" not in pack_payload
@@ -521,6 +504,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         "word_len": len(sanitized.split()),
     }
     assert result_payload["fingerprint"] == expected_fingerprint
+    assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
     assert result_payload["account_context"] == expected_context
     assert result_payload["ui_allegations_selected"] == ["not_mine", "wrong_amount"]
 
@@ -1011,8 +995,16 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     pack_user_payload = pack_payload["messages"][1]["content"]
     expected_fingerprint = {
         "account_id": "idx-004",
-        "disagreements": {"has_disagreements": False, "fields": {}},
+        "disagreements": False,
     }
+    expected_fingerprint_hash = hashlib.sha256(
+        json.dumps(
+            expected_fingerprint,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     expected_context: dict[str, Any] = {}
     assert pack_user_payload["note_text"] == note
     metadata_payload = pack_user_payload.get("metadata")
@@ -1020,6 +1012,7 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
         "sid": sid,
         "account_id": account_id,
         "fingerprint": expected_fingerprint,
+        "fingerprint_hash": expected_fingerprint_hash,
         "account_context": expected_context,
         "channel": "frontend_review",
         "lang": "auto",
@@ -1027,6 +1020,7 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
 
     assert pack_payload["note_hash"] == expected_note_hash
     assert pack_payload["fingerprint"] == expected_fingerprint
+    assert pack_payload["fingerprint_hash"] == expected_fingerprint_hash
     assert pack_payload["account_context"] == expected_context
     assert result_payload["note_hash"] == expected_note_hash
     assert result_payload["source_hash"] == expected_hash
@@ -1035,6 +1029,7 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
         "word_len": len(sanitized.split()),
     }
     assert result_payload["fingerprint"] == expected_fingerprint
+    assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
     assert result_payload["account_context"] == expected_context
     assert note not in account_paths.result_file.read_text(encoding="utf-8")
 

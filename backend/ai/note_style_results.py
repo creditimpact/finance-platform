@@ -920,7 +920,8 @@ def _validate_result_payload(
             raw_hint = json_candidate
 
     log.warning(
-        "[NOTE_STYLE] RESULT_INVALID account=%s reason=%s raw_path=%s",
+        "NOTE_STYLE_RESULT_INVALID sid=%s account_id=%s reason=%s raw_path=%s",
+        sid,
         account_id,
         detail,
         raw_hint.resolve().as_posix(),
@@ -1370,7 +1371,8 @@ def store_note_style_result(
     )
     result_relative = _relative_to_base(account_paths.result_file, paths.base)
     log.info(
-        "[NOTE_STYLE] RESULT_WRITTEN account=%s path=%s bytes=%d",
+        "NOTE_STYLE_PARSED sid=%s account_id=%s path=%s bytes=%d",
+        sid,
         account_id,
         result_relative,
         bytes_written,
@@ -1392,7 +1394,7 @@ def store_note_style_result(
             risk_flags_payload = []
 
     log_structured_event(
-        "NOTE_STYLE_RESULTS_WRITTEN",
+        "NOTE_STYLE_PARSED",
         logger=log,
         sid=sid,
         account_id=account_id,

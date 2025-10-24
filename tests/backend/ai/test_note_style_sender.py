@@ -144,11 +144,15 @@ def test_note_style_sender_sends_built_pack(
     )
     assert isinstance(packs[0].get("completed_at"), str)
 
-    messages = [record.message for record in caplog.records if "STYLE_SEND" in record.message]
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_sender"
+    ]
     assert any("STYLE_SEND_ACCOUNT_START" in message for message in messages)
     assert any("STYLE_SEND_MODEL_CALL" in message for message in messages)
-    assert any("STYLE_SEND_RESULTS_WRITTEN" in message for message in messages)
     assert any("STYLE_SEND_ACCOUNT_END" in message for message in messages)
+    assert any("NOTE_STYLE_SENT" in message for message in messages)
 
     structured_records = [
         json.loads(record.getMessage())
@@ -157,7 +161,7 @@ def test_note_style_sender_sends_built_pack(
         and record.getMessage().startswith("{")
     ]
     assert any(
-        entry.get("event") == "NOTE_STYLE_SENT_OK" and entry.get("account_id") == account_id
+        entry.get("event") == "NOTE_STYLE_SENT" and entry.get("account_id") == account_id
         for entry in structured_records
     )
 

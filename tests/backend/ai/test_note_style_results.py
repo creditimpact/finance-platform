@@ -64,6 +64,11 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
         "backend.ai.note_style_results.reconcile_umbrella_barriers", _fake_reconcile
     )
 
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    baseline_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    baseline_metrics = baseline_payload["note_metrics"]
+
     result_payload = {
         "sid": sid,
         "account_id": account_id,
@@ -120,9 +125,6 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     assert structured_event.get("note_metrics")
     assert structured_event.get("risk_flags") is not None
 
-    paths = ensure_note_style_paths(runs_root, sid, create=False)
-    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
-
     assert result_path == account_paths.result_file
     stored_lines = [
         line
@@ -131,11 +133,14 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     ]
     assert len(stored_lines) == 1
     stored_payload = json.loads(stored_lines[0])
-    expected_payload = json.loads(json.dumps(result_payload))
-    context_expected = dict(expected_payload["analysis"]["context_hints"])
-    context_expected["topic"] = None
-    expected_payload["analysis"]["context_hints"] = context_expected
-    assert stored_payload == expected_payload
+    assert stored_payload["note_metrics"] == baseline_metrics
+    assert stored_payload["sid"] == sid
+    assert stored_payload["account_id"] == account_id
+    assert stored_payload["note_hash"] == result_payload["note_hash"]
+    assert (
+        stored_payload["analysis"]["context_hints"].get("topic")
+        is None
+    )
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]
@@ -188,6 +193,10 @@ def test_store_note_style_result_normalizes_analysis_fields(
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
     baseline_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    prompt_salt = baseline_payload["prompt_salt"]
+    note_hash = baseline_payload["note_hash"]
+    evaluated_at = baseline_payload["evaluated_at"]
+    fingerprint_hash = baseline_payload["fingerprint_hash"]
 
     result_payload = {
         "sid": sid,
@@ -373,7 +382,7 @@ def test_store_note_style_result_logs_missing_fields(
     contents = log_path.read_text(encoding="utf-8")
     assert (
         "missing_fields="
-        "confidence,emphasis,entities,evaluated_at,fingerprint_hash,note_metrics,"
+        "confidence,emphasis,entities,evaluated_at,fingerprint_hash," 
         "risk_flags,timeframe,tone,topic"
     ) in contents
     assert account_id in contents
@@ -464,3 +473,143 @@ def test_store_note_style_result_warns_on_fingerprint_mismatch(
         and entry.get("result_fingerprint_hash") == "result-hash"
         for entry in structured_warnings
     )
+
+
+def test_store_note_style_result_clamps_confidence_for_short_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID910"
+    account_id = "idx-910"
+    runs_root = tmp_path / "runs"
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Need refund now"},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.runflow_barriers_refresh", lambda _sid: None
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.reconcile_umbrella_barriers",
+        lambda _sid, runs_root=None: {},
+    )
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    baseline_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    prompt_salt = baseline_payload["prompt_salt"]
+    note_hash = baseline_payload["note_hash"]
+    evaluated_at = baseline_payload["evaluated_at"]
+    fingerprint_hash = baseline_payload["fingerprint_hash"]
+
+    result_payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "analysis": {
+            "tone": "assertive",
+            "context_hints": {
+                "timeframe": {"month": None, "relative": None},
+                "topic": "payment_dispute",
+                "entities": {"creditor": None, "amount": None},
+            },
+            "emphasis": ["support_request"],
+            "confidence": 0.92,
+            "risk_flags": [],
+        },
+        "prompt_salt": prompt_salt,
+        "note_hash": note_hash,
+        "evaluated_at": evaluated_at,
+        "fingerprint_hash": fingerprint_hash,
+    }
+
+    store_note_style_result(
+        sid,
+        account_id,
+        result_payload,
+        runs_root=runs_root,
+        completed_at="2024-02-03T00:00:00Z",
+    )
+
+    stored_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    assert stored_payload["analysis"]["confidence"] == 0.5
+    assert stored_payload["note_metrics"] == baseline_payload["note_metrics"]
+
+
+def test_store_note_style_result_adds_unsupported_claim_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID911"
+    account_id = "idx-911"
+    runs_root = tmp_path / "runs"
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {
+                "explanation": "They owe me $500 but I have no documents"
+            },
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.runflow_barriers_refresh", lambda _sid: None
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.reconcile_umbrella_barriers",
+        lambda _sid, runs_root=None: {},
+    )
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    baseline_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    prompt_salt = baseline_payload["prompt_salt"]
+    note_hash = baseline_payload["note_hash"]
+    evaluated_at = baseline_payload["evaluated_at"]
+    fingerprint_hash = baseline_payload["fingerprint_hash"]
+
+    result_payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "analysis": {
+            "tone": "assertive",
+            "context_hints": {
+                "timeframe": {"month": None, "relative": None},
+                "topic": "payment_dispute",
+                "entities": {"creditor": None, "amount": 500},
+            },
+            "emphasis": [],
+            "confidence": 0.66,
+            "risk_flags": [],
+        },
+        "prompt_salt": prompt_salt,
+        "note_hash": note_hash,
+        "evaluated_at": evaluated_at,
+        "fingerprint_hash": fingerprint_hash,
+    }
+
+    store_note_style_result(
+        sid,
+        account_id,
+        result_payload,
+        runs_root=runs_root,
+        completed_at="2024-02-04T00:00:00Z",
+    )
+
+    stored_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    risk_flags = stored_payload["analysis"].get("risk_flags")
+    assert "unsupported_claim" in risk_flags
+    assert stored_payload["analysis"]["confidence"] <= 0.5

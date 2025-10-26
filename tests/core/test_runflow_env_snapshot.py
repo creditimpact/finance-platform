@@ -15,6 +15,7 @@ def test_collect_process_snapshot_validation_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("ENABLE_VALIDATION_SENDER", "1")
     monkeypatch.setenv("AUTO_VALIDATION_SEND", "yes")
     monkeypatch.setenv("VALIDATION_SEND_ON_BUILD", "no")
+    monkeypatch.setenv("VALIDATION_AUTOSEND_ENABLED", "no")
     monkeypatch.setenv("VALIDATION_PACKS_DIR", "custom/packs")
     monkeypatch.setenv("VALIDATION_API_KEY", "top-secret")
 
@@ -25,6 +26,7 @@ def test_collect_process_snapshot_validation_paths(monkeypatch, tmp_path):
     assert flags["ENABLE_VALIDATION_SENDER"]["enabled"] is True
     assert flags["AUTO_VALIDATION_SEND"]["enabled"] is True
     assert flags["VALIDATION_SEND_ON_BUILD"]["enabled"] is False
+    assert flags["VALIDATION_AUTOSEND_ENABLED"]["enabled"] is False
 
     validation_paths = snapshot["paths"]["validation"]
     packs_dir = Path(validation_paths["packs_dir"])

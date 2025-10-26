@@ -64,6 +64,7 @@ def _collect_flag_snapshot() -> dict[str, dict[str, Any]]:
     flags: dict[str, dict[str, Any]] = {}
     for name, default in (
         ("ENABLE_FRONTEND_PACKS", True),
+        ("VALIDATION_AUTOSEND_ENABLED", True),
         ("ENABLE_VALIDATION_SENDER", False),
         ("AUTO_VALIDATION_SEND", False),
         ("VALIDATION_SEND_ON_BUILD", False),

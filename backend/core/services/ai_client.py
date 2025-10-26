@@ -7,6 +7,9 @@ from typing import Any, Dict, List
 from openai import OpenAI
 
 
+log = logging.getLogger(__name__)
+
+
 @dataclass
 class AIConfig:
     """Configuration for :class:`AIClient`."""
@@ -23,10 +26,33 @@ class AIClient:
     """Thin wrapper around the OpenAI client used throughout the codebase."""
 
     def __init__(self, config: AIConfig):
+        api_key = (config.api_key or "").strip()
+        if not api_key:
+            log.error(
+                "AI_CLIENT_CREDENTIAL_ERROR model=%s base_url=%s detail=missing_api_key",
+                config.chat_model,
+                (config.base_url or "https://api.openai.com/v1"),
+            )
+            raise RuntimeError(
+                "AI client requires an OpenAI API key. Set OPENAI_API_KEY before starting."
+            )
+
+        base_url = (config.base_url or "").strip() or "https://api.openai.com/v1"
+
+        log.info(
+            "AI_CLIENT_READY model=%s response_model=%s base_url=%s key_present=yes",
+            config.chat_model,
+            config.response_model,
+            base_url,
+        )
+
+        config.api_key = api_key
+        config.base_url = base_url
+
         self.config = config
         self._client = OpenAI(
-            api_key=config.api_key,
-            base_url=config.base_url,
+            api_key=api_key,
+            base_url=base_url,
             timeout=config.timeout,
             max_retries=config.max_retries,
         )

@@ -1,5 +1,8 @@
 import json
+import logging
 from pathlib import Path
+
+import pytest
 
 from backend.ai.note_style import prepare_and_send
 from backend.ai.note_style_stage import (
@@ -290,7 +293,75 @@ def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:
     assert context_payload["primary_issue_tag"] == "balance_dispute"
 
 
-def test_note_style_stage_handles_missing_context(tmp_path: Path) -> None:
+def test_note_style_stage_resolves_relative_manifest_paths(tmp_path: Path) -> None:
+    sid = "SIDREL"
+    account_id = "idx-010"
+    run_dir = tmp_path / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    note = "Relative manifest paths should resolve to account artifacts."
+
+    account_dir = run_dir / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+
+    meta_payload = {"heading_guess": "Relative Creditor"}
+    bureaus_payload = {"experian": {"account_status": "Open", "account_type": "Loan"}}
+    tags_payload = [{"kind": "issue", "type": "relative_path"}]
+
+    (account_dir / "meta.json").write_text(
+        json.dumps(meta_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps(tags_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    manifest_payload = {
+        "sid": sid,
+        "artifacts": {
+            "cases": {
+                "accounts": {
+                    account_id: {
+                        "dir": "cases/accounts/idx-010",
+                        "meta": "meta.json",
+                        "bureaus": "cases/accounts/idx-010/bureaus.json",
+                        "tags": "tags.json",
+                    }
+                }
+            }
+        },
+    }
+
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {"answers": {"explanation": note}},
+    )
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=tmp_path)
+
+    assert result["status"] == "completed"
+
+    paths = ensure_note_style_paths(tmp_path, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
+    context_payload = pack_payload["context"]
+
+    assert context_payload["meta_name"] == "Relative Creditor"
+    bureau_data = context_payload["bureau_data"]
+    assert bureau_data["per_bureau"]["experian"]["account_status"] == "Open"
+    assert context_payload["primary_issue_tag"] == "relative_path"
+
+
+def test_note_style_stage_handles_missing_context(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     sid = "SID002"
     account_id = "idx-002"
     run_dir = tmp_path / sid
@@ -302,7 +373,8 @@ def test_note_style_stage_handles_missing_context(tmp_path: Path) -> None:
         {"answers": {"explanation": note}},
     )
 
-    result = build_note_style_pack_for_account(sid, account_id, runs_root=tmp_path)
+    with caplog.at_level(logging.WARNING, logger="backend.ai.note_style_stage"):
+        result = build_note_style_pack_for_account(sid, account_id, runs_root=tmp_path)
 
     assert result["status"] == "completed"
 
@@ -318,6 +390,8 @@ def test_note_style_stage_handles_missing_context(tmp_path: Path) -> None:
     assert context_payload["meta_name"] == account_id
     assert context_payload["bureau_data"] == {}
     assert context_payload["primary_issue_tag"] is None
+
+    assert "NOTE_STYLE_WARN: missing context for account idx-002 (meta/tags/bureaus)" in caplog.text
 
     user_context = pack_payload["messages"][1]["content"]["context"]
     assert user_context == context_payload

@@ -10,7 +10,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping, MutableMapping
+from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
 from backend.ai.manifest import ensure_note_style_section
 from backend.core.ai.paths import (
@@ -251,7 +251,7 @@ def _resolve_response_path(sid: str, account_id: str, runs_root: Path) -> Path:
     return (runs_root / sid / "frontend" / "review" / "responses" / f"{account_id}.result.json").resolve()
 
 
-def _coerce_path(value: Any) -> Path | None:
+def _coerce_raw_path(value: Any) -> Path | None:
     if value is None:
         return None
     try:
@@ -263,10 +263,44 @@ def _coerce_path(value: Any) -> Path | None:
     if not text:
         return None
 
+    return Path(text)
+
+
+def _resolve_path_from_bases(raw_path: Path, bases: Iterable[Path]) -> Path:
+    if raw_path.is_absolute():
+        try:
+            return raw_path.resolve()
+        except OSError:
+            return raw_path
+
+    candidates: list[Path] = []
+    for base in bases:
+        if base is None:
+            continue
+        try:
+            candidate = Path(base) / raw_path
+        except TypeError:
+            continue
+        candidates.append(candidate)
+
+    if not candidates:
+        candidates.append(raw_path)
+
+    first_candidate = candidates[0]
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        if resolved.exists():
+            return resolved
+        if candidate.exists():
+            return candidate
+
     try:
-        return Path(text).resolve()
+        return first_candidate.resolve()
     except OSError:
-        return Path(text)
+        return first_candidate
 
 
 def _lookup_manifest_account_entry(
@@ -320,22 +354,40 @@ def _resolve_account_context_paths(
     account_entry = _lookup_manifest_account_entry(manifest_payload, account_id)
 
     resolved: dict[str, Path] = {}
+    account_dir: Path | None = None
     if isinstance(account_entry, Mapping):
-        for key in ("dir", "meta", "bureaus", "tags"):
-            candidate = _coerce_path(account_entry.get(key))
-            if candidate is not None:
-                resolved[key] = candidate
+        raw_dir = _coerce_raw_path(account_entry.get("dir"))
+        if raw_dir is not None:
+            account_dir = _resolve_path_from_bases(raw_dir, (run_dir,))
+            resolved["dir"] = account_dir
 
-    account_dir = resolved.get("dir")
     if account_dir is None:
         account_dir = (run_dir / "cases" / "accounts" / account_id).resolve()
         resolved["dir"] = account_dir
 
-    for key, filename in (("meta", "meta.json"), ("bureaus", "bureaus.json"), ("tags", "tags.json")):
-        if key not in resolved:
+    for key, filename in (
+        ("meta", "meta.json"),
+        ("bureaus", "bureaus.json"),
+        ("tags", "tags.json"),
+    ):
+        raw_value = None
+        if isinstance(account_entry, Mapping):
+            raw_value = _coerce_raw_path(account_entry.get(key))
+        if raw_value is not None:
+            resolved[key] = _resolve_path_from_bases(raw_value, (account_dir, run_dir))
+        else:
             resolved[key] = (account_dir / filename).resolve()
 
     return resolved
+
+
+def _load_context_payload(path: Path | None) -> tuple[Any | None, bool]:
+    if not isinstance(path, Path):
+        return None, True
+
+    payload = _load_json_data(path)
+    missing = payload is None
+    return payload, missing
 
 
 def _relative_to_base(path: Path, base: Path) -> str:
@@ -493,13 +545,25 @@ def build_note_style_pack_for_account(
     bureaus_path = context_paths.get("bureaus")
     tags_path = context_paths.get("tags")
 
-    meta_candidate = _load_json_data(meta_path) if isinstance(meta_path, Path) else None
+    meta_candidate, meta_missing = _load_context_payload(meta_path)
     meta_payload = meta_candidate if isinstance(meta_candidate, Mapping) else None
+    if meta_payload is None:
+        meta_missing = True
 
-    bureaus_candidate = _load_json_data(bureaus_path) if isinstance(bureaus_path, Path) else None
+    bureaus_candidate, bureaus_missing = _load_context_payload(bureaus_path)
     bureaus_payload = bureaus_candidate if isinstance(bureaus_candidate, Mapping) else None
+    if bureaus_payload is None:
+        bureaus_missing = True
 
-    tags_payload = _load_json_data(tags_path) if isinstance(tags_path, Path) else None
+    tags_candidate, tags_missing = _load_context_payload(tags_path)
+    if isinstance(tags_candidate, Mapping) or (
+        isinstance(tags_candidate, Sequence)
+        and not isinstance(tags_candidate, (str, bytes, bytearray))
+    ):
+        tags_payload = tags_candidate
+    else:
+        tags_payload = None
+        tags_missing = True
 
     timestamp = _now_iso()
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
@@ -512,6 +576,20 @@ def build_note_style_pack_for_account(
         "bureau_data": bureau_data,
         "primary_issue_tag": primary_issue_tag,
     }
+
+    missing_sections: list[str] = []
+    if meta_missing:
+        missing_sections.append("meta")
+    if tags_missing:
+        missing_sections.append("tags")
+    if bureaus_missing:
+        missing_sections.append("bureaus")
+    if missing_sections:
+        log.warning(
+            "NOTE_STYLE_WARN: missing context for account %s (%s)",
+            account_id,
+            "/".join(missing_sections),
+        )
 
     user_message_content: dict[str, Any] = {
         "note_text": note_text,

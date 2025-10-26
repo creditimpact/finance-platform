@@ -105,6 +105,13 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     note_metrics = pack_payload["note_metrics"]
     assert note_metrics == {"char_len": 50, "word_len": 9}
 
+    account_payload = pack_payload["account_payload"]
+    assert account_payload["meta"]["heading_guess"] == "Capital One Services"
+    assert account_payload["meta"]["account_number_tail"] == "1234"
+    assert account_payload["bureaus"]["transunion"]["balance_owed"] == "$100.00"
+    assert account_payload["bureaus"]["equifax"]["payment_status"] == "Late 30 Days"
+    assert account_payload["tags"] == tags_payload
+
     account_context = pack_payload["account_context"]
     meta_context = account_context.get("meta", {})
     assert meta_context.get("heading_guess") == "Capital One Services"
@@ -119,21 +126,20 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     assert bureaus_summary["per_bureau"]["experian"]["date_reported"] == "2024-03-10"
 
     pack_path = tmp_path / sid / "ai_packs" / "note_style" / "packs" / "style_acc_idx-007.jsonl"
-    debug_path = tmp_path / sid / "ai_packs" / "note_style" / "debug" / "idx-007.context.json"
-
     assert pack_path.is_file()
     lines = pack_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0]) == pack_payload
 
-    assert debug_path.is_file()
-    assert json.loads(debug_path.read_text(encoding="utf-8")) == pack_payload
+    debug_path = tmp_path / sid / "ai_packs" / "note_style" / "debug" / "idx-007.context.json"
+    assert not debug_path.exists()
 
     messages = pack_payload["messages"]
     assert messages[0]["role"] == "system"
-    assert "Context hints (orientation only):" in messages[0]["content"]
+    assert "Context hints:" in messages[0]["content"]
     assert messages[1]["role"] == "user"
-    assert messages[1]["content"] == {"note_text": pack_payload["note_text"]}
+    assert messages[1]["content"]["note_text"] == pack_payload["note_text"]
+    assert messages[1]["content"]["context"] == account_payload
 
 
 def test_build_pack_requires_existing_artifacts(tmp_path: Path) -> None:

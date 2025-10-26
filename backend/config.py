@@ -272,7 +272,7 @@ NOTE_STYLE_USE_MANIFEST_PATHS = env_bool(
 NOTE_STYLE_RESULTS_BASENAME = env_str(
     "NOTE_STYLE_RESULTS_BASENAME", "acc_{account}.result.jsonl"
 )
-NOTE_STYLE_PACK_GLOB = env_str("NOTE_STYLE_PACK_GLOB", "style_*.jsonl")
+NOTE_STYLE_PACK_GLOB = env_str("NOTE_STYLE_PACK_GLOB", "acc_*.jsonl")
 NOTE_STYLE_SEND_ON_RESPONSE_WRITE = env_bool(
     "NOTE_STYLE_SEND_ON_RESPONSE_WRITE", False
 )

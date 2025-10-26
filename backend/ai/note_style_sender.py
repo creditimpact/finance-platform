@@ -583,8 +583,31 @@ def send_note_style_packs_for_sid(
     paths = ensure_note_style_paths(runs_root_path, sid, create=False)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
-    glob_pattern = os.getenv("NOTE_STYLE_PACK_GLOB") or "*acc_*.jsonl"
+    env_glob = os.getenv("NOTE_STYLE_PACK_GLOB")
+    fallback_glob = "acc_*.jsonl"
+    glob_pattern = env_glob or fallback_glob
     pack_candidates = sorted(packs_dir.glob(glob_pattern))
+    effective_glob = glob_pattern
+
+    if env_glob and not pack_candidates and glob_pattern != fallback_glob:
+        fallback_candidates = sorted(packs_dir.glob(fallback_glob))
+        if fallback_candidates:
+            log.info(
+                "NOTE_STYLE_PACK_GLOB_FALLBACK sid=%s glob=%s fallback=%s matches=%s",
+                sid,
+                glob_pattern,
+                fallback_glob,
+                len(fallback_candidates),
+            )
+            pack_candidates = fallback_candidates
+            effective_glob = fallback_glob
+
+    log.info(
+        "NOTE_STYLE_PACK_DISCOVERY sid=%s glob=%s matches=%s",
+        sid,
+        effective_glob,
+        len(pack_candidates),
+    )
 
     if not pack_candidates:
         return []

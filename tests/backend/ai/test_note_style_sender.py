@@ -7,7 +7,10 @@ from typing import Any, Mapping
 
 import pytest
 
-from backend.ai.note_style_sender import send_note_style_packs_for_sid
+from backend.ai.note_style_sender import (
+    send_note_style_pack_for_account,
+    send_note_style_packs_for_sid,
+)
 from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
 from backend import config
@@ -583,3 +586,132 @@ def test_note_style_sender_ignores_debug_snapshot_files(
 
     assert processed == [account_id]
     assert len(client.calls) == 1
+
+
+def test_note_style_sender_uses_manifest_pack_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID410"
+    account_id = "idx-410"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Please escalate."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    entry = index_payload["packs"][0]
+    entry["pack_path"] = (
+        f"C:\\author\\runs\\{sid}\\ai_packs\\note_style\\packs\\{account_paths.pack_file.name}"
+    )
+    entry["result_path"] = (
+        f"C:\\author\\runs\\{sid}\\ai_packs\\note_style\\results\\{account_paths.result_file.name}"
+    )
+    paths.index_file.write_text(
+        json.dumps(index_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "NOTE_STYLE_USE_MANIFEST_PATHS", True, raising=False)
+
+    client = _StubClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+
+    assert processed == [account_id]
+    assert len(client.calls) == 1
+
+    result_path = account_paths.result_file
+    assert result_path.exists()
+
+    updated_index = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    updated_entry = updated_index["packs"][0]
+    assert (
+        updated_entry.get("pack")
+        == account_paths.pack_file.relative_to(paths.base).as_posix()
+    )
+    assert (
+        updated_entry["result_path"]
+        == result_path.relative_to(paths.base).as_posix()
+    )
+
+
+def test_note_style_pack_for_account_uses_manifest_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID411"
+    account_id = "idx-411"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Handle directly."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    entry = index_payload["packs"][0]
+    entry["pack_path"] = (
+        f"C:\\author\\runs\\{sid}\\ai_packs\\note_style\\packs\\{account_paths.pack_file.name}"
+    )
+    entry["result_path"] = (
+        f"C:\\author\\runs\\{sid}\\ai_packs\\note_style\\results\\{account_paths.result_file.name}"
+    )
+    paths.index_file.write_text(
+        json.dumps(index_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "NOTE_STYLE_USE_MANIFEST_PATHS", True, raising=False)
+
+    client = _StubClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+
+    processed = send_note_style_pack_for_account(
+        sid, account_id, runs_root=runs_root
+    )
+
+    assert processed is True
+    assert len(client.calls) == 1
+
+    result_path = account_paths.result_file
+    assert result_path.exists()
+
+    updated_index = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    updated_entry = updated_index["packs"][0]
+    assert (
+        updated_entry.get("pack")
+        == account_paths.pack_file.relative_to(paths.base).as_posix()
+    )
+    assert (
+        updated_entry["result_path"]
+        == result_path.relative_to(paths.base).as_posix()
+    )
+

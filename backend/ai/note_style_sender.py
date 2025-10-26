@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import math
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
@@ -20,6 +21,7 @@ from backend.core.ai.paths import (
     NoteStylePaths,
     ensure_note_style_account_paths,
     ensure_note_style_paths,
+    normalize_note_style_account_id,
 )
 from backend.core.services.ai_client import get_ai_client
 
@@ -212,6 +214,176 @@ def _load_index_account_map(paths: NoteStylePaths) -> dict[str, str]:
                     if normalized:
                         mapping[normalized] = account_id
     return mapping
+
+
+@dataclass(frozen=True)
+class _PackCandidate:
+    pack_path: Path
+    result_path: Path | None = None
+    account_id: str | None = None
+    normalized_account_id: str | None = None
+
+
+def _normalize_manifest_entry_path(
+    value: Any,
+    *,
+    paths: NoteStylePaths,
+    default_dir: Path,
+) -> Path | None:
+    if value is None:
+        return None
+
+    try:
+        text = os.fspath(value)
+    except TypeError:
+        text = str(value)
+
+    sanitized = str(text).strip()
+    if not sanitized:
+        return None
+
+    sanitized = sanitized.replace("\\", "/")
+    candidate_path = Path(sanitized)
+    run_dir = paths.base.parent.parent
+
+    if candidate_path.is_absolute():
+        candidate = candidate_path.resolve()
+    else:
+        parts = list(candidate_path.parts)
+        if parts and parts[0].endswith(":"):
+            parts = parts[1:]
+        normalized_parts = [part for part in parts if part not in {"", "."}]
+        relative_parts = normalized_parts
+        sid_lower = run_dir.name.lower()
+        for idx, part in enumerate(normalized_parts):
+            if part.lower() == sid_lower:
+                relative_parts = normalized_parts[idx + 1 :]
+                break
+        if (
+            len(relative_parts) >= 2
+            and relative_parts[0].lower() == "ai_packs"
+            and relative_parts[1].lower() == "note_style"
+        ):
+            relative_parts = relative_parts[2:]
+
+        if not relative_parts:
+            candidate = default_dir.resolve()
+        else:
+            candidate = (paths.base / Path(*relative_parts)).resolve()
+
+    if not _is_within_directory(candidate, run_dir):
+        return None
+
+    return candidate
+
+
+def _load_manifest_pack_entries(
+    paths: NoteStylePaths, *, sid: str | None = None
+) -> list[_PackCandidate]:
+    index_path = paths.index_file
+    try:
+        raw = index_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except OSError:
+        log.warning(
+            "STYLE_SEND_MANIFEST_INDEX_READ_FAILED sid=%s path=%s",
+            sid,
+            index_path,
+            exc_info=True,
+        )
+        return []
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning(
+            "STYLE_SEND_MANIFEST_INDEX_INVALID_JSON sid=%s path=%s",
+            sid,
+            index_path,
+            exc_info=True,
+        )
+        return []
+
+    pack_entries = payload.get("packs")
+    if not isinstance(pack_entries, Sequence):
+        return []
+
+    candidates: list[_PackCandidate] = []
+    for entry in pack_entries:
+        if not isinstance(entry, Mapping):
+            continue
+
+        pack_path_value = entry.get("pack_path") or entry.get("pack")
+        pack_path = _normalize_manifest_entry_path(
+            pack_path_value,
+            paths=paths,
+            default_dir=paths.packs_dir,
+        )
+        if pack_path is None:
+            log.warning(
+                "STYLE_SEND_MANIFEST_PACK_INVALID sid=%s value=%s",
+                sid,
+                pack_path_value,
+            )
+            continue
+
+        result_path_value = entry.get("result_path") or entry.get("result")
+        result_path = _normalize_manifest_entry_path(
+            result_path_value,
+            paths=paths,
+            default_dir=paths.results_dir,
+        )
+
+        account_raw = entry.get("account_id")
+        account_id: str | None
+        if account_raw is None:
+            account_id = None
+        else:
+            account_text = str(account_raw).strip()
+            account_id = account_text or None
+
+        normalized = (
+            normalize_note_style_account_id(account_id)
+            if account_id is not None
+            else None
+        )
+
+        candidates.append(
+            _PackCandidate(
+                pack_path=pack_path,
+                result_path=result_path,
+                account_id=account_id,
+                normalized_account_id=normalized,
+            )
+        )
+
+    return candidates
+
+
+def _account_paths_for_candidate(
+    paths: NoteStylePaths,
+    account_id: str,
+    candidate: _PackCandidate | None,
+) -> NoteStyleAccountPaths:
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
+
+    if candidate is None:
+        return account_paths
+
+    pack_file = candidate.pack_path
+    result_file = candidate.result_path or account_paths.result_file
+
+    if candidate.result_path is not None:
+        candidate.result_path.parent.mkdir(parents=True, exist_ok=True)
+
+    return NoteStyleAccountPaths(
+        account_id=account_paths.account_id,
+        pack_file=pack_file,
+        result_file=result_file,
+        result_raw_file=account_paths.result_raw_file,
+        debug_file=account_paths.debug_file,
+    )
 
 
 def _result_has_completed_analysis(result_path: Path) -> bool:
@@ -583,31 +755,47 @@ def send_note_style_packs_for_sid(
     paths = ensure_note_style_paths(runs_root_path, sid, create=False)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
-    env_glob = os.getenv("NOTE_STYLE_PACK_GLOB")
-    fallback_glob = "acc_*.jsonl"
-    glob_pattern = env_glob or fallback_glob
-    pack_candidates = sorted(packs_dir.glob(glob_pattern))
-    effective_glob = glob_pattern
+    manifest_candidates: list[_PackCandidate] = []
+    if config.NOTE_STYLE_USE_MANIFEST_PATHS:
+        manifest_candidates = _load_manifest_pack_entries(paths, sid=sid)
 
-    if env_glob and not pack_candidates and glob_pattern != fallback_glob:
-        fallback_candidates = sorted(packs_dir.glob(fallback_glob))
-        if fallback_candidates:
-            log.info(
-                "NOTE_STYLE_PACK_GLOB_FALLBACK sid=%s glob=%s fallback=%s matches=%s",
-                sid,
-                glob_pattern,
-                fallback_glob,
-                len(fallback_candidates),
-            )
-            pack_candidates = fallback_candidates
-            effective_glob = fallback_glob
+    pack_candidates: list[_PackCandidate]
+    if manifest_candidates:
+        pack_candidates = manifest_candidates
+        log.info(
+            "NOTE_STYLE_PACK_DISCOVERY sid=%s glob=%s matches=%s manifest=%s",
+            sid,
+            "<manifest>",
+            len(pack_candidates),
+            True,
+        )
+    else:
+        env_glob = os.getenv("NOTE_STYLE_PACK_GLOB")
+        fallback_glob = "acc_*.jsonl"
+        glob_pattern = env_glob or fallback_glob
+        file_candidates = sorted(packs_dir.glob(glob_pattern))
+        effective_glob = glob_pattern
 
-    log.info(
-        "NOTE_STYLE_PACK_DISCOVERY sid=%s glob=%s matches=%s",
-        sid,
-        effective_glob,
-        len(pack_candidates),
-    )
+        if env_glob and not file_candidates and glob_pattern != fallback_glob:
+            fallback_candidates = sorted(packs_dir.glob(fallback_glob))
+            if fallback_candidates:
+                log.info(
+                    "NOTE_STYLE_PACK_GLOB_FALLBACK sid=%s glob=%s fallback=%s matches=%s",
+                    sid,
+                    glob_pattern,
+                    fallback_glob,
+                    len(fallback_candidates),
+                )
+                file_candidates = fallback_candidates
+                effective_glob = fallback_glob
+
+        pack_candidates = [_PackCandidate(pack_path=path) for path in file_candidates]
+        log.info(
+            "NOTE_STYLE_PACK_DISCOVERY sid=%s glob=%s matches=%s",
+            sid,
+            effective_glob,
+            len(pack_candidates),
+        )
 
     if not pack_candidates:
         return []
@@ -617,15 +805,29 @@ def send_note_style_packs_for_sid(
     processed_accounts: set[str] = set()
     index_account_map = _load_index_account_map(paths)
 
-    for pack_path in pack_candidates:
-        if not _is_within_directory(pack_path, packs_dir):
-            log.warning(
-                "STYLE_SEND_PACK_OUTSIDE_DIR sid=%s path=%s packs_dir=%s",
-                sid,
-                pack_path,
-                packs_dir,
-            )
-            continue
+    for candidate in pack_candidates:
+        pack_path = candidate.pack_path
+
+        if manifest_candidates:
+            run_dir = paths.base.parent.parent
+            if not _is_within_directory(pack_path, run_dir):
+                log.warning(
+                    "STYLE_SEND_PACK_OUTSIDE_MANIFEST sid=%s path=%s run_dir=%s",
+                    sid,
+                    pack_path,
+                    run_dir,
+                )
+                continue
+        else:
+            if not _is_within_directory(pack_path, packs_dir):
+                log.warning(
+                    "STYLE_SEND_PACK_OUTSIDE_DIR sid=%s path=%s packs_dir=%s",
+                    sid,
+                    pack_path,
+                    packs_dir,
+                )
+                continue
+
         if _is_within_directory(pack_path, debug_dir):
             log.info(
                 "STYLE_SEND_SKIP_DEBUG sid=%s path=%s",
@@ -647,8 +849,12 @@ def send_note_style_packs_for_sid(
 
         for pack_payload in pack_records:
             account_id = str(pack_payload.get("account_id") or "").strip()
+            if not account_id and candidate.account_id:
+                account_id = candidate.account_id
             if not account_id:
                 account_id = index_account_map.get(pack_relative, "")
+            if not account_id and candidate.normalized_account_id:
+                account_id = candidate.normalized_account_id
             if not account_id:
                 account_id = _account_id_from_pack_path(pack_path)
             if not account_id:
@@ -656,13 +862,12 @@ def send_note_style_packs_for_sid(
                     "STYLE_SEND_ACCOUNT_UNKNOWN sid=%s pack=%s", sid, pack_path
                 )
                 continue
-            if account_id in processed_accounts:
+            normalized_account = normalize_note_style_account_id(account_id)
+            if normalized_account in processed_accounts:
                 continue
-            processed_accounts.add(account_id)
+            processed_accounts.add(normalized_account)
 
-            account_paths = ensure_note_style_account_paths(
-                paths, account_id, create=True
-            )
+            account_paths = _account_paths_for_candidate(paths, account_id, candidate)
 
             if _send_pack_payload(
                 sid=sid,
@@ -688,7 +893,18 @@ def send_note_style_pack_for_account(
 ) -> bool:
     runs_root_path = _resolve_runs_root(runs_root)
     paths = ensure_note_style_paths(runs_root_path, sid, create=False)
-    account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
+    candidate: _PackCandidate | None = None
+    if config.NOTE_STYLE_USE_MANIFEST_PATHS:
+        target = normalize_note_style_account_id(account_id)
+        for entry in _load_manifest_pack_entries(paths, sid=sid):
+            normalized_entry = entry.normalized_account_id
+            if normalized_entry is None and entry.account_id is not None:
+                normalized_entry = normalize_note_style_account_id(entry.account_id)
+            if normalized_entry == target:
+                candidate = entry
+                break
+
+    account_paths = _account_paths_for_candidate(paths, account_id, candidate)
 
     pack_path = account_paths.pack_file
     if not pack_path.exists():

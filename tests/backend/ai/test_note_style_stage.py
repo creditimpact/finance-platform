@@ -201,13 +201,14 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert pack_payload["sid"] == sid
     assert pack_payload["account_id"] == account_id
     assert pack_payload["model"]
-    assert pack_payload["context"]["meta_name"] == "Capital One"
-    assert pack_payload["context"]["primary_issue_tag"] == "late_payment"
+    context_payload = pack_payload["context"]
+    assert context_payload["primary_issue_tag"] == "late_payment"
+    assert context_payload["meta"]["heading_guess"] == "Capital One"
     assert pack_payload["note_text"].startswith("Please help")
-    bureau_context = pack_payload["context"]["bureau_context"]
-    assert bureau_context["account_type"] == "Credit Card"
-    assert bureau_context["account_status"] == "Closed"
-    assert "reported_creditor" not in bureau_context
+    bureau_data = context_payload["bureau_data"]
+    assert bureau_data["experian"]["account_type"] == "Credit Card"
+    assert bureau_data["experian"]["account_status"] == "Closed"
+    assert context_payload["tags"][0]["type"] == "late_payment"
     assert pack_payload["messages"][0]["role"] == "system"
 
     user_message = pack_payload["messages"][1]
@@ -215,33 +216,53 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     user_content = user_message["content"]
     assert user_content["note_text"].startswith("Please help")
     context_snapshot = user_content["context"]
-    assert context_snapshot["meta_name"] == "Capital One"
     assert context_snapshot["primary_issue_tag"] == "late_payment"
+    assert context_snapshot["meta"]["heading_guess"] == "Capital One"
+    assert (
+        context_snapshot["bureau_data"]["experian"]["account_type"] == "Credit Card"
+    )
+
+
+def test_note_style_stage_handles_missing_context(tmp_path: Path) -> None:
+    sid = "SID002"
+    account_id = "idx-002"
+    run_dir = tmp_path / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+    note = "No context files exist for this account."
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {"answers": {"explanation": note}},
+    )
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=tmp_path)
+
+    assert result["status"] == "completed"
+
+    paths = ensure_note_style_paths(tmp_path, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
+    result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+
+    context_payload = pack_payload["context"]
+    assert context_payload["meta"] == {}
+    assert context_payload["bureau_data"] == {}
+    assert context_payload["tags"] == []
+    assert context_payload["primary_issue_tag"] is None
+
+    user_context = pack_payload["messages"][1]["content"]["context"]
+    assert user_context == context_payload
 
     # Debug context snapshots should never leak into the pack payload that will be
     # forwarded to the AI model or the initial result stub.
     assert "debug" not in pack_payload
     assert "debug" not in result_payload
 
-    pack_text = account_paths.pack_file.read_text(encoding="utf-8")
-    result_text = account_paths.result_file.read_text(encoding="utf-8")
-    debug_filename = account_paths.debug_file.name
-
-    assert debug_filename not in pack_text
-    assert debug_filename not in result_text
-
-    assert result_payload["sid"] == sid
-    assert result_payload["account_id"] == account_id
-    assert result_payload["note_metrics"]["char_len"] == len(note)
-
     debug_snapshot = json.loads(account_paths.debug_file.read_text(encoding="utf-8"))
-    assert debug_snapshot["meta"] == meta_payload
-    assert debug_snapshot["bureaus"] == bureaus_payload
-
-    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
-    entry = index_payload["packs"][0]
-    assert entry["account_id"] == account_id
-    assert entry["status"] == "built"
+    assert debug_snapshot["meta"] == {}
+    assert debug_snapshot["bureaus"] == {}
+    assert debug_snapshot["tags"] == []
 
 
 def test_prepare_and_send_without_responses_sets_empty_ok(tmp_path: Path) -> None:

@@ -30,12 +30,18 @@ log = logging.getLogger(__name__)
 
 
 _NOTE_STYLE_SYSTEM_PROMPT = (
-    "You analyse customer notes and respond with structured JSON.\n"
-    "Return exactly one JSON object using this schema:\n"
-    '{"tone": string, "context_hints": {"timeframe": {"month": string|null, "relative": '
-    'string|null}, "topic": string, "entities": {"creditor": string|null, "amount": '
-    'number|null}}, "emphasis": [string], "confidence": number, "risk_flags": [string]}.\n'
-    "Never include explanations or additional keys."
+    "You analyze customer notes and output JSON ONLY.\n"
+    "Return exactly one object with this schema: {\"tone\": string, "
+    "\"context_hints\": {\"timeframe\": {\"month\": string|null, \"relative\": string|null}, "
+    "\"topic\": string, \"entities\": {\"creditor\": string|null, \"amount\": number|null}}, "
+    "\"emphasis\": [string], \"confidence\": number, \"risk_flags\": [string]}.\n"
+    "Rules:\n"
+    "- Base output ONLY on context.note_text; treat other fields as hints, do not restate them as facts.\n"
+    "- Keep every value short; lists ≤ 6 items.\n"
+    "- If note is empty/meaningless → tone='neutral', topic='unspecified', confidence ≤ 0.2, add risk_flags ['empty_note'].\n"
+    "- If a legal claim is asserted without supporting docs mentioned → add ['unsupported_claim'].\n"
+    "- Calibrate confidence: short/ambiguous notes ≤ 0.5.\n"
+    "Do not include explanations or extra keys."
 )
 
 _NOTE_KEYS = {
@@ -691,19 +697,31 @@ def build_note_style_pack_for_account(
     bureau_data = build_bureau_data(bureaus_path)
     timestamp = _now_iso()
 
-    pack_body: dict[str, Any] = {
+    context_payload: dict[str, Any] = {
         "meta_name": meta_name,
         "primary_issue_tag": primary_issue_tag,
         "bureau_data": bureau_data,
         "note_text": note_text,
     }
 
+    note_metrics = {
+        "char_len": len(note_text),
+        "word_len": len(note_text.split()),
+    }
+
+    messages = [
+        {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
+        {"role": "user", "content": dict(context_payload)},
+    ]
+
     pack_payload = {
-        **pack_body,
-        "messages": [
-            {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
-            {"role": "user", "content": dict(pack_body)},
-        ],
+        "sid": sid,
+        "account_id": account_id,
+        "model": "gpt-4o-mini",
+        "built_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "note_metrics": note_metrics,
+        "context": context_payload,
+        "messages": messages,
     }
     _write_jsonl(account_paths.pack_file, pack_payload)
     if account_paths.result_file.exists():
@@ -738,10 +756,11 @@ def build_note_style_pack_for_account(
     _record_stage_snapshot(sid=sid, runs_root=runs_root_path, index_payload=index_payload)
 
     log.info(
-        "NOTE_STYLE_PACK_BUILT sid=%s account_id=%s pack=%s",
-        sid,
+        "✅ Pack built for %s (%s), chars=%s, words=%s",
         account_id,
-        account_paths.pack_file,
+        meta_name,
+        note_metrics["char_len"],
+        note_metrics["word_len"],
     )
 
     return {

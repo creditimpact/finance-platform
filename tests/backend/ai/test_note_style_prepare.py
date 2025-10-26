@@ -5,7 +5,11 @@ from typing import Any, Mapping
 import pytest
 
 import backend.ai.note_style as note_style_module
-from backend.ai.note_style import prepare_and_send, schedule_prepare_and_send
+from backend.ai.note_style import (
+    prepare_and_send,
+    schedule_prepare_and_send,
+    schedule_send_for_sid,
+)
 from backend.ai.note_style.tasks import note_style_send_account_task
 from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
@@ -101,12 +105,21 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
         },
     )
 
-    send_calls: list[tuple[str, str, str | None]] = []
+    send_calls: list[dict[str, Any]] = []
+
+    def _fake_send_apply_async(*, args, kwargs, task_id=None, expires=None):
+        send_calls.append(
+            {
+                "args": args,
+                "kwargs": kwargs,
+                "task_id": task_id,
+                "expires": expires,
+            }
+        )
+
     monkeypatch.setattr(
-        "backend.ai.note_style.tasks.note_style_send_account_task.delay",
-        lambda sid_arg, account_arg, *, runs_root=None: send_calls.append(
-            (sid_arg, account_arg, runs_root)
-        ),
+        "backend.ai.note_style.tasks.note_style_send_sid_task.apply_async",
+        _fake_send_apply_async,
     )
 
     result = prepare_and_send(sid, runs_root=tmp_path)
@@ -114,7 +127,10 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
     assert result["accounts_discovered"] == 1
     assert result["packs_built"] == 1
     assert result["processed_accounts"] == [account_id]
-    assert send_calls == [(sid, account_id, str(tmp_path))]
+    assert len(send_calls) == 1
+    send_call = send_calls[0]
+    assert send_call["args"] == (sid,)
+    assert send_call["kwargs"] == {"runs_root": str(tmp_path)}
 
     paths = ensure_note_style_paths(tmp_path, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -316,3 +332,56 @@ def test_schedule_prepare_and_send_dedupes_duplicate_tasks(
     )
 
     schedule_prepare_and_send("SID303", runs_root=tmp_path)
+
+
+def test_schedule_send_for_sid_invokes_celery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(note_style_module.time, "time", lambda: 100.0)
+
+    calls: list[dict[str, Any]] = []
+
+    def _fake_apply_async(*, args, kwargs, task_id=None, expires=None):
+        calls.append(
+            {
+                "args": args,
+                "kwargs": kwargs,
+                "task_id": task_id,
+                "expires": expires,
+            }
+        )
+
+    monkeypatch.setattr(
+        "backend.ai.note_style.tasks.note_style_send_sid_task.apply_async",
+        _fake_apply_async,
+    )
+
+    schedule_send_for_sid(
+        "SID404", runs_root=tmp_path, trigger="unit", account_ids=("idx-1", "")
+    )
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["args"] == ("SID404",)
+    assert call["kwargs"] == {"runs_root": str(tmp_path)}
+    assert call["task_id"] == "note-style.send:SID404:100"
+    assert call["expires"] == 300
+
+
+def test_schedule_send_for_sid_dedupes_duplicate_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(note_style_module.time, "time", lambda: 42.0)
+
+    class DuplicateTaskError(Exception):
+        pass
+
+    def _raise_duplicate(**kwargs: Any) -> None:  # type: ignore[override]
+        raise DuplicateTaskError()
+
+    monkeypatch.setattr(
+        "backend.ai.note_style.tasks.note_style_send_sid_task.apply_async",
+        _raise_duplicate,
+    )
+
+    schedule_send_for_sid("SID405")

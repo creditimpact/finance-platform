@@ -9,6 +9,7 @@ from .note_style import (
     prepare_and_send,
     schedule_prepare_and_send,
     schedule_send_for_account,
+    schedule_send_for_sid,
 )
 from .note_style_reader import get_style_metadata
 from .note_style_results import store_note_style_result
@@ -26,6 +27,7 @@ __all__ = [
     "prepare_and_send",
     "schedule_prepare_and_send",
     "schedule_send_for_account",
+    "schedule_send_for_sid",
     "store_note_style_result",
     "get_style_metadata",
 ]

@@ -139,8 +139,12 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     assert messages[0]["role"] == "system"
     assert messages[0]["content"] == build_base_system_prompt()
     assert messages[1]["role"] == "user"
-    assert messages[1]["content"]["note_text"] == pack_payload["note_text"]
-    assert messages[1]["content"]["context"] == account_payload
+    user_content = messages[1]["content"]
+    assert user_content["note_text"] == pack_payload["note_text"]
+    assert "context" not in user_content
+    assert user_content["meta"] == account_payload["meta"]
+    assert user_content["bureaus"] == account_payload["bureaus"]
+    assert user_content["tags"] == account_payload["tags"]
 
 
 def test_build_pack_requires_existing_artifacts(tmp_path: Path) -> None:

@@ -95,8 +95,15 @@ def _build_user_message_content(
     note_text: str, account_payload: Mapping[str, Any] | None
 ) -> Mapping[str, Any]:
     content: dict[str, Any] = {"note_text": note_text}
-    if account_payload:
-        content["context"] = account_payload
+    if not isinstance(account_payload, Mapping):
+        return content
+
+    for key in ("meta", "bureaus", "tags"):
+        value = account_payload.get(key)
+        if _is_empty_context_value(value):
+            continue
+        content[key] = value
+
     return content
 
 
@@ -185,6 +192,12 @@ def build_pack(
         account_id,
         pack_relative,
         bytes_written,
+    )
+
+    log.info(
+        "NOTE_STYLE_PACK_BUILT sid=%s account=%s fields=[meta,bureau,tags,note]",
+        sid,
+        account_id,
     )
 
     if mirror_debug:

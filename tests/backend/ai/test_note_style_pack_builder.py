@@ -106,25 +106,14 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     note_metrics = pack_payload["note_metrics"]
     assert note_metrics == {"char_len": 50, "word_len": 9}
 
-    account_payload = pack_payload["account_payload"]
-    assert account_payload["meta"]["heading_guess"] == "Capital One Services"
-    assert account_payload["meta"]["account_number_tail"] == "1234"
-    assert account_payload["bureaus"]["transunion"]["balance_owed"] == "$100.00"
-    assert account_payload["bureaus"]["equifax"]["payment_status"] == "Late 30 Days"
-    assert account_payload["tags"] == tags_payload
+    context_payload = pack_payload["context"]
+    assert context_payload["meta_name"] == "Capital One Services"
+    assert context_payload["primary_issue_tag"] == "late_payment"
+    assert context_payload["note_text"] == pack_payload["note_text"]
 
-    account_context = pack_payload["account_context"]
-    meta_context = account_context.get("meta", {})
-    assert meta_context.get("heading_guess") == "Capital One Services"
-    tags_context = account_context.get("tags", {})
-    assert tags_context.get("issues") == ["late_payment", "balance_dispute"]
-
-    bureaus_summary = pack_payload["bureaus_summary"]
-    assert bureaus_summary["majority_values"]["reported_creditor"] == "Capital One"
-    assert bureaus_summary["majority_values"]["balance_owed"] == "100"
-    assert "reported_creditor" in bureaus_summary["disagreements"]
-    assert bureaus_summary["per_bureau"]["transunion"]["balance_owed"] == "100"
-    assert bureaus_summary["per_bureau"]["experian"]["date_reported"] == "2024-03-10"
+    bureau_data = context_payload["bureau_data"]
+    assert bureau_data["majority_values"]["account_type"] == "Credit Card"
+    assert bureau_data["per_bureau"]["experian"]["account_status"] == "Open"
 
     pack_path = tmp_path / sid / "ai_packs" / "note_style" / "packs" / "acc_idx-007.jsonl"
     assert pack_path.is_file()
@@ -141,10 +130,7 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     assert messages[1]["role"] == "user"
     user_content = messages[1]["content"]
     assert user_content["note_text"] == pack_payload["note_text"]
-    assert "context" not in user_content
-    assert user_content["meta"] == account_payload["meta"]
-    assert user_content["bureaus"] == account_payload["bureaus"]
-    assert user_content["tags"] == account_payload["tags"]
+    assert user_content == context_payload
 
 
 def test_build_pack_requires_existing_artifacts(tmp_path: Path) -> None:

@@ -11,7 +11,7 @@ from collections import Counter
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from backend.ai.note_style.prompt import build_base_system_prompt
 from backend.core.ai.paths import (
@@ -63,8 +63,21 @@ _DATE_FIELDS = {
 }
 
 _BUREAU_PRIORITY = ("transunion", "experian", "equifax")
-
-_BASE_SYSTEM_MESSAGE = build_base_system_prompt()
+_BUREAU_KEYS = ("transunion", "experian", "equifax")
+_BUREAU_CONTEXT_FIELDS = (
+    "account_type",
+    "account_status",
+    "payment_status",
+    "creditor_type",
+    "date_opened",
+    "date_reported",
+    "date_of_last_activity",
+    "closed_date",
+    "last_verified",
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+)
 
 _CONTEXT_NOISE_KEYS = (
     "hash",
@@ -77,6 +90,7 @@ _CONTEXT_NOISE_KEYS = (
     "checksum",
 )
 
+_BASE_SYSTEM_MESSAGE = build_base_system_prompt()
 
 def _build_system_message(
     account_context: Mapping[str, Any] | None,
@@ -91,20 +105,16 @@ class PackBuilderError(RuntimeError):
     """Raised when a note_style pack cannot be constructed."""
 
 
-def _build_user_message_content(
-    note_text: str, account_payload: Mapping[str, Any] | None
-) -> Mapping[str, Any]:
-    content: dict[str, Any] = {"note_text": note_text}
-    if not isinstance(account_payload, Mapping):
-        return content
+def _build_user_message_content(context_payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(context_payload, Mapping):
+        return {}
 
-    for key in ("meta", "bureaus", "tags"):
-        value = account_payload.get(key)
-        if _is_empty_context_value(value):
-            continue
-        content[key] = value
-
-    return content
+    return {
+        "meta_name": context_payload.get("meta_name"),
+        "primary_issue_tag": context_payload.get("primary_issue_tag"),
+        "bureau_data": context_payload.get("bureau_data"),
+        "note_text": context_payload.get("note_text"),
+    }
 
 
 def build_pack(
@@ -152,13 +162,24 @@ def build_pack(
         meta_payload, bureaus_payload, tags_payload, bureaus_summary
     )
 
+    meta_name = _extract_meta_name(meta_payload, account_id)
+    bureau_data = _extract_bureau_data(bureaus_payload)
+    primary_issue_tag = _extract_primary_issue_tag(tags_payload)
+
+    context_payload = {
+        "meta_name": meta_name,
+        "primary_issue_tag": primary_issue_tag,
+        "bureau_data": bureau_data,
+        "note_text": note_text,
+    }
+
     note_metrics = {
         "char_len": len(note_text),
         "word_len": len(note_text.split()),
     }
 
     system_message = _build_system_message(account_context, bureaus_summary)
-    user_message = _build_user_message_content(note_text, account_payload)
+    user_message = _build_user_message_content(context_payload)
 
     pack_payload = {
         "sid": sid,
@@ -169,6 +190,7 @@ def build_pack(
         "account_payload": account_payload,
         "account_context": account_context,
         "bureaus_summary": bureaus_summary,
+        "context": context_payload,
         "messages": [
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message},
@@ -568,6 +590,112 @@ def _extract_account_tail(meta: Mapping[str, Any], bureaus: Mapping[str, Any]) -
                 digits = re.sub(r"\D", "", candidate)
                 return digits[-4:] if digits else candidate
     return ""
+
+
+def _clean_display_text(value: Any) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _extract_meta_name(meta_payload: Mapping[str, Any] | None, account_id: str) -> str:
+    if isinstance(meta_payload, Mapping):
+        for key in ("heading_guess", "name"):
+            candidate = _clean_display_text(meta_payload.get(key))
+            if candidate:
+                return candidate
+    fallback = _clean_display_text(account_id)
+    return fallback or str(account_id)
+
+
+def _filter_bureau_fields(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    filtered: dict[str, Any] = {}
+    for field in _BUREAU_CONTEXT_FIELDS:
+        value = payload.get(field)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                continue
+            filtered[field] = text
+        else:
+            filtered[field] = value
+    return filtered
+
+
+def _build_majority_values(bureaus_payload: Mapping[str, Any]) -> dict[str, Any]:
+    majority_payload = (
+        bureaus_payload.get("majority_values")
+        if isinstance(bureaus_payload, Mapping)
+        else None
+    )
+    majority_values = _filter_bureau_fields(majority_payload)
+    if majority_values:
+        return majority_values
+
+    if isinstance(bureaus_payload, Mapping):
+        for bureau_key in _BUREAU_KEYS:
+            bureau_values = _filter_bureau_fields(bureaus_payload.get(bureau_key))
+            if bureau_values:
+                return bureau_values
+    return {}
+
+
+def _extract_bureau_data(bureaus_payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    if not isinstance(bureaus_payload, Mapping):
+        return {}
+
+    bureau_data: dict[str, Any] = {}
+    majority_values = _build_majority_values(bureaus_payload)
+    if majority_values:
+        bureau_data["majority_values"] = majority_values
+
+    per_bureau: dict[str, Any] = {}
+    for bureau_key in _BUREAU_KEYS:
+        filtered = _filter_bureau_fields(bureaus_payload.get(bureau_key))
+        if filtered:
+            per_bureau[bureau_key] = filtered
+    if per_bureau:
+        bureau_data["per_bureau"] = per_bureau
+
+    return bureau_data
+
+
+def _issue_type_from_entry(entry: Any) -> str | None:
+    if not isinstance(entry, Mapping):
+        return None
+    if entry.get("kind") != "issue":
+        return None
+    issue_type = _clean_display_text(entry.get("type"))
+    return issue_type
+
+
+def _extract_primary_issue_tag(tags_payload: Any) -> str | None:
+    if isinstance(tags_payload, Mapping):
+        issue_type = _issue_type_from_entry(tags_payload)
+        if issue_type:
+            return issue_type
+        entries = tags_payload.get("tags")
+        if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes, bytearray)):
+            for entry in entries:
+                issue_type = _issue_type_from_entry(entry)
+                if issue_type:
+                    return issue_type
+        return None
+
+    if isinstance(tags_payload, Iterable) and not isinstance(tags_payload, (str, bytes, bytearray)):
+        for entry in tags_payload:
+            issue_type = _issue_type_from_entry(entry)
+            if issue_type:
+                return issue_type
+    return None
 
 
 def _locate_account_dir(accounts_dir: Path, account_id: str) -> Path | None:

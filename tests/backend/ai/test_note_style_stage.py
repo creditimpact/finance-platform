@@ -238,7 +238,8 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     paths = ensure_note_style_paths(tmp_path, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
 
-    pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
+    pack_line = account_paths.pack_file.read_text(encoding="utf-8")
+    pack_payload = json.loads(pack_line)
 
     assert not account_paths.result_file.exists()
     assert not account_paths.debug_file.exists()
@@ -253,6 +254,21 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert pack_payload["meta_name"] == "Capital One"
     assert pack_payload["note_text"].startswith("Please help")
     bureau_data = pack_payload["bureau_data"]
+    expected_bureau_fields = {
+        "account_type",
+        "account_status",
+        "payment_status",
+        "creditor_type",
+        "date_opened",
+        "date_reported",
+        "date_of_last_activity",
+        "closed_date",
+        "last_verified",
+        "balance_owed",
+        "high_balance",
+        "past_due_amount",
+    }
+    assert set(bureau_data.keys()) == expected_bureau_fields
     assert bureau_data["account_type"] == "Credit Card"
     assert bureau_data["account_status"] == "Closed"
     assert pack_payload["primary_issue_tag"] == "late_payment"
@@ -267,6 +283,13 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         "bureau_data": bureau_data,
         "note_text": pack_payload["note_text"],
     }
+
+    # The pack line should not contain deep context artifacts.
+    assert '"bureaus"' not in pack_line
+    assert '"tags"' not in pack_line
+    assert '"experian"' not in pack_line
+    assert '"transunion"' not in pack_line
+    assert '"equifax"' not in pack_line
 
 
 def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:

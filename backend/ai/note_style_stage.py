@@ -616,7 +616,26 @@ def build_note_style_pack_for_account(
     bureau_data = _extract_bureau_data(bureaus_payload)
     primary_issue_tag = _extract_primary_issue_tag(tags_payload)
 
-    pack_context: dict[str, Any] = {}
+    sanitized_meta = _sanitize_context_payload(meta_payload)
+    if not isinstance(sanitized_meta, Mapping):
+        sanitized_meta = {}
+
+    sanitized_bureaus = _sanitize_context_payload(bureaus_payload)
+    if not isinstance(sanitized_bureaus, Mapping):
+        sanitized_bureaus = {}
+
+    sanitized_tags = _sanitize_context_payload(tags_payload)
+    if not (
+        isinstance(sanitized_tags, Sequence)
+        and not isinstance(sanitized_tags, (str, bytes, bytearray))
+    ):
+        sanitized_tags = []
+
+    pack_context: dict[str, Any] = {
+        "meta": sanitized_meta,
+        "bureaus": sanitized_bureaus,
+        "tags": sanitized_tags,
+    }
     if meta_name:
         pack_context["meta_name"] = meta_name
     if primary_issue_tag:
@@ -694,6 +713,74 @@ def build_note_style_pack_for_account(
         "status": "completed",
         "packs_total": index_payload.get("totals", {}).get("packs_total", 1),
     }
+
+
+_CONTEXT_NOISE_KEYS = (
+    "hash",
+    "salt",
+    "debug",
+    "raw",
+    "blob",
+    "token",
+    "signature",
+    "checksum",
+)
+
+
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return unicodedata.normalize("NFKC", value).strip()
+    return unicodedata.normalize("NFKC", str(value)).strip()
+
+
+def _is_noise_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(fragment in lowered for fragment in _CONTEXT_NOISE_KEYS)
+
+
+def _is_empty_context_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, bytes, bytearray)):
+        return len(value) == 0
+    if isinstance(value, Mapping):
+        return all(_is_empty_context_value(v) for v in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return len(value) == 0 or all(_is_empty_context_value(v) for v in value)
+    return False
+
+
+def _sanitize_context_payload(value: Any, *, depth: int = 0) -> Any:
+    if depth > 6:
+        return None
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        sanitized: dict[str, Any] = {}
+        for key, raw in value.items():
+            if not isinstance(key, str):
+                continue
+            if _is_noise_key(key):
+                continue
+            cleaned = _sanitize_context_payload(raw, depth=depth + 1)
+            if _is_empty_context_value(cleaned):
+                continue
+            sanitized[key] = cleaned
+        return sanitized
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        sanitized_seq: list[Any] = []
+        for entry in value:
+            cleaned = _sanitize_context_payload(entry, depth=depth + 1)
+            if _is_empty_context_value(cleaned):
+                continue
+            sanitized_seq.append(cleaned)
+        return sanitized_seq
+    normalized = _normalize_text(value)
+    return normalized if normalized else None
 
 
 def schedule_note_style_refresh(

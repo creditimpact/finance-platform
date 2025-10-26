@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -218,8 +219,91 @@ def _resolve_response_path(sid: str, account_id: str, runs_root: Path) -> Path:
     return (runs_root / sid / "frontend" / "review" / "responses" / f"{account_id}.result.json").resolve()
 
 
-def _resolve_account_dir(sid: str, account_id: str, runs_root: Path) -> Path:
-    return (runs_root / sid / "cases" / "accounts" / account_id).resolve()
+def _coerce_path(value: Any) -> Path | None:
+    if value is None:
+        return None
+    try:
+        raw = os.fspath(value)
+    except TypeError:
+        return None
+
+    text = str(raw).strip()
+    if not text:
+        return None
+
+    try:
+        return Path(text).resolve()
+    except OSError:
+        return Path(text)
+
+
+def _lookup_manifest_account_entry(
+    manifest_payload: Any, account_id: str
+) -> Mapping[str, Any] | None:
+    if not isinstance(manifest_payload, Mapping):
+        return None
+
+    artifacts = manifest_payload.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        return None
+
+    cases_section = artifacts.get("cases")
+    if not isinstance(cases_section, Mapping):
+        return None
+
+    accounts_section = cases_section.get("accounts")
+    if not isinstance(accounts_section, Mapping):
+        return None
+
+    normalized = str(account_id).strip()
+    raw_candidates: list[str] = []
+    if normalized:
+        raw_candidates.append(normalized)
+        raw_candidates.append(normalized.lower())
+
+    for piece in re.findall(r"(\d+)", normalized):
+        trimmed = piece.lstrip("0") or "0"
+        raw_candidates.append(trimmed)
+        raw_candidates.append(trimmed.lower())
+
+    candidates = [candidate for candidate in dict.fromkeys(raw_candidates) if candidate]
+
+    for candidate in candidates:
+        entry = accounts_section.get(candidate)
+        if isinstance(entry, Mapping):
+            return entry
+
+        for key, value in accounts_section.items():
+            if isinstance(key, str) and key.lower() == candidate.lower() and isinstance(value, Mapping):
+                return value
+
+    return None
+
+
+def _resolve_account_context_paths(
+    sid: str, account_id: str, runs_root: Path
+) -> dict[str, Path]:
+    run_dir = runs_root / sid
+    manifest_payload = _load_json_data(run_dir / "manifest.json")
+    account_entry = _lookup_manifest_account_entry(manifest_payload, account_id)
+
+    resolved: dict[str, Path] = {}
+    if isinstance(account_entry, Mapping):
+        for key in ("dir", "meta", "bureaus", "tags"):
+            candidate = _coerce_path(account_entry.get(key))
+            if candidate is not None:
+                resolved[key] = candidate
+
+    account_dir = resolved.get("dir")
+    if account_dir is None:
+        account_dir = (run_dir / "cases" / "accounts" / account_id).resolve()
+        resolved["dir"] = account_dir
+
+    for key, filename in (("meta", "meta.json"), ("bureaus", "bureaus.json"), ("tags", "tags.json")):
+        if key not in resolved:
+            resolved[key] = (account_dir / filename).resolve()
+
+    return resolved
 
 
 def _relative_to_base(path: Path, base: Path) -> str:
@@ -372,12 +456,18 @@ def build_note_style_pack_for_account(
         )
         return {"status": "skipped", "reason": "no_note"}
 
-    account_dir = _resolve_account_dir(sid, account_id, runs_root_path)
-    meta_candidate = _load_json_data(account_dir / "meta.json")
+    context_paths = _resolve_account_context_paths(sid, account_id, runs_root_path)
+    meta_path = context_paths.get("meta")
+    bureaus_path = context_paths.get("bureaus")
+    tags_path = context_paths.get("tags")
+
+    meta_candidate = _load_json_data(meta_path) if isinstance(meta_path, Path) else None
     meta_payload = meta_candidate if isinstance(meta_candidate, Mapping) else None
-    bureaus_candidate = _load_json_data(account_dir / "bureaus.json")
+
+    bureaus_candidate = _load_json_data(bureaus_path) if isinstance(bureaus_path, Path) else None
     bureaus_payload = bureaus_candidate if isinstance(bureaus_candidate, Mapping) else None
-    tags_payload = _load_json_data(account_dir / "tags.json")
+
+    tags_payload = _load_json_data(tags_path) if isinstance(tags_path, Path) else None
 
     timestamp = _now_iso()
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)

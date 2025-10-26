@@ -13,7 +13,6 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from backend.ai.note_style.prompt import build_base_system_prompt
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     ensure_note_style_account_paths,
@@ -90,7 +89,14 @@ _CONTEXT_NOISE_KEYS = (
     "checksum",
 )
 
-_BASE_SYSTEM_MESSAGE = build_base_system_prompt()
+_BASE_SYSTEM_MESSAGE = (
+    "You analyse customer notes and respond with structured JSON."
+    " Return exactly one JSON object using this schema: {\"tone\": string,"
+    " \"context_hints\": {\"timeframe\": {\"month\": string|null, \"relative\": "
+    "string|null}, \"topic\": string, \"entities\": {\"creditor\": string|null,"
+    " \"amount\": number|null}}, \"emphasis\": [string], \"confidence\": number,"
+    " \"risk_flags\": [string]}. Never include explanations or additional keys."
+)
 
 def _build_system_message(
     account_context: Mapping[str, Any] | None,

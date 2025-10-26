@@ -8,7 +8,15 @@ from pathlib import Path
 import pytest
 
 from backend.ai.note_style.pack_builder import PackBuilderError, build_pack
-from backend.ai.note_style.prompt import build_base_system_prompt
+
+
+EXPECTED_SYSTEM_PROMPT = (
+    "You analyse customer notes and respond with structured JSON. Return exactly one JSON "
+    "object using this schema: {\"tone\": string, \"context_hints\": {\"timeframe\": {\"month\": "
+    "string|null, \"relative\": string|null}, \"topic\": string, \"entities\": {\"creditor\": "
+    "string|null, \"amount\": number|null}}, \"emphasis\": [string], \"confidence\": number, "
+    "\"risk_flags\": [string]}. Never include explanations or additional keys."
+)
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -127,7 +135,7 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
 
     messages = pack_payload["messages"]
     assert messages[0]["role"] == "system"
-    assert messages[0]["content"] == build_base_system_prompt()
+    assert messages[0]["content"] == EXPECTED_SYSTEM_PROMPT
     assert messages[1]["role"] == "user"
     user_content = messages[1]["content"]
     assert user_content == {

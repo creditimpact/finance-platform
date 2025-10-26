@@ -221,6 +221,76 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert context_snapshot["bureaus"]["experian"]["account_type"] == "Credit Card"
 
 
+def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:
+    sid = "SIDMAN"
+    account_id = "idx-007"
+    run_dir = tmp_path / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    note = "Customer is disputing the reported balance."
+
+    account_dir = run_dir / "cases" / "accounts" / "7"
+    account_dir.mkdir(parents=True, exist_ok=True)
+
+    meta_payload = {"heading_guess": "Sample Creditor", "account_name": "Sample Account"}
+    bureaus_payload = {
+        "transunion": {
+            "reported_creditor": "Sample Creditor",
+            "account_type": "Credit Card",
+        }
+    }
+    tags_payload = [{"kind": "issue", "type": "balance_dispute"}]
+
+    (account_dir / "meta.json").write_text(
+        json.dumps(meta_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps(tags_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    manifest_payload = {
+        "sid": sid,
+        "artifacts": {
+            "cases": {
+                "accounts": {
+                    account_id: {
+                        "dir": str(account_dir),
+                        "meta": str(account_dir / "meta.json"),
+                        "bureaus": str(account_dir / "bureaus.json"),
+                        "tags": str(account_dir / "tags.json"),
+                    }
+                }
+            }
+        },
+    }
+
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {"answers": {"explanation": note}},
+    )
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=tmp_path)
+
+    assert result["status"] == "completed"
+
+    paths = ensure_note_style_paths(tmp_path, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
+
+    context_payload = pack_payload["context"]
+    assert context_payload["meta"]["account_name"] == "Sample Account"
+    assert context_payload["bureaus"]["transunion"]["reported_creditor"] == "Sample Creditor"
+    assert context_payload["tags"][0]["type"] == "balance_dispute"
+
+
 def test_note_style_stage_handles_missing_context(tmp_path: Path) -> None:
     sid = "SID002"
     account_id = "idx-002"

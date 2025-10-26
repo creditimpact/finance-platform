@@ -47,7 +47,7 @@ def test_ensure_note_style_paths_read_only(tmp_path: Path) -> None:
 
 def test_note_style_filename_sanitizes_account_id() -> None:
     account_id = " idx/Account 42 "
-    assert note_style_pack_filename(account_id) == "style_acc_idx_Account_42.jsonl"
+    assert note_style_pack_filename(account_id) == "acc_idx_Account_42.jsonl"
     assert (
         note_style_result_filename(account_id)
         == "acc_idx_Account_42.result.jsonl"
@@ -59,7 +59,7 @@ def test_note_style_account_paths_match_expected(tmp_path: Path) -> None:
     account_paths = ensure_note_style_account_paths(paths, "idx-001", create=True)
 
     assert isinstance(account_paths, NoteStyleAccountPaths)
-    expected_pack = paths.packs_dir / "style_acc_idx-001.jsonl"
+    expected_pack = paths.packs_dir / "acc_idx-001.jsonl"
     expected_result = paths.results_dir / "acc_idx-001.result.jsonl"
     expected_debug = paths.debug_dir / "idx-001.context.json"
     expected_raw = paths.results_raw_dir / "acc_idx-001.raw.txt"
@@ -76,7 +76,7 @@ def test_note_style_account_paths_match_expected(tmp_path: Path) -> None:
 
 
 def test_note_style_filename_defaults_to_account_when_empty() -> None:
-    assert note_style_pack_filename("") == "style_acc_account.jsonl"
+    assert note_style_pack_filename("") == "acc_account.jsonl"
     assert note_style_result_filename(None) == "acc_account.result.jsonl"
 
 
@@ -85,5 +85,5 @@ def test_normalize_note_style_account_id_matches_filename_normalization() -> Non
     normalized = normalize_note_style_account_id(account_id)
 
     assert normalized == "Account_ID_007"
-    assert note_style_pack_filename(account_id) == f"style_acc_{normalized}.jsonl"
+    assert note_style_pack_filename(account_id) == f"acc_{normalized}.jsonl"
     assert note_style_result_filename(account_id) == f"acc_{normalized}.result.jsonl"

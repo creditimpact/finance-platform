@@ -322,7 +322,7 @@ def send_note_style_packs_for_sid(
     paths = ensure_note_style_paths(runs_root_path, sid, create=False)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
-    glob_pattern = os.getenv("NOTE_STYLE_PACK_GLOB") or "style_*.jsonl"
+    glob_pattern = os.getenv("NOTE_STYLE_PACK_GLOB") or "*acc_*.jsonl"
     pack_candidates = sorted(packs_dir.glob(glob_pattern))
 
     if not pack_candidates:

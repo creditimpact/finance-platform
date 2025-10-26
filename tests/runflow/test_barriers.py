@@ -879,7 +879,7 @@ def test_style_barrier_gates_all_ready(tmp_path, monkeypatch):
                     {
                         "account_id": account_id,
                         "status": "built",
-                        "pack": "packs/style_acc_idx-001.jsonl",
+                        "pack": "packs/acc_idx-001.jsonl",
                     }
                 ],
             },
@@ -909,7 +909,7 @@ def test_style_barrier_gates_all_ready(tmp_path, monkeypatch):
                     {
                         "account_id": account_id,
                         "status": "completed",
-                        "pack": "packs/style_acc_idx-001.jsonl",
+                        "pack": "packs/acc_idx-001.jsonl",
                         "result_path": "results/acc_idx-001.result.jsonl",
                     }
                 ],

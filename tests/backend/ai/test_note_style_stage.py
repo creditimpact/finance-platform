@@ -54,7 +54,7 @@ def test_discover_note_style_accounts_returns_sorted_entries(tmp_path: Path) -> 
     account_entry = results[0]
     assert isinstance(account_entry, NoteStyleResponseAccount)
     assert account_entry.normalized_account_id == "Account_5__"
-    assert account_entry.pack_filename == "style_acc_Account_5__.jsonl"
+    assert account_entry.pack_filename == "acc_Account_5__.jsonl"
     assert account_entry.result_filename.endswith(".result.jsonl")
     assert account_entry.response_path == second.resolve()
     assert account_entry.response_relative.as_posix() == (
@@ -99,6 +99,7 @@ def test_note_style_stage_skips_missing_response(tmp_path: Path) -> None:
 
     assert not account_paths.pack_file.exists()
     assert not account_paths.result_file.exists()
+    assert not account_paths.debug_file.exists()
 
 
 def test_note_style_stage_skips_when_note_missing(tmp_path: Path) -> None:
@@ -149,9 +150,7 @@ def test_note_style_stage_overwrites_existing_result(tmp_path: Path) -> None:
 
     assert outcome["status"] == "completed"
 
-    updated = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
-    assert "analysis" not in updated
-    assert updated["note_metrics"]["char_len"] == len("Existing note")
+    assert not account_paths.result_file.exists()
 
 
 def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
@@ -196,7 +195,9 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
 
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
-    result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+
+    assert not account_paths.result_file.exists()
+    assert not account_paths.debug_file.exists()
 
     assert pack_payload["sid"] == sid
     assert pack_payload["account_id"] == account_id
@@ -240,7 +241,9 @@ def test_note_style_stage_handles_missing_context(tmp_path: Path) -> None:
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
 
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
-    result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+
+    assert not account_paths.result_file.exists()
+    assert not account_paths.debug_file.exists()
 
     context_payload = pack_payload["context"]
     assert context_payload["meta"] == {}
@@ -251,14 +254,8 @@ def test_note_style_stage_handles_missing_context(tmp_path: Path) -> None:
     assert user_context == context_payload
 
     # Debug context snapshots should never leak into the pack payload that will be
-    # forwarded to the AI model or the initial result stub.
+    # forwarded to the AI model.
     assert "debug" not in pack_payload
-    assert "debug" not in result_payload
-
-    debug_snapshot = json.loads(account_paths.debug_file.read_text(encoding="utf-8"))
-    assert debug_snapshot["meta"] == {}
-    assert debug_snapshot["bureaus"] == {}
-    assert debug_snapshot["tags"] == []
 
 
 def test_prepare_and_send_without_responses_sets_empty_ok(tmp_path: Path) -> None:

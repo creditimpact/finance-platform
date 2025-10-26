@@ -352,6 +352,7 @@ def _load_note_style_index_statuses(base_dir: Path) -> dict[str, str]:
 def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
     """Return aggregate counters for note_style stage artifacts."""
 
+    packs_dir = base_dir / "ai_packs" / "note_style" / "packs"
     results_dir = base_dir / "ai_packs" / "note_style" / "results"
     try:
         entries = list(results_dir.iterdir())
@@ -365,6 +366,7 @@ def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
     total = 0
     completed = 0
     failed = 0
+    accounted: set[str] = set()
 
     for path in entries:
         if not path.is_file():
@@ -376,6 +378,8 @@ def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
             continue
 
         account_key = _normalize_note_style_result_name(path.name)
+        if account_key:
+            accounted.add(account_key)
         normalized_status = ""
         if account_key:
             normalized_status = _normalize_entry_text(
@@ -426,6 +430,36 @@ def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
 
         if "result" in normalized_name:
             total += 1
+
+    try:
+        pack_entries = list(packs_dir.iterdir())
+    except FileNotFoundError:
+        pack_entries = []
+    except NotADirectoryError:
+        pack_entries = []
+
+    for pack_path in pack_entries:
+        if not pack_path.is_file():
+            continue
+        account_key = _normalize_note_style_result_name(pack_path.name)
+        if not account_key or account_key in accounted:
+            continue
+        normalized_status = _normalize_entry_text(index_statuses.get(account_key, "")).lower()
+        if normalized_status in {"skipped", "skipped_low_signal"}:
+            accounted.add(account_key)
+            continue
+        if normalized_status in {"failed", "error"}:
+            failed += 1
+            total += 1
+            accounted.add(account_key)
+            continue
+        if normalized_status in {"completed", "success"}:
+            completed += 1
+            total += 1
+            accounted.add(account_key)
+            continue
+        accounted.add(account_key)
+        total += 1
 
     if total == 0:
         return {"packs_total": 0, "packs_completed": 0, "packs_failed": 0}

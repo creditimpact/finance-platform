@@ -126,7 +126,7 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     assert bureaus_summary["per_bureau"]["transunion"]["balance_owed"] == "100"
     assert bureaus_summary["per_bureau"]["experian"]["date_reported"] == "2024-03-10"
 
-    pack_path = tmp_path / sid / "ai_packs" / "note_style" / "packs" / "style_acc_idx-007.jsonl"
+    pack_path = tmp_path / sid / "ai_packs" / "note_style" / "packs" / "acc_idx-007.jsonl"
     assert pack_path.is_file()
     lines = pack_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1

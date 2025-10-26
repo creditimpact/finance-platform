@@ -58,7 +58,8 @@ log = logging.getLogger(__name__)
 _PACKS_ENABLED_ENV = "VALIDATION_PACKS_ENABLED"
 _PACKS_PER_FIELD_ENV = "VALIDATION_PACKS_PER_FIELD"
 _PACK_MAX_SIZE_ENV = "VALIDATION_PACK_MAX_SIZE_KB"
-_AUTO_SEND_ENV_VARS: tuple[str, ...] = (
+_AUTOSEND_ENABLED_ENV = "VALIDATION_AUTOSEND_ENABLED"
+_LEGACY_AUTOSEND_ENV_VARS: tuple[str, ...] = (
     "ENABLE_VALIDATION_SENDER",
     "AUTO_VALIDATION_SEND",
     "VALIDATION_SEND_ON_BUILD",
@@ -1662,9 +1663,28 @@ def _packs_per_field_enabled() -> bool:
 
 
 def _auto_send_enabled() -> bool:
-    """Return ``True`` when every auto-send toggle is explicitly enabled."""
+    """Return ``True`` when validation auto-send is enabled."""
 
-    return all(_env_flag(name, False) for name in _AUTO_SEND_ENV_VARS)
+    explicit = os.getenv(_AUTOSEND_ENABLED_ENV)
+    if explicit is not None:
+        return _env_flag(_AUTOSEND_ENABLED_ENV, True)
+
+    legacy_seen = False
+    legacy_enabled: list[bool] = []
+    for name in _LEGACY_AUTOSEND_ENV_VARS:
+        raw = os.getenv(name)
+        if raw is None:
+            continue
+        legacy_seen = True
+        flag_enabled = _env_flag(name, False)
+        if not flag_enabled:
+            return False
+        legacy_enabled.append(flag_enabled)
+
+    if legacy_seen:
+        return any(legacy_enabled)
+
+    return True
 
 
 def _pack_max_size_kb() -> float | None:

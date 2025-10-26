@@ -77,12 +77,9 @@ $env:OPENAI_API_KEY    = "<redacted>"
 $env:OPENAI_PROJECT_ID = "<proj>"
 $env:VALIDATION_MODEL  = "gpt-4o-mini"
 
-# enable sender + autosend
-$env:ENABLE_VALIDATION_SENDER = "1"
-$env:VALIDATION_SENDER_ENABLED = "1"
-$env:VALIDATION_STAGE_AUTORUN  = "1"
-$env:AUTO_VALIDATION_SEND      = "1"
-$env:VALIDATION_SEND_ON_BUILD  = "1"
+# enable sender + autosend (autosend is on by default; set to "0" to disable)
+$env:ENABLE_VALIDATION_SENDER   = "1"
+$env:VALIDATION_AUTOSEND_ENABLED = "1"
 
 # manifest/index paths (relative to run root)
 $env:VALIDATION_USE_MANIFEST_PATHS = "1"
@@ -188,5 +185,5 @@ RESULTS DIR: ok
 2. `python -m backend.validation.manifest --sid <SID> --check` should print the tabular summary and `All <N> packs present` when every file exists.
 3. `python -m backend.validation.send --sid <SID>` must write new result files under the manifest-defined `results/` directory.
 4. Remove or rename a pack and re-run `--check`; it should clearly report `MISSING` and exit with a non-zero status.
-5. Run your usual pipeline command with `$env:ENABLE_VALIDATION_SENDER = "1"`, `$env:AUTO_VALIDATION_SEND = "1"`, **and** `$env:VALIDATION_SEND_ON_BUILD = "1"` (or set the variables in your orchestrator). The builder generates packs, the manifest stays relative, and the sender runs automatically using only the manifest for resolution.
+5. Run your usual pipeline command with `$env:ENABLE_VALIDATION_SENDER = "1"` (or set the variable in your orchestrator). Auto-send now runs by default; set `$env:VALIDATION_AUTOSEND_ENABLED = "0"` if you need to pause sending. The builder generates packs, the manifest stays relative, and the sender runs automatically using only the manifest for resolution.
 

@@ -74,16 +74,26 @@ def _extract_note_metrics(
         if isinstance(metrics_payload, Mapping):
             candidate = metrics_payload
 
-    if not isinstance(candidate, Mapping):
-        raise ValueError("note_metrics with char_len and word_len is required")
+    if isinstance(candidate, Mapping):
+        char_len = _coerce_int(candidate.get("char_len"))
+        word_len = _coerce_int(candidate.get("word_len"))
+        if char_len is not None and word_len is not None:
+            return {"char_len": int(char_len), "word_len": int(word_len)}
 
-    char_len = _coerce_int(candidate.get("char_len"))
-    word_len = _coerce_int(candidate.get("word_len"))
+    note_text: str | None = None
+    if isinstance(pack_payload, Mapping):
+        context_candidate = pack_payload.get("context")
+        if isinstance(context_candidate, Mapping):
+            text_candidate = context_candidate.get("note_text")
+            if isinstance(text_candidate, str) and text_candidate.strip():
+                note_text = text_candidate
 
-    if char_len is None or word_len is None:
-        raise ValueError("note_metrics must include numeric char_len and word_len")
+    if note_text is not None:
+        char_len = len(note_text)
+        word_len = len(note_text.split())
+        return {"char_len": char_len, "word_len": word_len}
 
-    return {"char_len": int(char_len), "word_len": int(word_len)}
+    raise ValueError("note_metrics with char_len and word_len is required")
 
 
 def _ensure_account_paths(

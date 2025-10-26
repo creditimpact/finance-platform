@@ -145,7 +145,10 @@ def test_write_result_writes_minimal_payload(tmp_path: Path) -> None:
     assert analysis["risk_flags"] == []
 
     metrics = stored_payload["note_metrics"]
-    assert metrics == pack_payload["note_metrics"]
+    assert metrics == {
+        "char_len": len(pack_payload["context"]["note_text"]),
+        "word_len": len(pack_payload["context"]["note_text"].split()),
+    }
 
     # Ensure we did not leak contextual payloads into the result file.
     assert "account_context" not in stored_payload

@@ -47,6 +47,39 @@ def test_runflow_note_style_build_command(tmp_path: Path, capsys: pytest.Capture
         },
     )
 
+    account_dir = tmp_path / sid / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+    (account_dir / "meta.json").write_text(
+        json.dumps({"heading_guess": "Sample Account"}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps({"transunion": {"account_status": "Open", "account_type": "Loan"}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps([{"kind": "issue", "type": "verification"}], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    manifest_payload = {
+        "artifacts": {
+            "cases": {
+                "accounts": {
+                    account_id: {
+                        "dir": f"cases/accounts/{account_id}",
+                        "meta": "meta.json",
+                        "bureaus": "bureaus.json",
+                        "tags": "tags.json",
+                    }
+                }
+            }
+        }
+    }
+    (tmp_path / sid / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
     exit_code = runflow_cli.main(
         ["note-style", "build", "--sid", sid, "--runs-root", str(tmp_path)]
     )
@@ -78,6 +111,39 @@ def test_runflow_note_style_refresh_command(tmp_path: Path, capsys: pytest.Captu
             "account_id": account_id,
             "answers": {"explanation": "The bank already fixed this."},
         },
+    )
+
+    account_dir = tmp_path / sid / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+    (account_dir / "meta.json").write_text(
+        json.dumps({"heading_guess": "Refresh Account"}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps({"experian": {"account_status": "Closed", "account_type": "Auto"}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps([{"kind": "issue", "type": "follow_up"}], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    manifest_payload = {
+        "artifacts": {
+            "cases": {
+                "accounts": {
+                    account_id: {
+                        "dir": f"cases/accounts/{account_id}",
+                        "meta": "meta.json",
+                        "bureaus": "bureaus.json",
+                        "tags": "tags.json",
+                    }
+                }
+            }
+        }
+    }
+    (tmp_path / sid / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
     build_exit = runflow_cli.main(

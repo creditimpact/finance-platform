@@ -100,20 +100,20 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
 
     assert pack_payload["sid"] == sid
     assert pack_payload["account_id"] == account_id
-    assert pack_payload["channel"] == "frontend_review"
-    assert pack_payload["note_text"] == "Customer says the balance is wrong and wants help."
-
-    note_metrics = pack_payload["note_metrics"]
-    assert note_metrics == {"char_len": 50, "word_len": 9}
+    assert pack_payload["model"] == "gpt-4o-mini"
+    assert pack_payload["built_at"].endswith("Z")
+    assert "note_metrics" not in pack_payload
+    assert "note_text" not in pack_payload
+    assert "channel" not in pack_payload
 
     context_payload = pack_payload["context"]
     assert context_payload["meta_name"] == "Capital One Services"
     assert context_payload["primary_issue_tag"] == "late_payment"
-    assert context_payload["note_text"] == pack_payload["note_text"]
+    assert context_payload["note_text"] == "Customer says the balance is wrong and wants help."
 
     bureau_data = context_payload["bureau_data"]
-    assert bureau_data["majority_values"]["account_type"] == "Credit Card"
-    assert bureau_data["per_bureau"]["experian"]["account_status"] == "Open"
+    assert bureau_data["account_type"] == "Credit Card"
+    assert bureau_data["account_status"] == "Open"
 
     pack_path = tmp_path / sid / "ai_packs" / "note_style" / "packs" / "acc_idx-007.jsonl"
     assert pack_path.is_file()
@@ -129,7 +129,6 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     assert messages[0]["content"] == build_base_system_prompt()
     assert messages[1]["role"] == "user"
     user_content = messages[1]["content"]
-    assert user_content["note_text"] == pack_payload["note_text"]
     assert user_content == context_payload
 
 

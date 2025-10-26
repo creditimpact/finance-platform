@@ -92,9 +92,11 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     pack_payload = json.loads(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
     )
-    context = pack_payload["context"]
-    note_text = context["note_text"]
-    baseline_metrics = pack_payload["note_metrics"]
+    note_text = pack_payload["note_text"]
+    baseline_metrics = {
+        "char_len": len(note_text),
+        "word_len": len(note_text.split()),
+    }
 
     result_payload = {
         "sid": sid,
@@ -164,8 +166,14 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     ]
     assert len(stored_lines) == 1
     stored_payload = json.loads(stored_lines[0])
-    assert set(stored_payload.keys()) == {"sid", "account_id", "analysis", "note_metrics"}
-    assert "evaluated_at" not in stored_payload
+    assert set(stored_payload.keys()) == {
+        "sid",
+        "account_id",
+        "evaluated_at",
+        "analysis",
+        "note_metrics",
+    }
+    assert stored_payload["evaluated_at"] == completed_at
     assert stored_payload["note_metrics"] == baseline_metrics
     assert set(stored_payload["note_metrics"].keys()) == {"char_len", "word_len"}
     assert stored_payload["sid"] == sid
@@ -245,9 +253,15 @@ def test_store_note_style_result_handles_short_note(
         )
 
     stored_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
-    assert set(stored_payload.keys()) == {"sid", "account_id", "analysis", "note_metrics"}
+    assert set(stored_payload.keys()) == {
+        "sid",
+        "account_id",
+        "evaluated_at",
+        "analysis",
+        "note_metrics",
+    }
     assert stored_payload["analysis"]["tone"] == "neutral"
     assert "note_hash" not in stored_payload
     assert "prompt_salt" not in stored_payload
-    assert "evaluated_at" not in stored_payload
+    assert stored_payload["evaluated_at"].endswith("Z")
     assert set(stored_payload["note_metrics"].keys()) == {"char_len", "word_len"}

@@ -10,7 +10,7 @@ import os
 import re
 import time
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
@@ -217,6 +217,42 @@ def _normalize_date_field(value: Any) -> str | None:
     return None
 
 
+def _normalize_timestamp_field(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(value, date):
+        dt = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    text = str(value).strip()
+    if not text:
+        return None
+    candidates = [
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ]
+    for fmt in candidates:
+        try:
+            parsed = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _ensure_mutable_mapping(value: Mapping[str, Any]) -> MutableMapping[str, Any]:
     if isinstance(value, MutableMapping):
         return value
@@ -336,6 +372,10 @@ def _normalize_result_payload(payload: Mapping[str, Any]) -> MutableMapping[str,
         "sid": str(payload.get("sid") or "").strip(),
         "account_id": str(payload.get("account_id") or "").strip(),
     }
+
+    evaluated_at = _normalize_timestamp_field(payload.get("evaluated_at"))
+    if evaluated_at is not None:
+        normalized["evaluated_at"] = evaluated_at
 
     analysis_payload = payload.get("analysis")
     if isinstance(analysis_payload, Mapping):
@@ -838,6 +878,9 @@ def _validate_result_payload(
     account_value = str(payload.get("account_id") or "").strip()
     if not account_value:
         missing_fields.append("account_id")
+    evaluated_at_value = str(payload.get("evaluated_at") or "").strip()
+    if not evaluated_at_value:
+        missing_fields.append("evaluated_at")
 
     note_metrics = payload.get("note_metrics")
     sanitized_metrics = (
@@ -1357,6 +1400,13 @@ def store_note_style_result(
         note_metrics=note_metrics_payload,
         pack_path=account_paths.pack_file,
     )
+
+    evaluated_at_value = normalized_payload.get("evaluated_at")
+    if not isinstance(evaluated_at_value, str) or not evaluated_at_value.strip():
+        normalized_completed_at = _normalize_timestamp_field(completed_at)
+        normalized_payload["evaluated_at"] = (
+            normalized_completed_at if normalized_completed_at else _now_iso()
+        )
 
     _guard_result_analysis(
         sid=sid,

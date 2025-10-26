@@ -244,33 +244,19 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert not account_paths.debug_file.exists()
 
     assert set(pack_payload.keys()) == {
-        "sid",
-        "account_id",
-        "model",
-        "built_at",
-        "context",
+        "meta_name",
+        "primary_issue_tag",
+        "bureau_data",
+        "note_text",
         "messages",
-        "note_metrics",
     }
-    assert pack_payload["sid"] == sid
-    assert pack_payload["account_id"] == account_id
-    assert pack_payload["model"]
-    assert pack_payload["built_at"].endswith("Z")
-
-    context = pack_payload["context"]
-    assert context["meta_name"] == "Capital One"
-    assert context["note_text"].startswith("Please help")
-    bureau_data = context["bureau_data"]
+    assert pack_payload["meta_name"] == "Capital One"
+    assert pack_payload["note_text"].startswith("Please help")
+    bureau_data = pack_payload["bureau_data"]
     assert bureau_data["account_type"] == "Credit Card"
     assert bureau_data["account_status"] == "Closed"
-    assert context["primary_issue_tag"] == "late_payment"
+    assert pack_payload["primary_issue_tag"] == "late_payment"
     assert pack_payload["messages"][0]["role"] == "system"
-
-    note_metrics = pack_payload["note_metrics"]
-    assert note_metrics == {
-        "char_len": len(context["note_text"]),
-        "word_len": len(context["note_text"].split()),
-    }
 
     user_message = pack_payload["messages"][1]
     assert user_message["role"] == "user"
@@ -279,7 +265,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         "meta_name": "Capital One",
         "primary_issue_tag": "late_payment",
         "bureau_data": bureau_data,
-        "note_text": context["note_text"],
+        "note_text": pack_payload["note_text"],
     }
 
 
@@ -347,16 +333,15 @@ def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:
 
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
 
-    context = pack_payload["context"]
-    assert context["meta_name"] == "Sample Creditor"
-    bureau_data = context["bureau_data"]
+    assert pack_payload["meta_name"] == "Sample Creditor"
+    bureau_data = pack_payload["bureau_data"]
     assert bureau_data["account_type"] == "Credit Card"
-    assert context["primary_issue_tag"] == "balance_dispute"
+    assert pack_payload["primary_issue_tag"] == "balance_dispute"
     assert pack_payload["messages"][1]["content"] == {
         "meta_name": "Sample Creditor",
         "primary_issue_tag": "balance_dispute",
         "bureau_data": bureau_data,
-        "note_text": context["note_text"],
+        "note_text": pack_payload["note_text"],
     }
 
 
@@ -419,16 +404,15 @@ def test_note_style_stage_resolves_relative_manifest_paths(tmp_path: Path) -> No
 
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
 
-    context = pack_payload["context"]
-    assert context["meta_name"] == "Relative Creditor"
-    bureau_data = context["bureau_data"]
+    assert pack_payload["meta_name"] == "Relative Creditor"
+    bureau_data = pack_payload["bureau_data"]
     assert bureau_data["account_status"] == "Open"
-    assert context["primary_issue_tag"] == "relative_path"
+    assert pack_payload["primary_issue_tag"] == "relative_path"
     assert pack_payload["messages"][1]["content"] == {
         "meta_name": "Relative Creditor",
         "primary_issue_tag": "relative_path",
         "bureau_data": bureau_data,
-        "note_text": context["note_text"],
+        "note_text": pack_payload["note_text"],
     }
 
 
@@ -464,17 +448,14 @@ def test_note_style_stage_handles_missing_context(
     assert not account_paths.debug_file.exists()
 
     assert set(pack_payload.keys()) == {
-        "sid",
-        "account_id",
-        "model",
-        "built_at",
-        "context",
+        "meta_name",
+        "primary_issue_tag",
+        "bureau_data",
+        "note_text",
         "messages",
-        "note_metrics",
     }
-    context = pack_payload["context"]
-    assert context["meta_name"] == account_id
-    bureau_data = context["bureau_data"]
+    assert pack_payload["meta_name"] == account_id
+    bureau_data = pack_payload["bureau_data"]
     assert set(bureau_data.keys()) == {
         "account_type",
         "account_status",
@@ -490,7 +471,7 @@ def test_note_style_stage_handles_missing_context(
         "past_due_amount",
     }
     assert all(value == "--" for value in bureau_data.values())
-    assert context["primary_issue_tag"] is None
+    assert pack_payload["primary_issue_tag"] is None
 
     assert "NOTE_STYLE_WARN: missing context for account idx-002 (meta/tags/bureaus)" in caplog.text
 
@@ -499,7 +480,7 @@ def test_note_style_stage_handles_missing_context(
         "meta_name": account_id,
         "primary_issue_tag": None,
         "bureau_data": bureau_data,
-        "note_text": context["note_text"],
+        "note_text": pack_payload["note_text"],
     }
 
     # Debug context snapshots should never leak into the pack payload that will be

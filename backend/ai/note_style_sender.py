@@ -84,6 +84,29 @@ def _load_pack_payload(pack_path: Path) -> Mapping[str, Any]:
     return _load_pack_records(pack_path)[0]
 
 
+_DISALLOWED_MESSAGE_KEY_SUBSTRINGS: tuple[str, ...] = (
+    "debug",
+    "snapshot",
+    "raw",
+    "blob",
+)
+
+
+def _sanitize_message_entry(entry: Mapping[str, Any]) -> Mapping[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in entry.items():
+        key_text = str(key)
+        lower_key = key_text.lower()
+        if any(fragment in lower_key for fragment in _DISALLOWED_MESSAGE_KEY_SUBSTRINGS):
+            continue
+        sanitized[key_text] = value
+
+    if "role" not in sanitized or "content" not in sanitized:
+        raise ValueError("Pack message missing required role/content fields")
+
+    return sanitized
+
+
 def _coerce_messages(payload: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
     messages = payload.get("messages")
     if not isinstance(messages, Sequence):
@@ -92,7 +115,7 @@ def _coerce_messages(payload: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
     for entry in messages:
         if not isinstance(entry, Mapping):
             raise ValueError("Pack messages must be mapping objects")
-        normalized.append(entry)
+        normalized.append(_sanitize_message_entry(entry))
     return normalized
 
 

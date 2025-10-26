@@ -339,3 +339,94 @@ def test_note_style_sender_raises_when_pack_missing(
     processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
     assert processed == []
     assert len(client.calls) == 0
+
+
+def test_note_style_sender_strips_debug_message_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID300"
+    account_id = "idx-300"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Need info."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0])
+    payload["messages"][1]["debug_snapshot"] = {"should": "not-travel"}
+    payload["messages"][1]["raw_payload"] = {"secret": True}
+    account_paths.pack_file.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    client = _StubClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+
+    assert processed == [account_id]
+    assert len(client.calls) == 1
+
+    call_messages = client.calls[0]["messages"]
+    assert isinstance(call_messages, list)
+    user_entry = call_messages[1]
+    assert "debug_snapshot" not in user_entry
+    assert "raw_payload" not in user_entry
+
+
+def test_note_style_sender_ignores_debug_snapshot_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID301"
+    account_id = "idx-301"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Need info."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    debug_candidate = paths.debug_dir / "acc_debug.jsonl"
+    debug_candidate.parent.mkdir(parents=True, exist_ok=True)
+    debug_candidate.write_text(
+        json.dumps({
+            "messages": [
+                {"role": "system", "content": "bad"},
+                {"role": "user", "content": "bad"},
+            ]
+        }, ensure_ascii=False)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    client = _StubClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+    monkeypatch.setenv("NOTE_STYLE_PACK_GLOB", "**/*.jsonl")
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+
+    assert processed == [account_id]
+    assert len(client.calls) == 1

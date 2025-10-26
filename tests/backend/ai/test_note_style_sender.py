@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -213,6 +214,36 @@ def test_note_style_sender_sends_built_pack(
     call_kwargs = client.calls[0]["kwargs"]
     assert call_kwargs.get("response_format") == "json_object"
 
+
+def test_note_style_sender_accepts_string_runs_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID200"
+    account_id = "idx-200"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "The balance should be zero."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    client = _StubClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=os.fspath(runs_root))
+
+    assert processed == [account_id]
+    assert len(client.calls) == 1
 
 def test_note_style_sender_skips_completed_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

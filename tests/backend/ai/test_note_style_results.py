@@ -14,6 +14,29 @@ def _write_response(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_manifest(run_dir: Path, account_id: str) -> Path:
+    account_dir = run_dir / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+    manifest_payload = {
+        "artifacts": {
+            "cases": {
+                "accounts": {
+                    account_id: {
+                        "dir": "cases/accounts/" + account_id,
+                        "meta": "meta.json",
+                        "bureaus": "bureaus.json",
+                        "tags": "tags.json",
+                    }
+                }
+            }
+        }
+    }
+    manifest_path = run_dir / "manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return account_dir
+
+
 def test_store_note_style_result_updates_index_and_triggers_refresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -21,6 +44,9 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     account_id = "idx-900"
     runs_root = tmp_path / "runs"
     response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    run_dir = runs_root / sid
+    _write_manifest(run_dir, account_id)
 
     _write_response(
         response_dir / f"{account_id}.result.json",
@@ -174,6 +200,9 @@ def test_store_note_style_result_handles_short_note(
     account_id = "idx-901"
     runs_root = tmp_path / "runs"
     response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    run_dir = runs_root / sid
+    _write_manifest(run_dir, account_id)
 
     _write_response(
         response_dir / f"{account_id}.result.json",

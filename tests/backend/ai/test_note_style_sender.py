@@ -16,6 +16,29 @@ def _write_response(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_manifest(run_dir: Path, account_id: str) -> Path:
+    account_dir = run_dir / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+    manifest_payload = {
+        "artifacts": {
+            "cases": {
+                "accounts": {
+                    account_id: {
+                        "dir": "cases/accounts/" + account_id,
+                        "meta": "meta.json",
+                        "bureaus": "bureaus.json",
+                        "tags": "tags.json",
+                    }
+                }
+            }
+        }
+    }
+    manifest_path = run_dir / "manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return account_dir
+
+
 class _StubClient:
     def __init__(self, *, response: Mapping[str, Any] | None = None) -> None:
         self.calls: list[dict[str, object]] = []
@@ -62,6 +85,8 @@ def test_note_style_sender_sends_built_pack(
     runs_root = tmp_path
     run_dir = runs_root / sid
     response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
 
     _write_response(
         response_dir / f"{account_id}.result.json",
@@ -178,6 +203,8 @@ def test_note_style_sender_skips_completed_entries(
     run_dir = runs_root / sid
     response_dir = run_dir / "frontend" / "review" / "responses"
 
+    _write_manifest(run_dir, account_id)
+
     _write_response(
         response_dir / f"{account_id}.result.json",
         {
@@ -211,6 +238,8 @@ def test_note_style_sender_skips_when_existing_result_matches(
     runs_root = tmp_path
     run_dir = runs_root / sid
     response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
 
     _write_response(
         response_dir / f"{account_id}.result.json",
@@ -271,6 +300,8 @@ def test_note_style_sender_raises_when_pack_missing(
     runs_root = tmp_path
     run_dir = runs_root / sid
     response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
 
     _write_response(
         response_dir / f"{account_id}.result.json",

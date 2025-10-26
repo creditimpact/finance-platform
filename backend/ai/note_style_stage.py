@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import time
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,6 +51,9 @@ _ZERO_WIDTH_TRANSLATION = {
     ord("\ufeff"): " ",
     ord("\u2060"): " ",
 }
+
+_MANIFEST_WAIT_ATTEMPTS = 20
+_MANIFEST_WAIT_DELAY_SECONDS = 0.1
 
 @dataclass(frozen=True)
 class NoteStyleResponseAccount:
@@ -303,6 +307,19 @@ def _resolve_path_from_bases(raw_path: Path, bases: Iterable[Path]) -> Path:
         return first_candidate
 
 
+def _await_path_ready(path: Path) -> Path:
+    candidate = path
+    for attempt in range(_MANIFEST_WAIT_ATTEMPTS):
+        if candidate.exists():
+            break
+        if attempt < _MANIFEST_WAIT_ATTEMPTS - 1:
+            time.sleep(_MANIFEST_WAIT_DELAY_SECONDS)
+    try:
+        return candidate.resolve()
+    except OSError:
+        return candidate
+
+
 def _lookup_manifest_account_entry(
     manifest_payload: Any, account_id: str
 ) -> Mapping[str, Any] | None:
@@ -346,24 +363,55 @@ def _lookup_manifest_account_entry(
     return None
 
 
+def _await_manifest_account_entry(
+    sid: str, account_id: str, run_dir: Path
+) -> Mapping[str, Any]:
+    manifest_path = run_dir / "manifest.json"
+    manifest_payload: Any = None
+    account_entry: Mapping[str, Any] | None = None
+
+    for attempt in range(_MANIFEST_WAIT_ATTEMPTS):
+        manifest_payload = _load_json_data(manifest_path)
+        if isinstance(manifest_payload, Mapping):
+            account_entry = _lookup_manifest_account_entry(manifest_payload, account_id)
+            if isinstance(account_entry, Mapping):
+                return account_entry
+        if attempt < _MANIFEST_WAIT_ATTEMPTS - 1:
+            time.sleep(_MANIFEST_WAIT_DELAY_SECONDS)
+
+    if not isinstance(manifest_payload, Mapping):
+        log.warning(
+            "NOTE_STYLE_MANIFEST_MISSING sid=%s path=%s", sid, manifest_path
+        )
+        raise RuntimeError(
+            f"note_style manifest missing for sid={sid} path={manifest_path}"
+        )
+
+    log.warning(
+        "NOTE_STYLE_MANIFEST_ACCOUNT_MISSING sid=%s account_id=%s", sid, account_id
+    )
+    raise RuntimeError(
+        f"note_style manifest missing account entry for sid={sid} account_id={account_id}"
+    )
+
+
 def _resolve_account_context_paths(
     sid: str, account_id: str, runs_root: Path
 ) -> dict[str, Path]:
     run_dir = runs_root / sid
-    manifest_payload = _load_json_data(run_dir / "manifest.json")
-    account_entry = _lookup_manifest_account_entry(manifest_payload, account_id)
+    account_entry = _await_manifest_account_entry(sid, account_id, run_dir)
 
     resolved: dict[str, Path] = {}
     account_dir: Path | None = None
-    if isinstance(account_entry, Mapping):
-        raw_dir = _coerce_raw_path(account_entry.get("dir"))
-        if raw_dir is not None:
-            account_dir = _resolve_path_from_bases(raw_dir, (run_dir,))
-            resolved["dir"] = account_dir
+    raw_dir = _coerce_raw_path(account_entry.get("dir"))
+    if raw_dir is not None:
+        account_dir = _resolve_path_from_bases(raw_dir, (run_dir,))
 
     if account_dir is None:
-        account_dir = (run_dir / "cases" / "accounts" / account_id).resolve()
-        resolved["dir"] = account_dir
+        account_dir = run_dir / "cases" / "accounts" / account_id
+
+    account_dir = _await_path_ready(account_dir)
+    resolved["dir"] = account_dir
 
     for key, filename in (
         ("meta", "meta.json"),
@@ -371,12 +419,12 @@ def _resolve_account_context_paths(
         ("tags", "tags.json"),
     ):
         raw_value = None
-        if isinstance(account_entry, Mapping):
-            raw_value = _coerce_raw_path(account_entry.get(key))
+        raw_value = _coerce_raw_path(account_entry.get(key))
         if raw_value is not None:
-            resolved[key] = _resolve_path_from_bases(raw_value, (account_dir, run_dir))
+            candidate = _resolve_path_from_bases(raw_value, (account_dir, run_dir))
         else:
-            resolved[key] = (account_dir / filename).resolve()
+            candidate = account_dir / filename
+        resolved[key] = _await_path_ready(candidate)
 
     return resolved
 
@@ -571,9 +619,28 @@ def build_note_style_pack_for_account(
     meta_name = _extract_meta_name(meta_payload, account_id)
     bureau_data = _extract_bureau_data(bureaus_payload)
     primary_issue_tag = _extract_primary_issue_tag(tags_payload)
+    if isinstance(meta_payload, Mapping):
+        meta_context = dict(meta_payload)
+    else:
+        meta_context = {}
+    if isinstance(bureaus_payload, Mapping):
+        bureaus_context = dict(bureaus_payload)
+    else:
+        bureaus_context = {}
+    if isinstance(tags_payload, Mapping):
+        tags_context: Any = dict(tags_payload)
+    elif isinstance(tags_payload, Sequence) and not isinstance(
+        tags_payload, (str, bytes, bytearray)
+    ):
+        tags_context = list(tags_payload)
+    else:
+        tags_context = []
     pack_context = {
-        "meta_name": meta_name,
-        "bureau_data": bureau_data,
+        "meta": meta_context,
+        "bureaus": bureaus_context,
+        "tags": tags_context,
+        "account_name": meta_name,
+        "bureau_summary": bureau_data,
         "primary_issue_tag": primary_issue_tag,
     }
 

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
+from backend import config
 from backend.ai.manifest import ensure_note_style_section
 from backend.core.ai.paths import (
     NoteStylePaths,
@@ -698,12 +699,21 @@ def build_note_style_pack_for_account(
     }
 
     user_message_content = dict(pack_context)
+    note_metrics = {
+        "char_len": len(note_text),
+        "word_len": len(note_text.split()),
+    }
     pack_payload = {
-        **pack_context,
+        "sid": sid,
+        "account_id": account_id,
+        "model": config.NOTE_STYLE_MODEL,
+        "built_at": timestamp,
+        "context": pack_context,
         "messages": [
             {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
             {"role": "user", "content": user_message_content},
         ],
+        "note_metrics": note_metrics,
     }
     _write_jsonl(account_paths.pack_file, pack_payload)
     if account_paths.result_file.exists():

@@ -508,6 +508,12 @@ def _load_pack_note_text(pack_path: Path) -> str | None:
     if not isinstance(payload, Mapping):
         return None
     note_candidate = payload.get("note_text")
+    if not isinstance(note_candidate, str):
+        context = payload.get("context")
+        if isinstance(context, Mapping):
+            context_note = context.get("note_text")
+            if isinstance(context_note, str):
+                note_candidate = context_note
     if isinstance(note_candidate, str):
         return note_candidate
     messages = payload.get("messages")

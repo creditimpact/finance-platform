@@ -108,7 +108,15 @@ def ingest_note_style_result(
     }
 
     metrics_payload: MutableMapping[str, Any] | None = None
-    note_candidate = pack_payload.get("note_text")
+    note_candidate: Any = None
+    if isinstance(pack_payload, Mapping):
+        note_candidate = pack_payload.get("note_text")
+        if not isinstance(note_candidate, str):
+            context = pack_payload.get("context")
+            if isinstance(context, Mapping):
+                context_note = context.get("note_text")
+                if isinstance(context_note, str):
+                    note_candidate = context_note
     if isinstance(note_candidate, str):
         metrics_payload = {
             "char_len": len(note_candidate),

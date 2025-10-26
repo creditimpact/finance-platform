@@ -251,6 +251,8 @@ class Manifest:
             runs_root_path, sid_text, create=True
         )
 
+        manifest_path_missing = not manifest.path.exists()
+
         data = manifest.data
         if not isinstance(data, dict):
             data = {}
@@ -279,7 +281,7 @@ class Manifest:
             "results": str(note_style_paths.results_dir),
             "results_dir": str(note_style_paths.results_dir),
             "index": str(note_style_paths.index_file),
-            "logs": str(note_style_paths.base / "logs.txt"),
+            "logs": str(note_style_paths.log_file),
         }
 
         changed = False
@@ -314,7 +316,7 @@ class Manifest:
                 built_changed = True
             changed = changed or built_changed
 
-        if changed:
+        if changed or manifest_path_missing:
             persist_manifest(manifest)
 
         packs_dir = note_style_section.get("packs_dir") or canonical_values["packs_dir"]

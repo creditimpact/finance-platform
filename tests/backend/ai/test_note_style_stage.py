@@ -292,6 +292,65 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert '"equifax"' not in pack_line
 
 
+def test_note_style_manifest_registered_before_pack_build(tmp_path: Path) -> None:
+    sid = "SIDREG"
+    account_id = "acct-500"
+    run_dir = tmp_path / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    account_dir = run_dir / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+    (account_dir / "meta.json").write_text(
+        json.dumps({"heading_guess": "Example Creditor"}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps({"experian": {"reported_creditor": "Example Creditor"}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps([{"kind": "issue", "type": "verification"}], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    _write_manifest(run_dir, account_id, account_dir=account_dir)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {"answers": {"explanation": "Customer already resolved the balance."}},
+    )
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=tmp_path)
+    assert result["status"] == "completed"
+
+    manifest_path = run_dir / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    note_style_section = (
+        payload.get("ai", {})
+        .get("packs", {})
+        .get("note_style", {})
+    )
+
+    assert note_style_section, "note_style manifest section should be populated"
+
+    paths = ensure_note_style_paths(tmp_path, sid, create=False)
+
+    assert note_style_section["base"] == str(paths.base)
+    assert note_style_section["dir"] == str(paths.base)
+    assert note_style_section["packs"] == str(paths.packs_dir)
+    assert note_style_section["packs_dir"] == str(paths.packs_dir)
+    assert note_style_section["results"] == str(paths.results_dir)
+    assert note_style_section["results_dir"] == str(paths.results_dir)
+    assert note_style_section["index"] == str(paths.index_file)
+    assert note_style_section["logs"] == str(paths.log_file)
+
+    status_payload = note_style_section.get("status")
+    assert isinstance(status_payload, dict)
+    assert set(status_payload.keys()) >= {"built", "sent", "completed_at"}
+    assert status_payload["built"] is False
+    assert status_payload["sent"] is False
+    assert status_payload["completed_at"] is None
+
 def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:
     sid = "SIDMAN"
     account_id = "idx-007"

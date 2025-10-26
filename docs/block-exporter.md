@@ -146,7 +146,7 @@ BLOCKS_FAIL_FAST: 0 blocks extracted sid=<SID> file=<PATH>
 
 הרם Redis ו־Celery:
 
-python -m celery -A backend.api.tasks worker --loglevel=info --pool=solo
+python -m celery -A backend.api.tasks worker --loglevel=info --pool=solo -Q celery,merge,validation,note_style,frontend
 
 
 העלה דו"ח והפעל תהליך (דרך ה־API/UI/קריאה ישירה לאורקסטרייטור).

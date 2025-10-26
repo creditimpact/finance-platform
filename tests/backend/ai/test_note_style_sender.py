@@ -229,25 +229,22 @@ def test_note_style_sender_skips_when_existing_result_matches(
     pack_payload = json.loads(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
     )
-    baseline_result = json.loads(
-        account_paths.result_file.read_text(encoding="utf-8").splitlines()[0]
-    )
-    final_result = dict(baseline_result)
-    final_result.update(
-        {
-            "analysis": {
-                "tone": "neutral",
-                "context_hints": {
-                    "timeframe": {"month": None, "relative": None},
-                    "topic": "other",
-                    "entities": {"creditor": None, "amount": None},
-                },
-                "emphasis": [],
-                "confidence": 0.7,
-                "risk_flags": ["follow_up"],
+    final_result = {
+        "sid": sid,
+        "account_id": account_id,
+        "note_metrics": pack_payload["note_metrics"],
+        "analysis": {
+            "tone": "neutral",
+            "context_hints": {
+                "timeframe": {"month": None, "relative": None},
+                "topic": "other",
+                "entities": {"creditor": None, "amount": None},
             },
-        }
-    )
+            "emphasis": [],
+            "confidence": 0.7,
+            "risk_flags": ["follow_up"],
+        },
+    }
     account_paths.result_file.write_text(
         json.dumps(final_result, ensure_ascii=False) + "\n", encoding="utf-8"
     )

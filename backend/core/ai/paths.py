@@ -276,7 +276,7 @@ def note_style_pack_filename(account_id: object) -> str:
     """Return the canonical note_style pack filename for ``account_id``."""
 
     normalized = normalize_note_style_account_id(account_id)
-    return f"style_acc_{normalized}.jsonl"
+    return f"acc_{normalized}.jsonl"
 
 
 def note_style_result_filename(account_id: object) -> str:

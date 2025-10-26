@@ -36,7 +36,7 @@ def test_rebuild_note_style_builds_from_responses(tmp_path: Path) -> None:
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
 
     assert account_paths.pack_file.exists()
-    assert account_paths.result_file.exists()
+    assert not account_paths.result_file.exists()
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     assert index_payload["packs"][0]["status"] == "built"

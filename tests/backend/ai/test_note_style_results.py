@@ -63,8 +63,10 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
-    baseline_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
-    baseline_metrics = baseline_payload["note_metrics"]
+    pack_payload = json.loads(
+        account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
+    )
+    baseline_metrics = pack_payload["note_metrics"]
 
     result_payload = {
         "sid": sid,

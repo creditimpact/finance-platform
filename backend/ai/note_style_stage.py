@@ -54,6 +54,11 @@ _CONTEXT_EXCLUDED_KEYWORDS = (
     "hash",
     "salt",
     "debug",
+    "raw",
+    "blob",
+    "token",
+    "signature",
+    "checksum",
 )
 
 _SANITIZE_SKIP = object()
@@ -273,11 +278,6 @@ def _write_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(serialized + "\n", encoding="utf-8")
 
 
-def _write_debug_snapshot(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
 def discover_note_style_response_accounts(
     sid: str, *, runs_root: Path | str | None = None
 ) -> list[NoteStyleResponseAccount]:
@@ -396,6 +396,10 @@ def build_note_style_pack_for_account(
         "context": pack_context,
     }
 
+    note_metrics = {
+        "char_len": len(note_text),
+        "word_len": len(note_text.split()),
+    }
     pack_payload = {
         "sid": sid,
         "account_id": account_id,
@@ -403,30 +407,35 @@ def build_note_style_pack_for_account(
         "built_at": timestamp,
         "note_text": note_text,
         "context": pack_context,
+        "note_metrics": note_metrics,
         "messages": [
             {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
             {"role": "user", "content": user_message_content},
         ],
     }
-
-    note_metrics = {
-        "char_len": len(note_text),
-        "word_len": len(note_text.split()),
-    }
-    result_payload = {
-        "sid": sid,
-        "account_id": account_id,
-        "note_metrics": note_metrics,
-    }
-
     _write_jsonl(account_paths.pack_file, pack_payload)
-    _write_jsonl(account_paths.result_file, result_payload)
-    debug_payload = {
-        "meta": meta_payload or {},
-        "bureaus": bureaus_payload or {},
-        "tags": tags_payload if isinstance(tags_payload, list) else tags_payload or [],
-    }
-    _write_debug_snapshot(account_paths.debug_file, debug_payload)
+    if account_paths.result_file.exists():
+        try:
+            account_paths.result_file.unlink()
+        except OSError:
+            log.warning(
+                "NOTE_STYLE_RESULT_CLEANUP_FAILED sid=%s account_id=%s path=%s",
+                sid,
+                account_id,
+                account_paths.result_file,
+                exc_info=True,
+            )
+    if account_paths.debug_file.exists():
+        try:
+            account_paths.debug_file.unlink()
+        except OSError:
+            log.warning(
+                "NOTE_STYLE_DEBUG_CLEANUP_FAILED sid=%s account_id=%s path=%s",
+                sid,
+                account_id,
+                account_paths.debug_file,
+                exc_info=True,
+            )
     index_payload = _ensure_index_entry(
         paths=paths,
         account_id=account_id,

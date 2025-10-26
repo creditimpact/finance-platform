@@ -62,8 +62,8 @@ def test_runflow_note_style_build_command(tmp_path: Path, capsys: pytest.Capture
     paths = ensure_note_style_paths(tmp_path, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
     assert account_paths.pack_file.is_file()
-    assert account_paths.result_file.is_file()
-    assert account_paths.debug_file.is_file()
+    assert not account_paths.result_file.exists()
+    assert not account_paths.debug_file.exists()
 
 
 def test_runflow_note_style_refresh_command(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

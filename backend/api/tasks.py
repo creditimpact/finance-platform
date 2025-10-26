@@ -63,6 +63,9 @@ _sanitize_openai_env()
 
 app = Celery("tasks")
 
+# Ensure note_style Celery tasks are registered when the worker boots.
+import backend.ai.note_style.tasks  # noqa: E402,F401
+
 
 def _default_queue_name() -> str:
     value = (os.getenv("CELERY_DEFAULT_QUEUE") or "").strip() or "celery"
@@ -80,6 +83,7 @@ def _known_queue_names() -> list[str]:
         _frontend_queue_name(),
         "merge",
         "validation",
+        "note_style",
     ]
     seen: set[str] = set()
     ordered: list[str] = []
@@ -141,20 +145,21 @@ def _ensure_frontend_queue_configuration() -> None:
     )
     app.conf.task_queues = queues
 
-    frontend_tasks = {
+    targeted_tasks = {
         "backend.api.tasks.generate_frontend_packs_task": frontend_queue,
+        "backend.ai.note_style.note_style_prepare_and_send_task": "note_style",
     }
 
     routes_config = getattr(app.conf, "task_routes", None)
     if not routes_config:
         app.conf.task_routes = {
             task_name: {"queue": queue_name, "routing_key": queue_name}
-            for task_name, queue_name in frontend_tasks.items()
+            for task_name, queue_name in targeted_tasks.items()
         }
         return
 
     if isinstance(routes_config, dict):
-        for task_name, queue_name in frontend_tasks.items():
+        for task_name, queue_name in targeted_tasks.items():
             existing = routes_config.get(task_name)
             if isinstance(existing, dict):
                 existing.setdefault("queue", queue_name)
@@ -169,7 +174,7 @@ def _ensure_frontend_queue_configuration() -> None:
 
     if isinstance(routes_config, (list, tuple)):
         updated_routes = list(routes_config)
-        for task_name, queue_name in frontend_tasks.items():
+        for task_name, queue_name in targeted_tasks.items():
             applied = False
             for entry in updated_routes:
                 if not isinstance(entry, dict) or task_name not in entry:
@@ -192,7 +197,7 @@ def _ensure_frontend_queue_configuration() -> None:
         routes_config,
         {
             task_name: {"queue": queue_name, "routing_key": queue_name}
-            for task_name, queue_name in frontend_tasks.items()
+            for task_name, queue_name in targeted_tasks.items()
         },
     ]
 

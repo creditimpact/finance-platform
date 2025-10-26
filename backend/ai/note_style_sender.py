@@ -214,6 +214,39 @@ def _load_index_account_map(paths: NoteStylePaths) -> dict[str, str]:
     return mapping
 
 
+def _result_has_completed_analysis(result_path: Path) -> bool:
+    try:
+        raw = result_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    except OSError:
+        log.warning(
+            "STYLE_SEND_EXISTING_READ_FAILED path=%s",
+            result_path,
+            exc_info=True,
+        )
+        return False
+
+    for line in raw.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            log.warning(
+                "STYLE_SEND_EXISTING_INVALID_JSON path=%s",
+                result_path,
+                exc_info=True,
+            )
+            return False
+        analysis = payload.get("analysis")
+        if isinstance(analysis, Mapping) and bool(analysis):
+            return True
+        return False
+    return False
+
+
 def _extract_response_text(response_payload: Any) -> str:
     choices: Sequence[Any] | None = None
     if hasattr(response_payload, "choices"):
@@ -456,6 +489,25 @@ def send_note_style_packs_for_sid(
                 account_id,
                 pack_path,
             )
+
+            if config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS and _result_has_completed_analysis(
+                account_paths.result_file
+            ):
+                log.info(
+                    "STYLE_SEND_SKIP_EXISTING sid=%s account_id=%s result=%s",
+                    sid,
+                    account_id,
+                    _relativize(account_paths.result_file, paths.base),
+                )
+                log_structured_event(
+                    "NOTE_STYLE_SEND_SKIPPED",
+                    logger=log,
+                    sid=sid,
+                    account_id=account_id,
+                    reason="existing_analysis",
+                    result_path=_relativize(account_paths.result_file, paths.base),
+                )
+                continue
 
             model = str(pack_payload.get("model") or "").strip()
             if not model:

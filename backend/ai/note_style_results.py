@@ -38,12 +38,6 @@ log = logging.getLogger(__name__)
 _SHORT_NOTE_WORD_LIMIT = 12
 _SHORT_NOTE_CHAR_LIMIT = 90
 _MAX_ANALYSIS_LIST_ITEMS = 6
-_INDEX_HASH_FIELDS = (
-    "note_hash",
-    "fingerprint_hash",
-    "prompt_salt",
-    "source_hash",
-)
 _UNSUPPORTED_CLAIM_KEYWORDS = (
     "legal",  # general legal language
     "lawsuit",
@@ -1074,8 +1068,6 @@ class NoteStyleIndexWriter:
         updated_entry: dict[str, Any] | None = None
         for entry in entries:
             entry_payload = dict(entry)
-            for field in _INDEX_HASH_FIELDS:
-                entry_payload.pop(field, None)
             if str(entry_payload.get("account_id") or "") == normalized_account:
                 if analysis_valid:
                     entry_payload["status"] = "completed"

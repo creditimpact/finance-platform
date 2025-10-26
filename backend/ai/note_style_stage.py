@@ -247,6 +247,83 @@ def _extract_primary_issue_tag(tags_payload: Any) -> str | None:
     return None
 
 
+def read_meta_name(path: Path) -> str:
+    account_id = ""
+    if isinstance(path, Path):
+        account_id = path.parent.name
+        meta_payload = _load_json_data(path)
+    else:  # pragma: no cover - defensive
+        meta_payload = None
+
+    if isinstance(meta_payload, Mapping):
+        heading_guess = _clean_display_text(meta_payload.get("heading_guess"))
+        if heading_guess:
+            return heading_guess
+
+        for key in ("account_id", "id"):
+            fallback_candidate = _clean_display_text(meta_payload.get(key))
+            if fallback_candidate:
+                return fallback_candidate
+
+    fallback = _clean_display_text(account_id)
+    if fallback:
+        return fallback
+
+    if account_id:
+        return str(account_id)
+
+    return "--"
+
+
+def read_primary_issue_tag(path: Path) -> str | None:
+    tags_payload = _load_json_data(path) if isinstance(path, Path) else None
+    return _extract_primary_issue_tag(tags_payload)
+
+
+def build_bureau_data(path: Path) -> dict[str, Any]:
+    default = {field: "--" for field in _BUREAU_CORE_FIELDS}
+    bureaus_payload = _load_json_data(path) if isinstance(path, Path) else None
+    if not isinstance(bureaus_payload, Mapping):
+        return default
+
+    start_index: int | None = None
+    for idx, bureau_key in enumerate(_BUREAU_KEYS):
+        if isinstance(bureaus_payload.get(bureau_key), Mapping):
+            start_index = idx
+            break
+
+    if start_index is None:
+        return default
+
+    ordered_bureaus: list[Mapping[str, Any]] = []
+    for bureau_key in _BUREAU_KEYS[start_index:]:
+        bureau_payload = bureaus_payload.get(bureau_key)
+        if isinstance(bureau_payload, Mapping):
+            ordered_bureaus.append(bureau_payload)
+
+    result: dict[str, Any] = {}
+    for field in _BUREAU_CORE_FIELDS:
+        selected_value: Any | None = None
+        for bureau_payload in ordered_bureaus:
+            candidate = bureau_payload.get(field)
+            if candidate is None:
+                continue
+            if isinstance(candidate, str):
+                if candidate.strip():
+                    selected_value = candidate
+                    break
+                continue
+            selected_value = candidate
+            break
+
+        if selected_value is None:
+            result[field] = "--"
+        else:
+            result[field] = selected_value
+
+    return {field: result.get(field, "--") for field in _BUREAU_CORE_FIELDS}
+
+
 def _resolve_response_path(sid: str, account_id: str, runs_root: Path) -> Path:
     return (runs_root / sid / "frontend" / "review" / "responses" / f"{account_id}.result.json").resolve()
 
@@ -589,74 +666,19 @@ def build_note_style_pack_for_account(
     bureaus_path = context_paths.get("bureaus")
     tags_path = context_paths.get("tags")
 
-    meta_candidate, meta_missing = _load_context_payload(meta_path)
-    meta_payload = meta_candidate if isinstance(meta_candidate, Mapping) else None
-    if meta_payload is None:
-        meta_missing = True
-
-    bureaus_candidate, bureaus_missing = _load_context_payload(bureaus_path)
-    bureaus_payload = bureaus_candidate if isinstance(bureaus_candidate, Mapping) else None
-    if bureaus_payload is None:
-        bureaus_missing = True
-
-    tags_candidate, tags_missing = _load_context_payload(tags_path)
-    if isinstance(tags_candidate, Mapping) or (
-        isinstance(tags_candidate, Sequence)
-        and not isinstance(tags_candidate, (str, bytes, bytearray))
-    ):
-        tags_payload = tags_candidate
-    else:
-        tags_payload = None
-        tags_missing = True
-
     timestamp = _now_iso()
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
-    meta_name = _extract_meta_name(meta_payload, account_id)
-    bureau_data = _extract_bureau_data(bureaus_payload)
-    primary_issue_tag = _extract_primary_issue_tag(tags_payload)
-
-    sanitized_meta = _sanitize_context_payload(meta_payload)
-    if not isinstance(sanitized_meta, Mapping):
-        sanitized_meta = {}
-
-    sanitized_bureaus = _sanitize_context_payload(bureaus_payload)
-    if not isinstance(sanitized_bureaus, Mapping):
-        sanitized_bureaus = {}
-
-    sanitized_tags = _sanitize_context_payload(tags_payload)
-    if not (
-        isinstance(sanitized_tags, Sequence)
-        and not isinstance(sanitized_tags, (str, bytes, bytearray))
-    ):
-        sanitized_tags = []
+    meta_name = read_meta_name(meta_path)
+    primary_issue_tag = read_primary_issue_tag(tags_path)
+    bureau_data = build_bureau_data(bureaus_path)
 
     pack_context: dict[str, Any] = {
-        "meta": sanitized_meta,
-        "bureaus": sanitized_bureaus,
-        "tags": sanitized_tags,
+        "meta_name": meta_name,
+        "primary_issue_tag": primary_issue_tag,
+        "bureau_data": bureau_data,
+        "note_text": note_text,
     }
-    if meta_name:
-        pack_context["meta_name"] = meta_name
-    if primary_issue_tag:
-        pack_context["primary_issue_tag"] = primary_issue_tag
-    if bureau_data:
-        pack_context["bureau_data"] = bureau_data
-    pack_context["note_text"] = note_text
-
-    missing_sections: list[str] = []
-    if meta_missing:
-        missing_sections.append("meta")
-    if tags_missing:
-        missing_sections.append("tags")
-    if bureaus_missing:
-        missing_sections.append("bureaus")
-    if missing_sections:
-        log.warning(
-            "NOTE_STYLE_WARN: missing context for account %s (%s)",
-            account_id,
-            "/".join(missing_sections),
-        )
 
     user_message_content = dict(pack_context)
     pack_payload = {

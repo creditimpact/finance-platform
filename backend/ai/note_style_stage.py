@@ -205,20 +205,16 @@ def _extract_bureau_data(bureaus_payload: Mapping[str, Any] | None) -> Mapping[s
     if not isinstance(bureaus_payload, Mapping):
         return {}
 
-    bureau_data: dict[str, Any] = {}
     majority_values = _build_majority_values(bureaus_payload)
     if majority_values:
-        bureau_data["majority_values"] = majority_values
+        return majority_values
 
-    per_bureau: dict[str, Any] = {}
     for bureau_key in _BUREAU_KEYS:
         filtered = _filter_bureau_fields(bureaus_payload.get(bureau_key))
         if filtered:
-            per_bureau[bureau_key] = filtered
-    if per_bureau:
-        bureau_data["per_bureau"] = per_bureau
+            return filtered
 
-    return bureau_data
+    return {}
 
 
 def _issue_type_from_entry(entry: Any) -> str | None:
@@ -619,30 +615,15 @@ def build_note_style_pack_for_account(
     meta_name = _extract_meta_name(meta_payload, account_id)
     bureau_data = _extract_bureau_data(bureaus_payload)
     primary_issue_tag = _extract_primary_issue_tag(tags_payload)
-    if isinstance(meta_payload, Mapping):
-        meta_context = dict(meta_payload)
-    else:
-        meta_context = {}
-    if isinstance(bureaus_payload, Mapping):
-        bureaus_context = dict(bureaus_payload)
-    else:
-        bureaus_context = {}
-    if isinstance(tags_payload, Mapping):
-        tags_context: Any = dict(tags_payload)
-    elif isinstance(tags_payload, Sequence) and not isinstance(
-        tags_payload, (str, bytes, bytearray)
-    ):
-        tags_context = list(tags_payload)
-    else:
-        tags_context = []
-    pack_context = {
-        "meta": meta_context,
-        "bureaus": bureaus_context,
-        "tags": tags_context,
-        "account_name": meta_name,
-        "bureau_summary": bureau_data,
-        "primary_issue_tag": primary_issue_tag,
-    }
+
+    pack_context: dict[str, Any] = {}
+    if meta_name:
+        pack_context["meta_name"] = meta_name
+    if primary_issue_tag:
+        pack_context["primary_issue_tag"] = primary_issue_tag
+    if bureau_data:
+        pack_context["bureau_data"] = bureau_data
+    pack_context["note_text"] = note_text
 
     missing_sections: list[str] = []
     if meta_missing:
@@ -658,23 +639,13 @@ def build_note_style_pack_for_account(
             "/".join(missing_sections),
         )
 
-    user_message_content: dict[str, Any] = {
-        "note_text": note_text,
-        "context": pack_context,
-    }
-
-    note_metrics = {
-        "char_len": len(note_text),
-        "word_len": len(note_text.split()),
-    }
+    user_message_content = dict(pack_context)
     pack_payload = {
         "sid": sid,
         "account_id": account_id,
         "model": "gpt-4o-mini",
         "built_at": timestamp,
-        "note_text": note_text,
         "context": pack_context,
-        "note_metrics": note_metrics,
         "messages": [
             {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
             {"role": "user", "content": user_message_content},
@@ -722,7 +693,6 @@ def build_note_style_pack_for_account(
     return {
         "status": "completed",
         "packs_total": index_payload.get("totals", {}).get("packs_total", 1),
-        "note_metrics": note_metrics,
     }
 
 

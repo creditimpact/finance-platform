@@ -92,7 +92,10 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     pack_payload = json.loads(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
     )
-    baseline_metrics = pack_payload["note_metrics"]
+    context_payload = pack_payload["context"]
+    assert "note_metrics" not in pack_payload
+    note_text = context_payload["note_text"]
+    baseline_metrics = {"char_len": len(note_text), "word_len": len(note_text.split())}
 
     result_payload = {
         "sid": sid,

@@ -51,6 +51,45 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
     run_dir = tmp_path / sid
     response_dir = run_dir / "frontend" / "review" / "responses"
 
+    account_dir = run_dir / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+    meta_payload = {"heading_guess": "Capital One"}
+    bureaus_payload = {
+        "transunion": {
+            "account_type": "Credit Card",
+            "account_status": "Open",
+            "payment_status": "Current",
+        }
+    }
+    tags_payload = [{"kind": "issue", "type": "late_payment"}]
+    (account_dir / "meta.json").write_text(
+        json.dumps(meta_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps(tags_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    manifest_payload = {
+        "artifacts": {
+            "cases": {
+                "accounts": {
+                    account_id: {
+                        "dir": f"cases/accounts/{account_id}",
+                        "meta": "meta.json",
+                        "bureaus": "bureaus.json",
+                        "tags": "tags.json",
+                    }
+                }
+            }
+        }
+    }
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
     _write_response(
         response_dir / f"{account_id}.result.json",
         {

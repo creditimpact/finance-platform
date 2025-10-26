@@ -8,7 +8,7 @@ import math
 import re
 import unicodedata
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -155,41 +155,29 @@ def build_pack(
     tags_payload = _ensure_sequence(_load_json(account_dir / "tags.json"))
     meta_payload = _ensure_mapping(_load_json(account_dir / "meta.json"))
 
-    account_payload = _build_account_payload(meta_payload, bureaus_payload, tags_payload)
-
-    bureaus_summary = _summarize_bureaus(bureaus_payload)
-    account_context = _build_account_context(
-        meta_payload, bureaus_payload, tags_payload, bureaus_summary
-    )
-
     meta_name = _extract_meta_name(meta_payload, account_id)
     bureau_data = _extract_bureau_data(bureaus_payload)
     primary_issue_tag = _extract_primary_issue_tag(tags_payload)
 
-    context_payload = {
-        "meta_name": meta_name,
-        "primary_issue_tag": primary_issue_tag,
-        "bureau_data": bureau_data,
-        "note_text": note_text,
-    }
+    context_payload: dict[str, Any] = {}
+    if meta_name:
+        context_payload["meta_name"] = meta_name
+    if primary_issue_tag:
+        context_payload["primary_issue_tag"] = primary_issue_tag
+    if bureau_data:
+        context_payload["bureau_data"] = bureau_data
+    context_payload["note_text"] = note_text
 
-    note_metrics = {
-        "char_len": len(note_text),
-        "word_len": len(note_text.split()),
-    }
-
-    system_message = _build_system_message(account_context, bureaus_summary)
+    system_message = _build_system_message(None, None)
     user_message = _build_user_message_content(context_payload)
+
+    built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     pack_payload = {
         "sid": sid,
         "account_id": account_id,
-        "channel": "frontend_review",
-        "note_text": note_text,
-        "note_metrics": note_metrics,
-        "account_payload": account_payload,
-        "account_context": account_context,
-        "bureaus_summary": bureaus_summary,
+        "model": "gpt-4o-mini",
+        "built_at": built_at,
         "context": context_payload,
         "messages": [
             {"role": "system", "content": system_message},
@@ -652,20 +640,16 @@ def _extract_bureau_data(bureaus_payload: Mapping[str, Any]) -> Mapping[str, Any
     if not isinstance(bureaus_payload, Mapping):
         return {}
 
-    bureau_data: dict[str, Any] = {}
     majority_values = _build_majority_values(bureaus_payload)
     if majority_values:
-        bureau_data["majority_values"] = majority_values
+        return majority_values
 
-    per_bureau: dict[str, Any] = {}
     for bureau_key in _BUREAU_KEYS:
         filtered = _filter_bureau_fields(bureaus_payload.get(bureau_key))
         if filtered:
-            per_bureau[bureau_key] = filtered
-    if per_bureau:
-        bureau_data["per_bureau"] = per_bureau
+            return filtered
 
-    return bureau_data
+    return {}
 
 
 def _issue_type_from_entry(entry: Any) -> str | None:

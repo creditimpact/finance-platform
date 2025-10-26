@@ -258,10 +258,14 @@ def test_note_style_sender_skips_when_existing_result_matches(
     pack_payload = json.loads(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
     )
+    note_text = pack_payload["context"]["note_text"]
     final_result = {
         "sid": sid,
         "account_id": account_id,
-        "note_metrics": pack_payload["note_metrics"],
+        "note_metrics": {
+            "char_len": len(note_text),
+            "word_len": len(note_text.split()),
+        },
         "analysis": {
             "tone": "neutral",
             "context_hints": {

@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, MutableMapping
 
-from backend import config
 from backend.ai.manifest import ensure_note_style_section
 from backend.core.ai.paths import (
     NoteStylePaths,
@@ -334,25 +333,15 @@ def build_note_style_pack_for_account(
         "note_text": note_text,
     }
 
-    debug_snapshot = {
-        "sid": sid,
-        "account_id": account_id,
-        "collected_at": timestamp,
-        "meta": meta_payload,
-        "bureaus": bureaus_payload,
-        "tags": tags_payload,
-        "note_text": note_text,
-    }
-
     pack_payload = {
         "sid": sid,
         "account_id": account_id,
-        "model": config.NOTE_STYLE_MODEL,
+        "model": "gpt-4o-mini",
         "built_at": timestamp,
         "context": pack_context,
         "messages": [
             {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(pack_context, ensure_ascii=False)},
+            {"role": "user", "content": pack_context},
         ],
     }
 
@@ -369,11 +358,6 @@ def build_note_style_pack_for_account(
 
     _write_jsonl(account_paths.pack_file, pack_payload)
     _write_jsonl(account_paths.result_file, result_payload)
-    account_paths.debug_file.write_text(
-        json.dumps(debug_snapshot, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
     index_payload = _ensure_index_entry(
         paths=paths,
         account_id=account_id,

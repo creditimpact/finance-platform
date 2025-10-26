@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Optional
 
 from backend import config
-from backend.ai.note_style import schedule_prepare_and_send
 from backend.core.paths.frontend_review import ensure_frontend_review_dirs
 from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest, persist_manifest
 
@@ -20,6 +19,16 @@ log = logging.getLogger(__name__)
 
 
 _WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:[/\\]")
+
+
+# Lazily imported to avoid circular imports during module initialization.
+schedule_prepare_and_send = None
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
 
 
 def _normalize_manifest_path_value(
@@ -120,6 +129,12 @@ def update_manifest_state(
         effective_runs_root = runs_root if runs_root is not None else base_dir
 
         if config.NOTE_STYLE_ENABLED:
+            global schedule_prepare_and_send
+            if schedule_prepare_and_send is None:
+                from backend.ai.note_style import schedule_prepare_and_send as _schedule_prepare_and_send
+
+                schedule_prepare_and_send = _schedule_prepare_and_send
+
             try:
                 schedule_prepare_and_send(sid, runs_root=effective_runs_root)
             except Exception:  # pragma: no cover - defensive logging
@@ -164,7 +179,7 @@ def update_manifest_frontend(
     packs_count_value = max(packs_count_glob, packs_count_param)
 
     responses_count = len(glob.glob(os.path.join(responses_dir_path, "*.json")))
-    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now_iso = _now_iso()
 
     last_built_value: str | None
     if built:
@@ -201,5 +216,100 @@ def update_manifest_frontend(
     return target_manifest
 
 
-__all__ = ["update_manifest_state", "update_manifest_frontend"]
+def _ensure_stage_status_payload(manifest: RunManifest, stage_key: str) -> dict:
+    data = manifest.data
+    if not isinstance(data, dict):
+        data = {}
+        manifest.data = data
+
+    ai_section = data.setdefault("ai", {})
+    if not isinstance(ai_section, dict):
+        ai_section = {}
+        data["ai"] = ai_section
+
+    packs_section = ai_section.setdefault("packs", {})
+    if not isinstance(packs_section, dict):
+        packs_section = {}
+        ai_section["packs"] = packs_section
+
+    stage_section = packs_section.setdefault(stage_key, {})
+    if not isinstance(stage_section, dict):
+        stage_section = {}
+        packs_section[stage_key] = stage_section
+
+    status_payload = stage_section.setdefault("status", {})
+    if not isinstance(status_payload, dict):
+        status_payload = {}
+        stage_section["status"] = status_payload
+
+    status_payload.setdefault("built", False)
+    status_payload.setdefault("sent", False)
+    status_payload.setdefault("completed_at", None)
+
+    return status_payload
+
+
+def update_manifest_ai_stage_result(
+    sid: str,
+    stage: str,
+    *,
+    manifest: Optional[RunManifest] = None,
+    runs_root: Optional[Path | str] = None,
+    completed_at: Optional[str] = None,
+) -> RunManifest:
+    """Mark ``stage`` as sent with ``completed_at`` inside the manifest."""
+
+    stage_key = str(stage).strip().lower()
+    if not stage_key:
+        raise ValueError("stage is required")
+
+    target_manifest = _resolve_manifest(
+        sid, manifest=manifest, runs_root=runs_root
+    )
+
+    status_payload = _ensure_stage_status_payload(target_manifest, stage_key)
+    stage_status = target_manifest.ensure_ai_stage_status(stage_key)
+
+    existing_completed = status_payload.get("completed_at")
+    if isinstance(existing_completed, str) and existing_completed.strip():
+        timestamp = existing_completed.strip()
+    else:
+        timestamp_candidate = str(completed_at).strip() if completed_at else ""
+        timestamp = timestamp_candidate or _now_iso()
+
+    changed = False
+
+    if not bool(status_payload.get("sent")):
+        status_payload["sent"] = True
+        changed = True
+    elif status_payload.get("sent") is not True:
+        status_payload["sent"] = True
+        changed = True
+
+    if status_payload.get("completed_at") != timestamp:
+        status_payload["completed_at"] = timestamp
+        changed = True
+
+    if not bool(stage_status.get("sent")):
+        stage_status["sent"] = True
+        changed = True
+    elif stage_status.get("sent") is not True:
+        stage_status["sent"] = True
+        changed = True
+
+    if stage_status.get("completed_at") != timestamp:
+        stage_status["completed_at"] = timestamp
+        changed = True
+
+    if changed:
+        persist_manifest(target_manifest)
+
+    return target_manifest
+
+
+__all__ = [
+    "update_manifest_state",
+    "update_manifest_frontend",
+    "update_manifest_ai_stage_result",
+]
 

@@ -25,6 +25,7 @@ from backend.runflow.decider import (
     reconcile_umbrella_barriers,
     refresh_validation_stage_from_index,
 )
+from backend.runflow.manifest import update_manifest_ai_stage_result
 from backend.validation.io import write_json, write_jsonl
 from backend.core.ai.eligibility_policy import (
     canonicalize_history,
@@ -584,6 +585,31 @@ def store_validation_result(
     except Exception:  # pragma: no cover - defensive logging
         log.warning(
             "VALIDATION_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
+        )
+
+    if normalized_status == "done" and result_lines:
+        try:
+            update_manifest_ai_stage_result(
+                sid,
+                "validation",
+                runs_root=runs_root_path,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_MANIFEST_STAGE_RESULT_UPDATE_FAILED sid=%s account_id=%s path=%s",
+                sid,
+                account_id,
+                str(summary_path),
+                exc_info=True,
+            )
+    else:
+        log.info(
+            "VALIDATION_MANIFEST_STAGE_RESULT_SKIPPED sid=%s account_id=%s status=%s path=%s decisions=%s",
+            sid,
+            account_id,
+            normalized_status,
+            str(summary_path),
+            len(result_lines),
         )
 
     return summary_path

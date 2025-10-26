@@ -11,6 +11,7 @@ from typing import Any, Mapping, MutableMapping, Sequence
 from backend.ai.note_style_results import store_note_style_result
 from backend.core.ai.paths import NoteStyleAccountPaths
 from backend.note_style.validator import coerce_text, validate_analysis_payload
+from backend.runflow.manifest import update_manifest_ai_stage_result
 
 
 log = logging.getLogger(__name__)
@@ -128,13 +129,30 @@ def ingest_note_style_result(
 
     log.info("NOTE_STYLE_PARSED sid=%s account_id=%s", sid, account_id)
 
-    return store_note_style_result(
+    result_path = store_note_style_result(
         sid,
         account_id,
         result_payload,
         runs_root=runs_root,
         completed_at=_now_iso(),
     )
+
+    try:
+        update_manifest_ai_stage_result(
+            sid,
+            "note_style",
+            runs_root=runs_root,
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "NOTE_STYLE_MANIFEST_STAGE_RESULT_UPDATE_FAILED sid=%s account_id=%s path=%s",
+            sid,
+            account_id,
+            str(result_path),
+            exc_info=True,
+        )
+
+    return result_path
 
 
 __all__ = ["ingest_note_style_result"]

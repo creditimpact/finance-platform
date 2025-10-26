@@ -1305,7 +1305,14 @@ def _refresh_after_index_update(
             )
 
     if results_override is not None:
-        packs_total, packs_completed, packs_failed = results_override
+        (
+            override_total,
+            override_completed,
+            override_failed,
+        ) = results_override
+        packs_total = max(packs_total, override_total)
+        packs_completed = max(packs_completed, override_completed)
+        packs_failed = max(packs_failed, override_failed)
         if packs_total > 0 and packs_failed > 0:
             stage_status = "error"
         elif packs_total == 0:
@@ -1346,6 +1353,7 @@ def _refresh_after_index_update(
         packs_skipped=skipped_count,
     )
 
+    any_results = (packs_completed + packs_failed) > 0
     completed_timestamp: str | None
     if packs_total == 0:
         completed_timestamp = _now_iso()
@@ -1354,12 +1362,14 @@ def _refresh_after_index_update(
     else:
         completed_timestamp = None
 
+    sent_flag = packs_total == 0 or any_results
+
     try:
         update_note_style_stage_status(
             sid,
             runs_root=runs_root_path,
             built=packs_total > 0,
-            sent=completed_timestamp is not None,
+            sent=sent_flag,
             completed_at=completed_timestamp,
         )
     except Exception:  # pragma: no cover - defensive logging

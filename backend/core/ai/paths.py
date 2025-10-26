@@ -237,9 +237,9 @@ def ensure_note_style_paths(
     default_packs = (run_base / config.NOTE_STYLE_PACKS_DIR).resolve()
     default_results = (run_base / config.NOTE_STYLE_RESULTS_DIR).resolve()
 
-    base_path = default_base
-    packs_dir = default_packs
-    results_dir = default_results
+    base_path: Path | None = None
+    packs_dir: Path | None = None
+    results_dir: Path | None = None
     index_file: Path | None = None
     log_file: Path | None = None
 
@@ -307,15 +307,24 @@ def ensure_note_style_paths(
                             if packs_candidate is not None:
                                 packs_dir = packs_candidate
                             elif base_candidate is not None:
-                                packs_dir = (base_path / "packs").resolve()
+                                packs_dir = (base_candidate / "packs").resolve()
                             if results_candidate is not None:
                                 results_dir = results_candidate
                             elif base_candidate is not None:
-                                results_dir = (base_path / "results").resolve()
+                                results_dir = (base_candidate / "results").resolve()
                             if index_candidate is not None:
                                 index_file = index_candidate
                             if log_candidate is not None:
                                 log_file = log_candidate
+
+    if base_path is None:
+        base_path = default_base
+    if packs_dir is None:
+        packs_dir = default_packs if base_path == default_base else (base_path / "packs").resolve()
+    if results_dir is None:
+        results_dir = (
+            default_results if base_path == default_base else (base_path / "results").resolve()
+        )
 
     results_raw_dir = base_path / "results_raw"
     debug_dir = base_path / "debug"

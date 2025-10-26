@@ -6,6 +6,8 @@ import pytest
 
 import backend.ai.note_style as note_style_module
 from backend.ai.note_style import prepare_and_send, schedule_prepare_and_send
+from backend.ai.note_style.tasks import note_style_send_account_task
+from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
 
 
@@ -99,9 +101,12 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
         },
     )
 
-    client = _StubClient()
+    send_calls: list[tuple[str, str, str | None]] = []
     monkeypatch.setattr(
-        "backend.ai.note_style_sender.get_ai_client", lambda: client
+        "backend.ai.note_style.tasks.note_style_send_account_task.delay",
+        lambda sid_arg, account_arg, *, runs_root=None: send_calls.append(
+            (sid_arg, account_arg, runs_root)
+        ),
     )
 
     result = prepare_and_send(sid, runs_root=tmp_path)
@@ -109,7 +114,7 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
     assert result["accounts_discovered"] == 1
     assert result["packs_built"] == 1
     assert result["processed_accounts"] == [account_id]
-    assert client.calls
+    assert send_calls == [(sid, account_id, str(tmp_path))]
 
     paths = ensure_note_style_paths(tmp_path, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -119,31 +124,108 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
         for line in account_paths.pack_file.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    result_lines = [
-        line.strip()
-        for line in account_paths.result_file.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
 
     assert len(pack_lines) == 1
-    assert len(result_lines) == 1
-
-    stored_payload = json.loads(result_lines[0])
-    assert stored_payload["sid"] == sid
-    assert stored_payload["account_id"] == account_id
-    assert stored_payload["analysis"]["tone"] == "Empathetic"
     pack_payload = json.loads(pack_lines[0])
-    assert "account_context" not in stored_payload
-    assert "bureaus_summary" not in stored_payload
     assert pack_payload["messages"][1]["content"]["note_text"]
-    assert client.calls[0]["kwargs"].get("response_format") == "json_object"
+    assert not account_paths.result_file.exists()
 
     runflow_path = run_dir / "runflow.json"
     assert runflow_path.is_file()
     runflow_payload = json.loads(runflow_path.read_text(encoding="utf-8"))
     note_style_stage = runflow_payload["stages"]["note_style"]
-    assert note_style_stage["status"] == "success"
-    assert note_style_stage["results"]["completed"] >= 1
+    assert note_style_stage["status"] == "built"
+    assert note_style_stage["results"]["completed"] == 0
+
+    manifest_path = run_dir / "manifest.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stage_status = manifest_data["ai"]["status"]["note_style"]
+    assert stage_status["built"] is True
+    assert stage_status["sent"] is False
+    assert stage_status["completed_at"] is None
+
+
+def test_note_style_send_account_task_processes_pack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID201A"
+    account_id = "idx-201"
+    run_dir = tmp_path / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    account_dir = run_dir / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+    meta_payload = {"heading_guess": "Capital One"}
+    bureaus_payload = {
+        "transunion": {
+            "account_type": "Credit Card",
+            "account_status": "Open",
+            "payment_status": "Current",
+        }
+    }
+    tags_payload = [{"kind": "issue", "type": "late_payment"}]
+    (account_dir / "meta.json").write_text(
+        json.dumps(meta_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps(tags_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    manifest_payload = {
+        "artifacts": {
+            "cases": {
+                "accounts": {
+                    account_id: {
+                        "dir": f"cases/accounts/{account_id}",
+                        "meta": "meta.json",
+                        "bureaus": "bureaus.json",
+                        "tags": "tags.json",
+                    }
+                }
+            }
+        }
+    }
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Please help, I already paid."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=tmp_path)
+
+    client = _StubClient()
+    monkeypatch.setattr(
+        "backend.ai.note_style_sender.get_ai_client", lambda: client
+    )
+
+    task_result = note_style_send_account_task(
+        sid, account_id, runs_root=str(tmp_path)
+    )
+
+    assert task_result["processed"] is True
+    assert client.calls
+
+    paths = ensure_note_style_paths(tmp_path, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    assert account_paths.result_file.is_file()
+
+    result_lines = [
+        line.strip()
+        for line in account_paths.result_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    stored_payload = json.loads(result_lines[0])
+    assert stored_payload["analysis"]["tone"] == "Empathetic"
 
     manifest_path = run_dir / "manifest.json"
     manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -151,6 +233,11 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
     assert stage_status["built"] is True
     assert stage_status["sent"] is True
     assert isinstance(stage_status["completed_at"], str)
+
+    runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
+    note_style_stage = runflow_payload["stages"]["note_style"]
+    assert note_style_stage["status"] == "success"
+    assert note_style_stage["results"]["completed"] >= 1
 
 
 def test_prepare_and_send_records_empty_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

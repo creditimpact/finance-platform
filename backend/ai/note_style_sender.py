@@ -409,6 +409,164 @@ def _handle_invalid_response(
     )
 
 
+def _send_pack_payload(
+    *,
+    sid: str,
+    account_id: str,
+    pack_payload: Mapping[str, Any],
+    pack_relative: str,
+    pack_path: Path,
+    account_paths: NoteStyleAccountPaths,
+    paths: NoteStylePaths,
+    runs_root_path: Path,
+    client: Any,
+) -> bool:
+    log.info(
+        "STYLE_SEND_ACCOUNT_START sid=%s account_id=%s pack=%s",
+        sid,
+        account_id,
+        pack_path,
+    )
+
+    if config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS and _result_has_completed_analysis(
+        account_paths.result_file
+    ):
+        log.info(
+            "STYLE_SEND_SKIP_EXISTING sid=%s account_id=%s result=%s",
+            sid,
+            account_id,
+            _relativize(account_paths.result_file, paths.base),
+        )
+        log_structured_event(
+            "NOTE_STYLE_SEND_SKIPPED",
+            logger=log,
+            sid=sid,
+            account_id=account_id,
+            reason="existing_analysis",
+            result_path=_relativize(account_paths.result_file, paths.base),
+        )
+        return False
+
+    model = str(pack_payload.get("model") or "").strip()
+    if not model:
+        model = config.NOTE_STYLE_MODEL
+    messages = _coerce_messages(pack_payload)
+
+    start = time.perf_counter()
+    try:
+        response = client.chat_completion(
+            model=model or None,
+            messages=list(messages),
+            temperature=0,
+            response_format="json_object",
+        )
+        latency = time.perf_counter() - start
+        log.info(
+            "STYLE_SEND_MODEL_CALL sid=%s account_id=%s model=%s status=success latency=%.3fs",
+            sid,
+            account_id,
+            model or "",
+            latency,
+        )
+    except Exception:
+        latency = time.perf_counter() - start
+        log.exception(
+            "STYLE_SEND_MODEL_CALL sid=%s account_id=%s model=%s status=error latency=%.3fs",
+            sid,
+            account_id,
+            model or "",
+            latency,
+        )
+        raise
+
+    try:
+        _ensure_valid_json_response(response)
+    except ValueError as exc:
+        reason_text = str(exc).strip() or exc.__class__.__name__
+        _handle_invalid_response(
+            sid=sid,
+            account_id=account_id,
+            account_paths=account_paths,
+            response_payload=response,
+            runs_root_path=runs_root_path,
+            reason=reason_text,
+        )
+        return False
+
+    try:
+        written_path = ingest_note_style_result(
+            sid=sid,
+            account_id=account_id,
+            runs_root=runs_root_path,
+            account_paths=account_paths,
+            pack_payload=pack_payload,
+            response_payload=response,
+        )
+    except ValueError as exc:
+        log.warning(
+            "STYLE_SEND_RESULTS_FAILED sid=%s account_id=%s reason=parse_error",
+            sid,
+            account_id,
+            exc_info=True,
+        )
+        reason_text = str(exc).strip() or exc.__class__.__name__
+        _handle_invalid_response(
+            sid=sid,
+            account_id=account_id,
+            account_paths=account_paths,
+            response_payload=response,
+            runs_root_path=runs_root_path,
+            reason=reason_text,
+        )
+        return False
+    except NotImplementedError:
+        written_path = account_paths.result_file
+    except Exception as exc:
+        log.exception(
+            "STYLE_SEND_RESULTS_FAILED sid=%s account_id=%s",
+            sid,
+            account_id,
+        )
+        _write_raw_response(
+            account_paths=account_paths,
+            response_payload=response,
+        )
+        record_note_style_failure(
+            sid,
+            account_id,
+            runs_root=runs_root_path,
+            error=str(exc),
+        )
+        raise
+
+    result_path = _coerce_result_path(written_path) or account_paths.result_file
+    log.info(
+        "NOTE_STYLE_SENT sid=%s account_id=%s result=%s",
+        sid,
+        account_id,
+        result_path,
+    )
+
+    result_relative = _relativize(result_path, paths.base)
+    log_structured_event(
+        "NOTE_STYLE_SENT",
+        logger=log,
+        sid=sid,
+        account_id=account_id,
+        model=model or "",
+        latency_seconds=latency,
+        pack_path=pack_relative,
+        result_path=result_relative,
+    )
+
+    log.info(
+        "STYLE_SEND_ACCOUNT_END sid=%s account_id=%s status=completed",
+        sid,
+        account_id,
+    )
+    return True
+
+
 def send_note_style_packs_for_sid(
     sid: str,
     *,
@@ -483,152 +641,68 @@ def send_note_style_packs_for_sid(
                 paths, account_id, create=True
             )
 
-            log.info(
-                "STYLE_SEND_ACCOUNT_START sid=%s account_id=%s pack=%s",
-                sid,
-                account_id,
-                pack_path,
-            )
-
-            if config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS and _result_has_completed_analysis(
-                account_paths.result_file
-            ):
-                log.info(
-                    "STYLE_SEND_SKIP_EXISTING sid=%s account_id=%s result=%s",
-                    sid,
-                    account_id,
-                    _relativize(account_paths.result_file, paths.base),
-                )
-                log_structured_event(
-                    "NOTE_STYLE_SEND_SKIPPED",
-                    logger=log,
-                    sid=sid,
-                    account_id=account_id,
-                    reason="existing_analysis",
-                    result_path=_relativize(account_paths.result_file, paths.base),
-                )
-                continue
-
-            model = str(pack_payload.get("model") or "").strip()
-            if not model:
-                model = config.NOTE_STYLE_MODEL
-            messages = _coerce_messages(pack_payload)
-
-            start = time.perf_counter()
-            try:
-                response = client.chat_completion(
-                    model=model or None,
-                    messages=list(messages),
-                    temperature=0,
-                    response_format="json_object",
-                )
-                latency = time.perf_counter() - start
-                log.info(
-                    "STYLE_SEND_MODEL_CALL sid=%s account_id=%s model=%s status=success latency=%.3fs",
-                    sid,
-                    account_id,
-                    model or "",
-                    latency,
-                )
-            except Exception:
-                latency = time.perf_counter() - start
-                log.exception(
-                    "STYLE_SEND_MODEL_CALL sid=%s account_id=%s model=%s status=error latency=%.3fs",
-                    sid,
-                    account_id,
-                    model or "",
-                    latency,
-                )
-                raise
-
-            try:
-                _ensure_valid_json_response(response)
-            except ValueError as exc:
-                reason_text = str(exc).strip() or exc.__class__.__name__
-                _handle_invalid_response(
-                    sid=sid,
-                    account_id=account_id,
-                    account_paths=account_paths,
-                    response_payload=response,
-                    runs_root_path=runs_root_path,
-                    reason=reason_text,
-                )
-                continue
-
-            try:
-                written_path = ingest_note_style_result(
-                    sid=sid,
-                    account_id=account_id,
-                    runs_root=runs_root_path,
-                    account_paths=account_paths,
-                    pack_payload=pack_payload,
-                    response_payload=response,
-                )
-            except ValueError as exc:
-                log.warning(
-                    "STYLE_SEND_RESULTS_FAILED sid=%s account_id=%s reason=parse_error",
-                    sid,
-                    account_id,
-                    exc_info=True,
-                )
-                reason_text = str(exc).strip() or exc.__class__.__name__
-                _handle_invalid_response(
-                    sid=sid,
-                    account_id=account_id,
-                    account_paths=account_paths,
-                    response_payload=response,
-                    runs_root_path=runs_root_path,
-                    reason=reason_text,
-                )
-                continue
-            except NotImplementedError:
-                written_path = account_paths.result_file
-            except Exception as exc:
-                log.exception(
-                    "STYLE_SEND_RESULTS_FAILED sid=%s account_id=%s",
-                    sid,
-                    account_id,
-                )
-                _write_raw_response(
-                    account_paths=account_paths,
-                    response_payload=response,
-                )
-                record_note_style_failure(
-                    sid,
-                    account_id,
-                    runs_root=runs_root_path,
-                    error=str(exc),
-                )
-                raise
-
-            result_path = _coerce_result_path(written_path) or account_paths.result_file
-            log.info(
-                "NOTE_STYLE_SENT sid=%s account_id=%s result=%s",
-                sid,
-                account_id,
-                result_path,
-            )
-
-            result_relative = _relativize(result_path, paths.base)
-            log_structured_event(
-                "NOTE_STYLE_SENT",
-                logger=log,
+            if _send_pack_payload(
                 sid=sid,
                 account_id=account_id,
-                model=model or "",
-                latency_seconds=latency,
-                pack_path=pack_relative,
-                result_path=result_relative,
-            )
-
-            log.info(
-                "STYLE_SEND_ACCOUNT_END sid=%s account_id=%s status=completed",
-                sid,
-                account_id,
-            )
-            processed.append(account_id)
+                pack_payload=pack_payload,
+                pack_relative=pack_relative,
+                pack_path=pack_path,
+                account_paths=account_paths,
+                paths=paths,
+                runs_root_path=runs_root_path,
+                client=client,
+            ):
+                processed.append(account_id)
 
     return processed
 
 
-__all__ = ["send_note_style_packs_for_sid"]
+def send_note_style_pack_for_account(
+    sid: str,
+    account_id: str,
+    *,
+    runs_root: Path | str | None = None,
+) -> bool:
+    runs_root_path = _resolve_runs_root(runs_root)
+    paths = ensure_note_style_paths(runs_root_path, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
+
+    pack_path = account_paths.pack_file
+    if not pack_path.exists():
+        log.info(
+            "STYLE_SEND_PACK_MISSING sid=%s account_id=%s path=%s",
+            sid,
+            account_id,
+            pack_path,
+        )
+        return False
+
+    try:
+        pack_records = _load_pack_records(pack_path)
+    except Exception:
+        log.exception(
+            "STYLE_SEND_PACK_LOAD_FAILED sid=%s path=%s", sid, pack_path
+        )
+        raise
+
+    pack_relative = _relativize(pack_path, paths.base)
+    client = get_ai_client()
+
+    for pack_payload in pack_records:
+        if _send_pack_payload(
+            sid=sid,
+            account_id=account_id,
+            pack_payload=pack_payload,
+            pack_relative=pack_relative,
+            pack_path=pack_path,
+            account_paths=account_paths,
+            paths=paths,
+            runs_root_path=runs_root_path,
+            client=client,
+        ):
+            return True
+
+    return False
+
+
+__all__ = ["send_note_style_packs_for_sid", "send_note_style_pack_for_account"]

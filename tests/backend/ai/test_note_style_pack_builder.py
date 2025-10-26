@@ -107,36 +107,21 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     pack_payload = build_pack(sid, account_id, runs_root=tmp_path)
 
     assert set(pack_payload.keys()) == {
-        "sid",
-        "account_id",
-        "model",
-        "built_at",
-        "context",
+        "meta_name",
+        "primary_issue_tag",
+        "bureau_data",
+        "note_text",
         "messages",
-        "note_metrics",
     }
-    assert pack_payload["sid"] == sid
-    assert pack_payload["account_id"] == account_id
-    assert pack_payload["model"]
-    assert pack_payload["built_at"].endswith("Z")
+    assert pack_payload["meta_name"] == "Capital One Services"
+    assert pack_payload["primary_issue_tag"] == "late_payment"
 
-    context = pack_payload["context"]
-    assert context["meta_name"] == "Capital One Services"
-    assert context["primary_issue_tag"] == "late_payment"
-    assert (
-        context["note_text"]
-        == "Customer says the balance is wrong and wants help."
-    )
+    note_text = pack_payload["note_text"]
+    assert note_text == "Customer says the balance is wrong and wants help."
 
-    bureau_data = context["bureau_data"]
+    bureau_data = pack_payload["bureau_data"]
     assert bureau_data["account_type"] == "Credit Card"
     assert bureau_data["account_status"] == "Open"
-
-    note_metrics = pack_payload["note_metrics"]
-    assert note_metrics == {
-        "char_len": len(context["note_text"]),
-        "word_len": len(context["note_text"].split()),
-    }
 
     pack_path = tmp_path / sid / "ai_packs" / "note_style" / "packs" / "acc_idx-007.jsonl"
     assert pack_path.is_file()
@@ -156,7 +141,7 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
         "meta_name": "Capital One Services",
         "primary_issue_tag": "late_payment",
         "bureau_data": bureau_data,
-        "note_text": "Customer says the balance is wrong and wants help.",
+        "note_text": note_text,
     }
 
 

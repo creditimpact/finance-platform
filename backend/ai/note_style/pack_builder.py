@@ -8,7 +8,7 @@ import math
 import re
 import unicodedata
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -18,7 +18,6 @@ from backend.core.ai.paths import (
     ensure_note_style_account_paths,
     ensure_note_style_paths,
 )
-from backend import config
 
 
 log = logging.getLogger(__name__)
@@ -98,10 +97,6 @@ _BASE_SYSTEM_MESSAGE = (
     " \"amount\": number|null}}, \"emphasis\": [string], \"confidence\": number,"
     " \"risk_flags\": [string]}. Never include explanations or additional keys."
 )
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
 
 def _build_system_message(
     account_context: Mapping[str, Any] | None,
@@ -184,29 +179,15 @@ def build_pack(
 
     system_message = _build_system_message(None, None)
 
-    context_payload = {
+    pack_payload: dict[str, Any] = {
         "meta_name": meta_name,
         "primary_issue_tag": primary_issue_tag,
         "bureau_data": bureau_context,
         "note_text": note_text,
-    }
-
-    note_metrics = {
-        "char_len": len(note_text),
-        "word_len": len(note_text.split()),
-    }
-
-    pack_payload: dict[str, Any] = {
-        "sid": sid,
-        "account_id": account_id,
-        "model": config.NOTE_STYLE_MODEL,
-        "built_at": _now_iso(),
-        "context": context_payload,
         "messages": [
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message},
         ],
-        "note_metrics": note_metrics,
     }
 
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
@@ -229,7 +210,7 @@ def build_pack(
     )
 
     log.info(
-        "NOTE_STYLE_PACK_BUILT sid=%s account=%s fields=[sid,account_id,model,built_at,context,note_metrics]",
+        "NOTE_STYLE_PACK_BUILT sid=%s account=%s fields=[meta_name,primary_issue_tag,bureau_data,note_text,messages]",
         sid,
         account_id,
     )

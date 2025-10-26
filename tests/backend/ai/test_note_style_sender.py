@@ -118,13 +118,25 @@ def test_note_style_sender_sends_built_pack(
     ]
     assert len(result_lines) == 1
     stored_payload = json.loads(result_lines[0])
-    assert set(stored_payload.keys()) == {"sid", "account_id", "analysis", "note_metrics"}
+    assert set(stored_payload.keys()) == {
+        "sid",
+        "account_id",
+        "evaluated_at",
+        "analysis",
+        "note_metrics",
+    }
     assert stored_payload["sid"] == sid
     assert stored_payload["account_id"] == account_id
+    assert stored_payload["evaluated_at"].endswith("Z")
 
     pack_payload = json.loads(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
     )
+    note_text = pack_payload["note_text"]
+    assert stored_payload["note_metrics"] == {
+        "char_len": len(note_text),
+        "word_len": len(note_text.split()),
+    }
     assert "prompt_salt" not in stored_payload
     assert "prompt_salt" not in pack_payload
     assert "fingerprint_hash" not in stored_payload
@@ -258,8 +270,7 @@ def test_note_style_sender_skips_when_existing_result_matches(
     pack_payload = json.loads(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
     )
-    context = pack_payload["context"]
-    note_text = context["note_text"]
+    note_text = pack_payload["note_text"]
     final_result = {
         "sid": sid,
         "account_id": account_id,

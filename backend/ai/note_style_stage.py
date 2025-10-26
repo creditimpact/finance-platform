@@ -691,29 +691,19 @@ def build_note_style_pack_for_account(
     bureau_data = build_bureau_data(bureaus_path)
     timestamp = _now_iso()
 
-    pack_context: dict[str, Any] = {
+    pack_body: dict[str, Any] = {
         "meta_name": meta_name,
         "primary_issue_tag": primary_issue_tag,
         "bureau_data": bureau_data,
         "note_text": note_text,
     }
 
-    user_message_content = dict(pack_context)
-    note_metrics = {
-        "char_len": len(note_text),
-        "word_len": len(note_text.split()),
-    }
     pack_payload = {
-        "sid": sid,
-        "account_id": account_id,
-        "model": config.NOTE_STYLE_MODEL,
-        "built_at": timestamp,
-        "context": pack_context,
+        **pack_body,
         "messages": [
             {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message_content},
+            {"role": "user", "content": dict(pack_body)},
         ],
-        "note_metrics": note_metrics,
     }
     _write_jsonl(account_paths.pack_file, pack_payload)
     if account_paths.result_file.exists():

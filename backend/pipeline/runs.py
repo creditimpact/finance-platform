@@ -359,9 +359,11 @@ class RunManifest:
     @staticmethod
     def _stage_status_defaults(stage_key: str) -> dict[str, object]:
         key = stage_key.strip().lower()
-        defaults: dict[str, object] = {"built": False, "completed_at": None}
-        if key != "note_style":
-            defaults["sent"] = False
+        defaults: dict[str, object] = {
+            "built": False,
+            "sent": False,
+            "completed_at": None,
+        }
         return defaults
 
     def _ensure_ai_section(self) -> tuple[dict[str, object], dict[str, object]]:
@@ -436,13 +438,14 @@ class RunManifest:
                 "logs",
             ):
                 note_style_section.setdefault(key, None)
-            status_payload = note_style_section.get("status")
-            if not isinstance(status_payload, dict):
-                status_payload = {"built": False, "completed_at": None}
-                note_style_section["status"] = status_payload
-            else:
-                status_payload.setdefault("built", False)
-                status_payload.setdefault("completed_at", None)
+        status_payload = note_style_section.get("status")
+        if not isinstance(status_payload, dict):
+            status_payload = {"built": False, "sent": False, "completed_at": None}
+            note_style_section["status"] = status_payload
+        else:
+            status_payload.setdefault("built", False)
+            status_payload.setdefault("sent", False)
+            status_payload.setdefault("completed_at", None)
         ai.setdefault(
             "validation",
             {
@@ -473,8 +476,6 @@ class RunManifest:
             for key, value in stage_defaults.items():
                 stage_status.setdefault(key, value)
 
-            if stage_key == "note_style":
-                stage_status.pop("sent", None)
         return packs, status
 
     def ensure_ai_stage_status(self, stage: str) -> dict[str, object]:
@@ -492,8 +493,6 @@ class RunManifest:
         else:
             for key, value in stage_defaults.items():
                 stage_status.setdefault(key, value)
-            if stage_key == "note_style":
-                stage_status.pop("sent", None)
         return stage_status
 
     def get_ai_stage_status(self, stage: str) -> dict[str, object]:
@@ -722,18 +721,19 @@ class RunManifest:
         note_style["last_built_at"] = timestamp
 
         status_payload = note_style.setdefault(
-            "status", {"built": False, "completed_at": None}
+            "status", {"built": False, "sent": False, "completed_at": None}
         )
         if not isinstance(status_payload, dict):
             status_payload = {}
             note_style["status"] = status_payload
         status_payload["built"] = True
-        status_payload["completed_at"] = timestamp
-        status_payload.pop("sent", None)
+        status_payload["sent"] = False
+        status_payload["completed_at"] = None
 
         stage_status = self.ensure_ai_stage_status("note_style")
         stage_status["built"] = True
-        stage_status["completed_at"] = timestamp
+        stage_status["sent"] = False
+        stage_status["completed_at"] = None
 
         return self.save()
 

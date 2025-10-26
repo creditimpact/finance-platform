@@ -14,7 +14,10 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
-from backend.ai.manifest import ensure_note_style_section
+from backend.ai.manifest import (
+    ensure_note_style_section,
+    update_note_style_stage_status,
+)
 from backend.ai.note_style_logging import (
     append_note_style_warning,
     log_structured_event,
@@ -1342,6 +1345,25 @@ def _refresh_after_index_update(
         packs_failed=packs_failed,
         packs_skipped=skipped_count,
     )
+
+    completed_timestamp: str | None
+    if packs_total == 0:
+        completed_timestamp = _now_iso()
+    elif packs_total > 0 and (packs_completed + packs_failed) >= packs_total:
+        completed_timestamp = _now_iso()
+    else:
+        completed_timestamp = None
+
+    try:
+        update_note_style_stage_status(
+            sid,
+            runs_root=runs_root_path,
+            built=packs_total > 0,
+            sent=completed_timestamp is not None,
+            completed_at=completed_timestamp,
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning("NOTE_STYLE_MANIFEST_STAGE_UPDATE_FAILED sid=%s", sid, exc_info=True)
 
     try:
         record_stage(

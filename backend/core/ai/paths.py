@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 
@@ -231,9 +232,91 @@ def ensure_note_style_paths(
     """Return the canonical note_style AI pack paths for ``sid``."""
 
     runs_root_path = Path(runs_root).resolve()
-    base_path = (runs_root_path / sid / config.NOTE_STYLE_STAGE_DIR).resolve()
-    packs_dir = (runs_root_path / sid / config.NOTE_STYLE_PACKS_DIR).resolve()
-    results_dir = (runs_root_path / sid / config.NOTE_STYLE_RESULTS_DIR).resolve()
+    run_base = runs_root_path / sid
+    default_base = (run_base / config.NOTE_STYLE_STAGE_DIR).resolve()
+    default_packs = (run_base / config.NOTE_STYLE_PACKS_DIR).resolve()
+    default_results = (run_base / config.NOTE_STYLE_RESULTS_DIR).resolve()
+
+    base_path = default_base
+    packs_dir = default_packs
+    results_dir = default_results
+    index_file: Path | None = None
+    log_file: Path | None = None
+
+    if config.NOTE_STYLE_USE_MANIFEST_PATHS:
+        manifest_path = (run_base / "manifest.json").resolve()
+        try:
+            raw_manifest = manifest_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raw_manifest = ""
+        except OSError:
+            raw_manifest = ""
+
+        if raw_manifest:
+            try:
+                manifest_payload = json.loads(raw_manifest)
+            except json.JSONDecodeError:
+                manifest_payload = None
+            if isinstance(manifest_payload, dict):
+                ai_section = manifest_payload.get("ai")
+                if isinstance(ai_section, dict):
+                    packs_section = ai_section.get("packs")
+                    if isinstance(packs_section, dict):
+                        note_style_section = packs_section.get("note_style")
+                        if isinstance(note_style_section, dict):
+                            def _coerce_manifest_path(value: object) -> Path | None:
+                                if value is None:
+                                    return None
+                                if isinstance(value, Path):
+                                    candidate = value
+                                else:
+                                    try:
+                                        text = os.fspath(value)
+                                    except TypeError:
+                                        return None
+                                    if not str(text).strip():
+                                        return None
+                                    candidate = Path(str(text).strip())
+                                if not candidate.is_absolute():
+                                    candidate = (run_base / candidate).resolve()
+                                else:
+                                    candidate = candidate.resolve()
+                                return candidate
+
+                            base_candidate = _coerce_manifest_path(
+                                note_style_section.get("base")
+                                or note_style_section.get("dir")
+                            )
+                            packs_candidate = _coerce_manifest_path(
+                                note_style_section.get("packs_dir")
+                                or note_style_section.get("packs")
+                            )
+                            results_candidate = _coerce_manifest_path(
+                                note_style_section.get("results_dir")
+                                or note_style_section.get("results")
+                            )
+                            index_candidate = _coerce_manifest_path(
+                                note_style_section.get("index")
+                            )
+                            log_candidate = _coerce_manifest_path(
+                                note_style_section.get("logs")
+                            )
+
+                            if base_candidate is not None:
+                                base_path = base_candidate
+                            if packs_candidate is not None:
+                                packs_dir = packs_candidate
+                            elif base_candidate is not None:
+                                packs_dir = (base_path / "packs").resolve()
+                            if results_candidate is not None:
+                                results_dir = results_candidate
+                            elif base_candidate is not None:
+                                results_dir = (base_path / "results").resolve()
+                            if index_candidate is not None:
+                                index_file = index_candidate
+                            if log_candidate is not None:
+                                log_file = log_candidate
+
     results_raw_dir = base_path / "results_raw"
     debug_dir = base_path / "debug"
 
@@ -244,14 +327,19 @@ def ensure_note_style_paths(
         results_raw_dir.mkdir(parents=True, exist_ok=True)
         debug_dir.mkdir(parents=True, exist_ok=True)
 
+    if index_file is None:
+        index_file = base_path / "index.json"
+    if log_file is None:
+        log_file = base_path / "logs.txt"
+
     return NoteStylePaths(
-        base=base_path,
+        base=base_path.resolve(),
         packs_dir=packs_dir.resolve(),
         results_dir=results_dir.resolve(),
         results_raw_dir=results_raw_dir.resolve(),
         debug_dir=debug_dir.resolve(),
-        index_file=(base_path / "index.json").resolve(strict=False),
-        log_file=(base_path / "logs.txt").resolve(strict=False),
+        index_file=index_file.resolve(strict=False),
+        log_file=log_file.resolve(strict=False),
     )
 
 

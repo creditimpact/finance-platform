@@ -13,6 +13,9 @@ from backend.core.ai.paths import ensure_note_style_paths, ensure_validation_pat
 from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest, persist_manifest
 
 
+_MISSING = object()
+
+
 @dataclass(frozen=True)
 class StageManifestPaths:
     """Resolved filesystem paths for a specific AI stage."""
@@ -292,12 +295,19 @@ class Manifest:
 
         status_payload = note_style_section.get("status")
         if not isinstance(status_payload, Mapping):
-            note_style_section["status"] = {"built": False, "completed_at": None}
+            note_style_section["status"] = {
+                "built": False,
+                "sent": False,
+                "completed_at": None,
+            }
             changed = True
         else:
             built_changed = False
             if "built" not in status_payload:
                 status_payload["built"] = False
+                built_changed = True
+            if "sent" not in status_payload:
+                status_payload["sent"] = False
                 built_changed = True
             if "completed_at" not in status_payload:
                 status_payload["completed_at"] = None
@@ -389,6 +399,78 @@ class Manifest:
 
         return dict(note_style_section or {})
 
+    @staticmethod
+    def update_note_style_stage_status(
+        sid: str,
+        *,
+        runs_root: Path | str | None = None,
+        built: bool | None = None,
+        sent: bool | None = None,
+        completed_at: str | None | object = _MISSING,
+    ) -> dict[str, Any]:
+        """Update note_style stage status fields inside ``manifest.json``."""
+
+        sid_text = str(sid).strip()
+        if not sid_text:
+            raise ValueError("sid is required")
+
+        manifest: RunManifest
+        if runs_root is not None:
+            runs_root_path = Path(runs_root).resolve()
+            manifest_path = runs_root_path / sid_text / "manifest.json"
+            manifest = RunManifest.load_or_create(manifest_path, sid_text)
+        else:
+            manifest = RunManifest.for_sid(sid_text)
+
+        data = manifest.data if isinstance(manifest.data, dict) else {}
+        if not isinstance(manifest.data, dict):
+            manifest.data = data
+
+        ai_section = data.setdefault("ai", {})
+        if not isinstance(ai_section, dict):
+            ai_section = {}
+            data["ai"] = ai_section
+
+        packs_section = ai_section.setdefault("packs", {})
+        if not isinstance(packs_section, dict):
+            packs_section = {}
+            ai_section["packs"] = packs_section
+        note_style_section = packs_section.setdefault("note_style", {})
+        if not isinstance(note_style_section, dict):
+            note_style_section = {}
+            packs_section["note_style"] = note_style_section
+        status_payload = note_style_section.setdefault("status", {})
+        if not isinstance(status_payload, dict):
+            status_payload = {}
+            note_style_section["status"] = status_payload
+
+        stage_status = manifest.ensure_ai_stage_status("note_style")
+
+        def _assign(mapping: Mapping[str, Any] | dict[str, Any], key: str, value: Any) -> bool:
+            if not isinstance(mapping, dict):
+                raise TypeError("status payload must be a mapping")
+            current = mapping.get(key, _MISSING)
+            if current is _MISSING or current != value:
+                mapping[key] = value
+                return True
+            return False
+
+        changed = False
+        if built is not None:
+            changed |= _assign(status_payload, "built", bool(built))
+            changed |= _assign(stage_status, "built", bool(built))
+        if sent is not None:
+            changed |= _assign(status_payload, "sent", bool(sent))
+            changed |= _assign(stage_status, "sent", bool(sent))
+        if completed_at is not _MISSING:
+            changed |= _assign(status_payload, "completed_at", completed_at)
+            changed |= _assign(stage_status, "completed_at", completed_at)
+
+        if changed:
+            persist_manifest(manifest)
+
+        return dict(stage_status)
+
 
 def ensure_note_style_section(
     sid: str, *, runs_root: Path | str | None = None
@@ -411,6 +493,25 @@ def register_note_style_build(
     )
 
 
+def update_note_style_stage_status(
+    sid: str,
+    *,
+    runs_root: Path | str | None = None,
+    built: bool | None = None,
+    sent: bool | None = None,
+    completed_at: str | None | object = _MISSING,
+) -> dict[str, Any]:
+    """Proxy for :meth:`Manifest.update_note_style_stage_status`."""
+
+    return Manifest.update_note_style_stage_status(
+        sid,
+        runs_root=runs_root,
+        built=built,
+        sent=sent,
+        completed_at=completed_at,
+    )
+
+
 def ensure_validation_section(
     sid: str, *, runs_root: Path | str | None = None
 ) -> dict[str, Any]:
@@ -424,6 +525,7 @@ __all__ = [
     "StageManifestPaths",
     "ensure_note_style_section",
     "register_note_style_build",
+    "update_note_style_stage_status",
     "ensure_validation_section",
     "extract_stage_manifest_paths",
 ]

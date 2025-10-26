@@ -10,11 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from backend import config
-from backend.ai.manifest import (
-    ensure_note_style_section,
-    register_note_style_build,
-    update_note_style_stage_status,
-)
+from backend.ai.manifest import ensure_note_style_section
 from backend.ai.note_style_stage import (
     build_note_style_pack_for_account,
     discover_note_style_response_accounts,
@@ -97,41 +93,18 @@ def prepare_and_send(
             skipped += 1
 
     if built > 0:
-        try:
-            register_note_style_build(sid_text, runs_root=runs_root_path)
-        except Exception:  # pragma: no cover - defensive logging
-            log.warning(
-                "NOTE_STYLE_MANIFEST_BUILD_REGISTER_FAILED sid=%s",
-                sid_text,
-                exc_info=True,
-            )
-        try:
-            update_note_style_stage_status(
-                sid_text,
-                runs_root=runs_root_path,
-                built=True,
-                sent=False,
-                completed_at=None,
-            )
-        except Exception:  # pragma: no cover - defensive logging
-            log.warning(
-                "NOTE_STYLE_MANIFEST_STAGE_PRIME_FAILED sid=%s",
-                sid_text,
-                exc_info=True,
-            )
-
-        try:
-            from backend.ai.note_style.tasks import note_style_send_account_task
-
-            runs_root_arg = os.fspath(runs_root_path)
-            for account_id in scheduled:
-                note_style_send_account_task.delay(
-                    sid_text, account_id, runs_root=runs_root_arg
+        for account_id in scheduled:
+            try:
+                schedule_send_for_account(
+                    sid_text, account_id, runs_root=runs_root_path
                 )
-        except Exception:  # pragma: no cover - defensive logging
-            log.warning(
-                "NOTE_STYLE_SEND_TASK_SCHEDULE_FAILED sid=%s", sid_text, exc_info=True
-            )
+            except Exception:  # pragma: no cover - defensive logging
+                log.warning(
+                    "NOTE_STYLE_SEND_TASK_SCHEDULE_FAILED sid=%s account_id=%s",
+                    sid_text,
+                    account_id,
+                    exc_info=True,
+                )
 
     if not accounts:
         try:
@@ -187,6 +160,44 @@ def prepare_and_send(
     }
 
 
+def schedule_send_for_account(
+    sid: str,
+    account_id: str,
+    *,
+    runs_root: Path | str | None = None,
+) -> None:
+    """Enqueue a Celery task to send ``account_id``'s note_style pack."""
+
+    sid_text = str(sid or "").strip()
+    account_text = str(account_id or "").strip()
+    if not sid_text or not account_text:
+        return
+
+    if not config.NOTE_STYLE_ENABLED:
+        log.info(
+            "NOTE_STYLE_DISABLED sid=%s account_id=%s", sid_text, account_text
+        )
+        return
+
+    if runs_root is None:
+        runs_root_arg: str | None = None
+    else:
+        try:
+            runs_root_arg = os.fspath(runs_root)
+        except TypeError:
+            runs_root_arg = str(runs_root)
+
+    log.info(
+        "NOTE_STYLE_ACCOUNT_TASK_ENQUEUE sid=%s account_id=%s", sid_text, account_text
+    )
+
+    from backend.ai.note_style.tasks import note_style_send_account_task
+
+    note_style_send_account_task.delay(
+        sid_text, account_text, runs_root=runs_root_arg
+    )
+
+
 _DEBOUNCE_LOCK = threading.Lock()
 _LAST_ENQUEUED: dict[str, float] = {}
 
@@ -239,5 +250,5 @@ def schedule_prepare_and_send(
     note_style_prepare_and_send_task.delay(sid_text, runs_root=runs_root_arg)
 
 
-__all__ = ["prepare_and_send", "schedule_prepare_and_send"]
+__all__ = ["prepare_and_send", "schedule_prepare_and_send", "schedule_send_for_account"]
 

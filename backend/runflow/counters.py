@@ -7,6 +7,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import json
 
+from backend.core.ai.paths import ensure_note_style_paths
 from backend.frontend.packs.config import load_frontend_stage_config
 
 
@@ -325,7 +326,11 @@ def _normalize_note_style_result_name(name: str) -> str:
 
 
 def _load_note_style_index_statuses(base_dir: Path) -> dict[str, str]:
-    index_path = base_dir / "ai_packs" / "note_style" / "index.json"
+    try:
+        paths = ensure_note_style_paths(base_dir.parent, base_dir.name, create=False)
+        index_path = paths.index_file
+    except Exception:
+        index_path = base_dir / "ai_packs" / "note_style" / "index.json"
     document = _load_document(index_path)
     if not isinstance(document, Mapping):
         return {}
@@ -352,8 +357,13 @@ def _load_note_style_index_statuses(base_dir: Path) -> dict[str, str]:
 def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
     """Return aggregate counters for note_style stage artifacts."""
 
-    packs_dir = base_dir / "ai_packs" / "note_style" / "packs"
-    results_dir = base_dir / "ai_packs" / "note_style" / "results"
+    try:
+        paths = ensure_note_style_paths(base_dir.parent, base_dir.name, create=False)
+        results_dir = paths.results_dir
+        packs_dir = paths.packs_dir
+    except Exception:
+        results_dir = base_dir / "ai_packs" / "note_style" / "results"
+        packs_dir = base_dir / "ai_packs" / "note_style" / "packs"
     try:
         entries = list(results_dir.iterdir())
     except FileNotFoundError:

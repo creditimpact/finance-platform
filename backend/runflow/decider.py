@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Literal, Mapping, Optional, Sequence, Tuple
 
 from backend import config
+from backend.core.ai.paths import ensure_note_style_paths
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import (
     _apply_umbrella_barriers,
@@ -1412,7 +1413,11 @@ def _normalize_note_style_result_account(name: str) -> str:
 
 
 def _note_style_index_status_mapping(run_dir: Path) -> dict[str, str]:
-    index_path = (run_dir / config.NOTE_STYLE_STAGE_DIR / "index.json").resolve()
+    try:
+        paths = ensure_note_style_paths(run_dir.parent, run_dir.name, create=False)
+        index_path = paths.index_file
+    except Exception:
+        index_path = (run_dir / config.NOTE_STYLE_STAGE_DIR / "index.json").resolve()
     document = _load_json_mapping(index_path)
     if not isinstance(document, Mapping):
         return {}
@@ -1437,7 +1442,11 @@ def _note_style_index_status_mapping(run_dir: Path) -> dict[str, str]:
 
 
 def _note_style_counts_from_results_dir(run_dir: Path) -> Tuple[int, int, int]:
-    results_dir = (run_dir / config.NOTE_STYLE_RESULTS_DIR).resolve()
+    try:
+        paths = ensure_note_style_paths(run_dir.parent, run_dir.name, create=False)
+        results_dir = paths.results_dir
+    except Exception:
+        results_dir = (run_dir / config.NOTE_STYLE_RESULTS_DIR).resolve()
 
     index_statuses = _note_style_index_status_mapping(run_dir)
 
@@ -1836,7 +1845,11 @@ def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
 def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
     """Return (total, completed, failed, ready) for note_style results."""
 
-    index_path = run_dir / "ai_packs" / "note_style" / "index.json"
+    try:
+        paths = ensure_note_style_paths(run_dir.parent, run_dir.name, create=False)
+        index_path = paths.index_file
+    except Exception:
+        index_path = run_dir / "ai_packs" / "note_style" / "index.json"
     document = _load_json_mapping(index_path)
     if not isinstance(document, Mapping):
         return (0, 0, 0, False)

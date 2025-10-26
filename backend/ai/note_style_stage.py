@@ -14,7 +14,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
 from backend import config
-from backend.ai.manifest import ensure_note_style_section
+from backend.ai.manifest import (
+    ensure_note_style_section,
+    register_note_style_build,
+    update_note_style_stage_status,
+)
 from backend.core.ai.paths import (
     NoteStylePaths,
     ensure_note_style_account_paths,
@@ -755,6 +759,32 @@ def build_note_style_pack_for_account(
         len(note_text),
         len(note_text.split()),
     )
+
+    try:
+        register_note_style_build(sid, runs_root=runs_root_path)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "NOTE_STYLE_MANIFEST_BUILD_REGISTER_FAILED sid=%s account_id=%s",
+            sid,
+            account_id,
+            exc_info=True,
+        )
+
+    try:
+        update_note_style_stage_status(
+            sid,
+            runs_root=runs_root_path,
+            built=True,
+            sent=False,
+            completed_at=None,
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "NOTE_STYLE_MANIFEST_STAGE_PRIME_FAILED sid=%s account_id=%s",
+            sid,
+            account_id,
+            exc_info=True,
+        )
 
     return {
         "status": "completed",

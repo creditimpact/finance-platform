@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
+from backend import config
 from backend.ai.note_style_ingest import ingest_note_style_result
 from backend.ai.note_style_results import record_note_style_failure
 from backend.ai.note_style_logging import log_structured_event
@@ -142,6 +143,52 @@ def _safe_json_payload(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return repr(value)
+
+
+def _account_id_from_pack_path(pack_path: Path) -> str:
+    stem = pack_path.stem
+    if stem.startswith("acc_"):
+        return stem[4:]
+    return stem
+
+
+def _load_index_account_map(paths: NoteStylePaths) -> dict[str, str]:
+    index_path = getattr(paths, "index_file", None)
+    if not isinstance(index_path, Path):
+        return {}
+
+    try:
+        raw = index_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        log.warning(
+            "STYLE_SEND_INDEX_READ_FAILED path=%s", index_path, exc_info=True
+        )
+        return {}
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("STYLE_SEND_INDEX_INVALID_JSON path=%s", index_path)
+        return {}
+
+    mapping: dict[str, str] = {}
+    if isinstance(payload, Mapping):
+        entries = payload.get("packs")
+        if isinstance(entries, Sequence):
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    continue
+                account_id = str(entry.get("account_id") or "").strip()
+                pack_path_value = entry.get("pack_path")
+                if not account_id:
+                    continue
+                if isinstance(pack_path_value, str):
+                    normalized = pack_path_value.strip()
+                    if normalized:
+                        mapping[normalized] = account_id
+    return mapping
 
 
 def _extract_response_text(response_payload: Any) -> str:
@@ -331,6 +378,7 @@ def send_note_style_packs_for_sid(
     client = get_ai_client()
     processed: list[str] = []
     processed_accounts: set[str] = set()
+    index_account_map = _load_index_account_map(paths)
 
     for pack_path in pack_candidates:
         if not _is_within_directory(pack_path, packs_dir):
@@ -358,9 +406,18 @@ def send_note_style_packs_for_sid(
             )
             raise
 
+        pack_relative = _relativize(pack_path, paths.base)
+
         for pack_payload in pack_records:
             account_id = str(pack_payload.get("account_id") or "").strip()
             if not account_id:
+                account_id = index_account_map.get(pack_relative, "")
+            if not account_id:
+                account_id = _account_id_from_pack_path(pack_path)
+            if not account_id:
+                log.warning(
+                    "STYLE_SEND_ACCOUNT_UNKNOWN sid=%s pack=%s", sid, pack_path
+                )
                 continue
             if account_id in processed_accounts:
                 continue
@@ -377,7 +434,9 @@ def send_note_style_packs_for_sid(
                 pack_path,
             )
 
-            model = str(pack_payload.get("model") or "")
+            model = str(pack_payload.get("model") or "").strip()
+            if not model:
+                model = config.NOTE_STYLE_MODEL
             messages = _coerce_messages(pack_payload)
 
             start = time.perf_counter()
@@ -476,7 +535,6 @@ def send_note_style_packs_for_sid(
             )
 
             result_relative = _relativize(result_path, paths.base)
-            pack_relative = _relativize(pack_path, paths.base)
             log_structured_event(
                 "NOTE_STYLE_SENT",
                 logger=log,

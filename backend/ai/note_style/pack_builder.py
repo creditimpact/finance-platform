@@ -8,7 +8,7 @@ import math
 import re
 import unicodedata
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -105,11 +105,19 @@ class PackBuilderError(RuntimeError):
     """Raised when a note_style pack cannot be constructed."""
 
 
-def _build_user_message_content(context_payload: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(context_payload, Mapping):
-        return {}
-
-    return dict(context_payload)
+def _build_user_message_content(
+    *,
+    meta_name: str,
+    primary_issue_tag: str | None,
+    bureau_data: Mapping[str, Any],
+    note_text: str,
+) -> dict[str, Any]:
+    return {
+        "meta_name": meta_name,
+        "primary_issue_tag": primary_issue_tag,
+        "bureau_data": dict(bureau_data) if isinstance(bureau_data, Mapping) else {},
+        "note_text": note_text,
+    }
 
 
 def build_pack(
@@ -154,45 +162,22 @@ def build_pack(
     bureau_data = _extract_bureau_data(bureaus_payload)
     primary_issue_tag = _extract_primary_issue_tag(tags_payload)
 
-    sanitized_meta = _sanitize_context_payload(meta_payload)
-    if not isinstance(sanitized_meta, Mapping):
-        sanitized_meta = {}
+    bureau_context = dict(bureau_data) if isinstance(bureau_data, Mapping) else {}
 
-    sanitized_bureaus = _sanitize_context_payload(bureaus_payload)
-    if not isinstance(sanitized_bureaus, Mapping):
-        sanitized_bureaus = {}
-
-    sanitized_tags = _sanitize_context_payload(tags_payload)
-    if not (
-        isinstance(sanitized_tags, Sequence)
-        and not isinstance(sanitized_tags, (str, bytes, bytearray))
-    ):
-        sanitized_tags = []
-
-    context_payload: dict[str, Any] = {
-        "meta": sanitized_meta,
-        "bureaus": sanitized_bureaus,
-        "tags": sanitized_tags,
-    }
-    if meta_name:
-        context_payload["meta_name"] = meta_name
-    if primary_issue_tag:
-        context_payload["primary_issue_tag"] = primary_issue_tag
-    if bureau_data:
-        context_payload["bureau_data"] = bureau_data
-    context_payload["note_text"] = note_text
+    user_message = _build_user_message_content(
+        meta_name=meta_name,
+        primary_issue_tag=primary_issue_tag,
+        bureau_data=bureau_context,
+        note_text=note_text,
+    )
 
     system_message = _build_system_message(None, None)
-    user_message = _build_user_message_content(context_payload)
 
-    built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    pack_payload = {
-        "sid": sid,
-        "account_id": account_id,
-        "model": "gpt-4o-mini",
-        "built_at": built_at,
-        "context": context_payload,
+    pack_payload: dict[str, Any] = {
+        "meta_name": meta_name,
+        "primary_issue_tag": primary_issue_tag,
+        "bureau_data": bureau_context,
+        "note_text": note_text,
         "messages": [
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message},
@@ -219,7 +204,7 @@ def build_pack(
     )
 
     log.info(
-        "NOTE_STYLE_PACK_BUILT sid=%s account=%s fields=[meta,bureau,tags,note]",
+        "NOTE_STYLE_PACK_BUILT sid=%s account=%s fields=[meta_name,primary_issue_tag,bureau_data,note_text]",
         sid,
         account_id,
     )

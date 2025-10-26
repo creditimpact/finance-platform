@@ -507,11 +507,9 @@ def _load_pack_note_text(pack_path: Path) -> str | None:
     payload = _load_pack_payload_for_logging(pack_path)
     if not isinstance(payload, Mapping):
         return None
-    context_payload = payload.get("context")
-    if isinstance(context_payload, Mapping):
-        note_candidate = context_payload.get("note_text")
-        if isinstance(note_candidate, str):
-            return note_candidate
+    note_candidate = payload.get("note_text")
+    if isinstance(note_candidate, str):
+        return note_candidate
     messages = payload.get("messages")
     if not isinstance(messages, Sequence):
         return None

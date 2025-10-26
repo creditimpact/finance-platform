@@ -82,11 +82,9 @@ def _extract_note_metrics(
 
     note_text: str | None = None
     if isinstance(pack_payload, Mapping):
-        context_candidate = pack_payload.get("context")
-        if isinstance(context_candidate, Mapping):
-            text_candidate = context_candidate.get("note_text")
-            if isinstance(text_candidate, str) and text_candidate.strip():
-                note_text = text_candidate
+        text_candidate = pack_payload.get("note_text")
+        if isinstance(text_candidate, str) and text_candidate.strip():
+            note_text = text_candidate
 
     if note_text is not None:
         char_len = len(note_text)

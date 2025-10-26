@@ -98,23 +98,21 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
 
     pack_payload = build_pack(sid, account_id, runs_root=tmp_path)
 
-    assert pack_payload["sid"] == sid
-    assert pack_payload["account_id"] == account_id
-    assert pack_payload["model"] == "gpt-4o-mini"
-    assert pack_payload["built_at"].endswith("Z")
-    assert "note_metrics" not in pack_payload
-    assert "note_text" not in pack_payload
-    assert "channel" not in pack_payload
+    assert set(pack_payload) == {
+        "meta_name",
+        "primary_issue_tag",
+        "bureau_data",
+        "note_text",
+        "messages",
+    }
+    assert pack_payload["meta_name"] == "Capital One Services"
+    assert pack_payload["primary_issue_tag"] == "late_payment"
+    assert (
+        pack_payload["note_text"]
+        == "Customer says the balance is wrong and wants help."
+    )
 
-    context_payload = pack_payload["context"]
-    assert context_payload["meta_name"] == "Capital One Services"
-    assert context_payload["primary_issue_tag"] == "late_payment"
-    assert context_payload["note_text"] == "Customer says the balance is wrong and wants help."
-    assert context_payload["meta"]["heading_guess"] == "Capital One Services"
-    assert context_payload["bureaus"]["transunion"]["reported_creditor"] == "Capital One"
-    assert context_payload["tags"] == tags_payload
-
-    bureau_data = context_payload["bureau_data"]
+    bureau_data = pack_payload["bureau_data"]
     assert bureau_data["account_type"] == "Credit Card"
     assert bureau_data["account_status"] == "Open"
 
@@ -132,7 +130,12 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     assert messages[0]["content"] == build_base_system_prompt()
     assert messages[1]["role"] == "user"
     user_content = messages[1]["content"]
-    assert user_content == context_payload
+    assert user_content == {
+        "meta_name": "Capital One Services",
+        "primary_issue_tag": "late_payment",
+        "bureau_data": bureau_data,
+        "note_text": "Customer says the balance is wrong and wants help.",
+    }
 
 
 def test_build_pack_requires_existing_artifacts(tmp_path: Path) -> None:

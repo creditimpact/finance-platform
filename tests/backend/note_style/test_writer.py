@@ -146,8 +146,8 @@ def test_write_result_writes_minimal_payload(tmp_path: Path) -> None:
 
     metrics = stored_payload["note_metrics"]
     assert metrics == {
-        "char_len": len(pack_payload["context"]["note_text"]),
-        "word_len": len(pack_payload["context"]["note_text"].split()),
+        "char_len": len(pack_payload["note_text"]),
+        "word_len": len(pack_payload["note_text"].split()),
     }
 
     # Ensure we did not leak contextual payloads into the result file.

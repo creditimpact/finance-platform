@@ -666,12 +666,29 @@ def build_note_style_pack_for_account(
     bureaus_path = context_paths.get("bureaus")
     tags_path = context_paths.get("tags")
 
-    timestamp = _now_iso()
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
+
+    _, meta_missing = _load_context_payload(meta_path)
+    _, bureaus_missing = _load_context_payload(bureaus_path)
+    _, tags_missing = _load_context_payload(tags_path)
+    if meta_missing or bureaus_missing or tags_missing:
+        missing_parts: list[str] = []
+        if meta_missing:
+            missing_parts.append("meta")
+        if tags_missing:
+            missing_parts.append("tags")
+        if bureaus_missing:
+            missing_parts.append("bureaus")
+        log.warning(
+            "NOTE_STYLE_WARN: missing context for account %s (%s)",
+            account_id,
+            "/".join(missing_parts),
+        )
 
     meta_name = read_meta_name(meta_path)
     primary_issue_tag = read_primary_issue_tag(tags_path)
     bureau_data = build_bureau_data(bureaus_path)
+    timestamp = _now_iso()
 
     pack_context: dict[str, Any] = {
         "meta_name": meta_name,
@@ -682,11 +699,7 @@ def build_note_style_pack_for_account(
 
     user_message_content = dict(pack_context)
     pack_payload = {
-        "sid": sid,
-        "account_id": account_id,
-        "model": "gpt-4o-mini",
-        "built_at": timestamp,
-        "context": pack_context,
+        **pack_context,
         "messages": [
             {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
             {"role": "user", "content": user_message_content},

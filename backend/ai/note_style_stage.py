@@ -704,23 +704,16 @@ def build_note_style_pack_for_account(
         "note_text": note_text,
     }
 
-    note_metrics = {
-        "char_len": len(note_text),
-        "word_len": len(note_text.split()),
-    }
-
     messages = [
         {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
         {"role": "user", "content": dict(context_payload)},
     ]
 
     pack_payload = {
-        "sid": sid,
-        "account_id": account_id,
-        "model": "gpt-4o-mini",
-        "built_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-        "note_metrics": note_metrics,
-        "context": context_payload,
+        "meta_name": meta_name,
+        "primary_issue_tag": primary_issue_tag,
+        "bureau_data": bureau_data,
+        "note_text": note_text,
         "messages": messages,
     }
     _write_jsonl(account_paths.pack_file, pack_payload)
@@ -759,8 +752,8 @@ def build_note_style_pack_for_account(
         "✅ Pack built for %s (%s), chars=%s, words=%s",
         account_id,
         meta_name,
-        note_metrics["char_len"],
-        note_metrics["word_len"],
+        len(note_text),
+        len(note_text.split()),
     )
 
     return {

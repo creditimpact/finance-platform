@@ -148,6 +148,7 @@ def _ensure_frontend_queue_configuration() -> None:
     targeted_tasks = {
         "backend.api.tasks.generate_frontend_packs_task": frontend_queue,
         "backend.ai.note_style.note_style_prepare_and_send_task": "note_style",
+        "backend.ai.note_style.note_style_send_account_task": "note_style",
     }
 
     routes_config = getattr(app.conf, "task_routes", None)

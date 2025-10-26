@@ -10,12 +10,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from backend import config
-from backend.ai.manifest import ensure_note_style_section
+from backend.ai.manifest import (
+    ensure_note_style_section,
+    register_note_style_build,
+    update_note_style_stage_status,
+)
 from backend.ai.note_style_stage import (
     build_note_style_pack_for_account,
     discover_note_style_response_accounts,
 )
-from backend.ai.note_style_sender import send_note_style_packs_for_sid
 from backend.core.runflow import runflow_barriers_refresh
 from backend.runflow.decider import record_stage, reconcile_umbrella_barriers
 
@@ -78,6 +81,7 @@ def prepare_and_send(
 
     built = 0
     skipped = 0
+    scheduled: list[str] = []
     statuses: dict[str, Mapping[str, Any]] = {}
 
     for account in accounts:
@@ -88,15 +92,48 @@ def prepare_and_send(
         status_text = str(result.get("status") or "").lower()
         if status_text == "completed":
             built += 1
+            scheduled.append(account.account_id)
         elif status_text.startswith("skipped"):
             skipped += 1
 
-    processed: list[str] = []
-    if accounts:
-        processed = send_note_style_packs_for_sid(
-            sid_text, runs_root=runs_root_path
-        )
-    else:
+    if built > 0:
+        try:
+            register_note_style_build(sid_text, runs_root=runs_root_path)
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "NOTE_STYLE_MANIFEST_BUILD_REGISTER_FAILED sid=%s",
+                sid_text,
+                exc_info=True,
+            )
+        try:
+            update_note_style_stage_status(
+                sid_text,
+                runs_root=runs_root_path,
+                built=True,
+                sent=False,
+                completed_at=None,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "NOTE_STYLE_MANIFEST_STAGE_PRIME_FAILED sid=%s",
+                sid_text,
+                exc_info=True,
+            )
+
+        try:
+            from backend.ai.note_style.tasks import note_style_send_account_task
+
+            runs_root_arg = os.fspath(runs_root_path)
+            for account_id in scheduled:
+                note_style_send_account_task.delay(
+                    sid_text, account_id, runs_root=runs_root_arg
+                )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "NOTE_STYLE_SEND_TASK_SCHEDULE_FAILED sid=%s", sid_text, exc_info=True
+            )
+
+    if not accounts:
         try:
             record_stage(
                 sid_text,
@@ -113,7 +150,7 @@ def prepare_and_send(
                 "NOTE_STYLE_PREPARE_STAGE_RECORD_FAILED sid=%s", sid_text, exc_info=True
             )
 
-    if not processed:
+    if not built:
         try:
             runflow_barriers_refresh(sid_text)
         except Exception:  # pragma: no cover - defensive logging
@@ -129,14 +166,14 @@ def prepare_and_send(
                 "NOTE_STYLE_PREPARE_BARRIERS_RECONCILE_FAILED sid=%s",
                 sid_text,
                 exc_info=True,
-            )
+        )
 
     log.info(
         "NOTE_STYLE_PREPARE_DONE sid=%s discovered=%s built=%s sent=%s skipped=%s",
         sid_text,
         len(accounts),
         built,
-        len(processed),
+        len(scheduled),
         skipped,
     )
 
@@ -145,7 +182,7 @@ def prepare_and_send(
         "accounts_discovered": len(accounts),
         "packs_built": built,
         "skipped": skipped,
-        "processed_accounts": list(processed),
+        "processed_accounts": list(scheduled),
         "statuses": statuses,
     }
 

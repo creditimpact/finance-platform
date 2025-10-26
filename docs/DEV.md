@@ -99,7 +99,7 @@ $PY = "$PWD\.venv\Scripts\python.exe"
 & $PY -m celery -A backend.api.tasks worker `
   --loglevel=INFO `
   --pool=solo `
-  -Q celery,merge,validation,frontend `
+  -Q celery,merge,validation,note_style,frontend `
   --prefetch-multiplier=1 `
   --max-tasks-per-child=50
 

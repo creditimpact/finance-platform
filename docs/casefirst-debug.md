@@ -60,7 +60,7 @@ TTL;DR: אם Celery נופל עם Connection refused ל‎AMQP, סימן שאי�
 $PY = "C:\\venvs\\credit\\Scripts\\python.exe"
 cd C:\\dev\\credit-analyzer
 # הגדר ENV כמו למעלה בחלון הזה
-& $PY -m celery -A backend.api.tasks worker --loglevel=debug --pool=solo
+& $PY -m celery -A backend.api.tasks worker --loglevel=debug --pool=solo -Q celery,merge,validation,note_style,frontend
 ```
 
 חפשו בלוגים:

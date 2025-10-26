@@ -160,12 +160,31 @@ def build_pack(
     response_payload = _load_json(response_path)
     note_text = _extract_note_text(response_payload)
 
-    bureaus_payload = _ensure_mapping(_load_json(account_dir / "bureaus.json"))
-    tags_payload = _ensure_sequence(_load_json(account_dir / "tags.json"))
-    meta_payload = _ensure_mapping(_load_json(account_dir / "meta.json"))
+    bureaus_raw, _bureaus_missing = _load_account_context(
+        account_dir / "bureaus.json",
+        sid=sid,
+        account_id=account_id,
+        context_label="bureaus",
+    )
+    tags_raw, _tags_missing = _load_account_context(
+        account_dir / "tags.json",
+        sid=sid,
+        account_id=account_id,
+        context_label="tags",
+    )
+    meta_raw, _meta_missing = _load_account_context(
+        account_dir / "meta.json",
+        sid=sid,
+        account_id=account_id,
+        context_label="meta",
+    )
+
+    bureaus_payload = _ensure_mapping(bureaus_raw)
+    tags_payload = _ensure_sequence(tags_raw)
+    meta_payload = _ensure_mapping(meta_raw)
 
     meta_name = _extract_meta_name(meta_payload, account_id)
-    bureau_data = _extract_bureau_data(bureaus_payload)
+    bureau_data = _with_bureau_defaults(_extract_bureau_data(bureaus_payload))
     primary_issue_tag = _extract_primary_issue_tag(tags_payload)
 
     bureau_context = dict(bureau_data) if isinstance(bureau_data, Mapping) else {}
@@ -257,6 +276,42 @@ def _ensure_sequence(value: Any) -> Sequence[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return value
     return []
+
+
+def _load_account_context(
+    path: Path,
+    *,
+    sid: str,
+    account_id: str,
+    context_label: str,
+) -> tuple[Any, bool]:
+    """Load a required account context payload, logging a warning when missing."""
+
+    try:
+        payload = _load_json(path)
+    except json.JSONDecodeError:
+        log.warning(
+            "[NOTE_STYLE] PACK_CONTEXT_MISSING sid=%s account=%s context=%s reason=invalid_json path=%s",
+            sid,
+            account_id,
+            context_label,
+            path,
+        )
+        return None, True
+
+    if payload is None:
+        reason = "missing" if not path.is_file() else "empty"
+        log.warning(
+            "[NOTE_STYLE] PACK_CONTEXT_MISSING sid=%s account=%s context=%s reason=%s path=%s",
+            sid,
+            account_id,
+            context_label,
+            reason,
+            path,
+        )
+        return None, True
+
+    return payload, False
 
 
 def _build_account_payload(
@@ -655,6 +710,13 @@ def _extract_bureau_data(bureaus_payload: Mapping[str, Any]) -> Mapping[str, Any
             return filtered
 
     return {}
+
+
+def _with_bureau_defaults(bureau_data: Mapping[str, Any] | None) -> dict[str, Any]:
+    defaults = {field: "--" for field in _BUREAU_CONTEXT_FIELDS}
+    if isinstance(bureau_data, Mapping):
+        defaults.update(bureau_data)
+    return defaults
 
 
 def _issue_type_from_entry(entry: Any) -> str | None:

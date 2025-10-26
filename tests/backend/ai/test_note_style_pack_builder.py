@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -161,3 +162,52 @@ def test_build_pack_requires_existing_artifacts(tmp_path: Path) -> None:
 
     with pytest.raises(PackBuilderError):
         build_pack(sid, account_id, runs_root=tmp_path)
+
+
+def test_build_pack_uses_defaults_when_context_missing(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    sid = "SID-555"
+    account_id = "idx-204"
+
+    response_path = (
+        tmp_path
+        / sid
+        / "frontend"
+        / "review"
+        / "responses"
+        / f"{account_id}.result.json"
+    )
+    _write_json(response_path, {"note": "Please help with my report."})
+
+    account_dir = tmp_path / sid / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+
+    with caplog.at_level(logging.WARNING):
+        pack_payload = build_pack(sid, account_id, runs_root=tmp_path)
+
+    expected_bureau_defaults = {
+        "account_type": "--",
+        "account_status": "--",
+        "payment_status": "--",
+        "creditor_type": "--",
+        "date_opened": "--",
+        "date_reported": "--",
+        "date_of_last_activity": "--",
+        "closed_date": "--",
+        "last_verified": "--",
+        "balance_owed": "--",
+        "high_balance": "--",
+        "past_due_amount": "--",
+    }
+
+    assert pack_payload["meta_name"] == account_id
+    assert pack_payload["primary_issue_tag"] is None
+    assert pack_payload["bureau_data"] == expected_bureau_defaults
+
+    user_content = pack_payload["messages"][1]["content"]
+    assert user_content["meta_name"] == account_id
+    assert user_content["bureau_data"] == expected_bureau_defaults
+
+    warning_messages = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert any("context=bureaus" in message for message in warning_messages)
+    assert any("context=tags" in message for message in warning_messages)
+    assert any("context=meta" in message for message in warning_messages)

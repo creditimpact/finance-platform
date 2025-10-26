@@ -203,13 +203,12 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert pack_payload["account_id"] == account_id
     assert pack_payload["model"]
     context_payload = pack_payload["context"]
-    assert "primary_issue_tag" not in context_payload
-    assert context_payload["meta"]["heading_guess"] == "Capital One"
+    assert context_payload["meta_name"] == "Capital One"
     assert pack_payload["note_text"].startswith("Please help")
-    bureaus = context_payload["bureaus"]
-    assert bureaus["experian"]["account_type"] == "Credit Card"
-    assert bureaus["experian"]["account_status"] == "Closed"
-    assert context_payload["tags"][0]["type"] == "late_payment"
+    bureau_data = context_payload["bureau_data"]
+    assert bureau_data["majority_values"]["account_type"] == "Credit Card"
+    assert bureau_data["per_bureau"]["experian"]["account_status"] == "Closed"
+    assert context_payload["primary_issue_tag"] == "late_payment"
     assert pack_payload["messages"][0]["role"] == "system"
 
     user_message = pack_payload["messages"][1]
@@ -217,8 +216,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     user_content = user_message["content"]
     assert user_content["note_text"].startswith("Please help")
     context_snapshot = user_content["context"]
-    assert context_snapshot["meta"]["heading_guess"] == "Capital One"
-    assert context_snapshot["bureaus"]["experian"]["account_type"] == "Credit Card"
+    assert context_snapshot == context_payload
 
 
 def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:
@@ -286,9 +284,10 @@ def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
 
     context_payload = pack_payload["context"]
-    assert context_payload["meta"]["account_name"] == "Sample Account"
-    assert context_payload["bureaus"]["transunion"]["reported_creditor"] == "Sample Creditor"
-    assert context_payload["tags"][0]["type"] == "balance_dispute"
+    assert context_payload["meta_name"] == "Sample Creditor"
+    bureau_data = context_payload["bureau_data"]
+    assert bureau_data["per_bureau"]["transunion"]["account_type"] == "Credit Card"
+    assert context_payload["primary_issue_tag"] == "balance_dispute"
 
 
 def test_note_style_stage_handles_missing_context(tmp_path: Path) -> None:
@@ -316,9 +315,9 @@ def test_note_style_stage_handles_missing_context(tmp_path: Path) -> None:
     assert not account_paths.debug_file.exists()
 
     context_payload = pack_payload["context"]
-    assert context_payload["meta"] == {}
-    assert context_payload["bureaus"] == {}
-    assert context_payload["tags"] == []
+    assert context_payload["meta_name"] == account_id
+    assert context_payload["bureau_data"] == {}
+    assert context_payload["primary_issue_tag"] is None
 
     user_context = pack_payload["messages"][1]["content"]["context"]
     assert user_context == context_payload

@@ -51,20 +51,6 @@ _ZERO_WIDTH_TRANSLATION = {
     ord("\u2060"): " ",
 }
 
-_CONTEXT_EXCLUDED_KEYWORDS = (
-    "hash",
-    "salt",
-    "debug",
-    "raw",
-    "blob",
-    "token",
-    "signature",
-    "checksum",
-)
-
-_SANITIZE_SKIP = object()
-
-
 @dataclass(frozen=True)
 class NoteStyleResponseAccount:
     """Details about a frontend response discovered for the stage."""
@@ -140,79 +126,125 @@ def _sanitize_note_text(text: str) -> str:
     return collapsed.strip()
 
 
-def _sanitize_context_value(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return value
-    if isinstance(value, bool):
-        return value
+_BUREAU_KEYS = ("transunion", "experian", "equifax")
+
+_BUREAU_CORE_FIELDS = (
+    "account_type",
+    "account_status",
+    "payment_status",
+    "creditor_type",
+    "date_opened",
+    "date_reported",
+    "date_of_last_activity",
+    "closed_date",
+    "last_verified",
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+)
+
+
+def _clean_display_text(value: Any) -> str | None:
     if isinstance(value, str):
         text = value.strip()
-        return text if text else _SANITIZE_SKIP
-    if isinstance(value, Mapping):
-        sanitized = _sanitize_context_mapping(value)
-        return sanitized if sanitized else _SANITIZE_SKIP
-    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
-        sanitized_list = []
-        for item in value:
-            sanitized_item = _sanitize_context_value(item)
-            if sanitized_item is _SANITIZE_SKIP:
-                continue
-            sanitized_list.append(sanitized_item)
-        return sanitized_list if sanitized_list else _SANITIZE_SKIP
-    return _SANITIZE_SKIP
+        return text or None
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
-def _sanitize_context_mapping(payload: Mapping[str, Any]) -> Mapping[str, Any]:
-    sanitized: dict[str, Any] = {}
-    for raw_key, raw_value in payload.items():
-        if not isinstance(raw_key, str):
-            continue
-        key = raw_key.strip()
-        if not key:
-            continue
-        lowered = key.lower()
-        if any(keyword in lowered for keyword in _CONTEXT_EXCLUDED_KEYWORDS):
-            continue
-        sanitized_value = _sanitize_context_value(raw_value)
-        if sanitized_value is _SANITIZE_SKIP:
-            continue
-        sanitized[key] = sanitized_value
-    return sanitized
+def _extract_meta_name(
+    meta_payload: Mapping[str, Any] | None, account_id: str
+) -> str:
+    if isinstance(meta_payload, Mapping):
+        for key in ("heading_guess", "name"):
+            candidate = _clean_display_text(meta_payload.get(key))
+            if candidate:
+                return candidate
+    fallback = _clean_display_text(account_id)
+    return fallback or str(account_id)
 
 
-def _sanitize_context_sequence(payload: Iterable[Any]) -> list[Any]:
-    sanitized_items: list[Any] = []
-    for item in payload:
-        sanitized_item = _sanitize_context_value(item)
-        if sanitized_item is _SANITIZE_SKIP:
-            continue
-        sanitized_items.append(sanitized_item)
-    return sanitized_items
-
-
-def _extract_meta_context(meta_payload: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    if not isinstance(meta_payload, Mapping):
+def _filter_bureau_fields(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
         return {}
-    return _sanitize_context_mapping(meta_payload)
+    filtered: dict[str, Any] = {}
+    for field in _BUREAU_CORE_FIELDS:
+        value = payload.get(field)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                continue
+            filtered[field] = text
+        else:
+            filtered[field] = value
+    return filtered
+
+
+def _build_majority_values(bureaus_payload: Mapping[str, Any]) -> dict[str, Any]:
+    majority_payload = bureaus_payload.get("majority_values")
+    majority_values = _filter_bureau_fields(majority_payload)
+    if majority_values:
+        return majority_values
+
+    for bureau_key in _BUREAU_KEYS:
+        bureau_values = _filter_bureau_fields(bureaus_payload.get(bureau_key))
+        if bureau_values:
+            return bureau_values
+    return {}
 
 
 def _extract_bureau_data(bureaus_payload: Mapping[str, Any] | None) -> Mapping[str, Any]:
     if not isinstance(bureaus_payload, Mapping):
         return {}
-    return _sanitize_context_mapping(bureaus_payload)
+
+    bureau_data: dict[str, Any] = {}
+    majority_values = _build_majority_values(bureaus_payload)
+    if majority_values:
+        bureau_data["majority_values"] = majority_values
+
+    per_bureau: dict[str, Any] = {}
+    for bureau_key in _BUREAU_KEYS:
+        filtered = _filter_bureau_fields(bureaus_payload.get(bureau_key))
+        if filtered:
+            per_bureau[bureau_key] = filtered
+    if per_bureau:
+        bureau_data["per_bureau"] = per_bureau
+
+    return bureau_data
 
 
-def _extract_tags_context(tags_payload: Any) -> list[Any]:
+def _issue_type_from_entry(entry: Any) -> str | None:
+    if not isinstance(entry, Mapping):
+        return None
+    if entry.get("kind") != "issue":
+        return None
+    issue_type = _clean_display_text(entry.get("type"))
+    return issue_type
+
+
+def _extract_primary_issue_tag(tags_payload: Any) -> str | None:
     if isinstance(tags_payload, Mapping):
+        issue_type = _issue_type_from_entry(tags_payload)
+        if issue_type:
+            return issue_type
         entries = tags_payload.get("tags")
         if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes, bytearray)):
-            return _sanitize_context_sequence(entries)
-        return _sanitize_context_sequence([tags_payload])
+            for entry in entries:
+                issue_type = _issue_type_from_entry(entry)
+                if issue_type:
+                    return issue_type
+        return None
+
     if isinstance(tags_payload, Iterable) and not isinstance(tags_payload, (str, bytes, bytearray)):
-        return _sanitize_context_sequence(tags_payload)
-    return []
+        for entry in tags_payload:
+            issue_type = _issue_type_from_entry(entry)
+            if issue_type:
+                return issue_type
+    return None
 
 
 def _resolve_response_path(sid: str, account_id: str, runs_root: Path) -> Path:
@@ -472,13 +504,13 @@ def build_note_style_pack_for_account(
     timestamp = _now_iso()
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
-    meta_context = _extract_meta_context(meta_payload)
+    meta_name = _extract_meta_name(meta_payload, account_id)
     bureau_data = _extract_bureau_data(bureaus_payload)
-    tags_context = _extract_tags_context(tags_payload)
+    primary_issue_tag = _extract_primary_issue_tag(tags_payload)
     pack_context = {
-        "meta": meta_context,
-        "bureaus": bureau_data,
-        "tags": tags_context,
+        "meta_name": meta_name,
+        "bureau_data": bureau_data,
+        "primary_issue_tag": primary_issue_tag,
     }
 
     user_message_content: dict[str, Any] = {

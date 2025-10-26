@@ -28,11 +28,10 @@ log = logging.getLogger(__name__)
 
 _NOTE_STYLE_SYSTEM_PROMPT = (
     "You analyse customer notes and respond with structured JSON.\n"
-    "Return exactly one JSON object using this schema:"
-    " {\"tone\": string, \"context_hints\": {\"timeframe\": {\"month\": string|null,"
-    " \"relative\": string|null}, \"topic\": string, \"entities\": {\"creditor\": string|null,"
-    " \"amount\": number|null}}, \"emphasis\": [string], \"confidence\": number,"
-    " \"risk_flags\": [string] }.\n"
+    "Return exactly one JSON object using this schema:\n"
+    '{"tone": string, "context_hints": {"timeframe": {"month": string|null, "relative": '
+    'string|null}, "topic": string, "entities": {"creditor": string|null, "amount": '
+    'number|null}}, "emphasis": [string], "confidence": number, "risk_flags": [string]}.\n'
     "Never include explanations or additional keys."
 )
 
@@ -279,25 +278,6 @@ def _write_debug_snapshot(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _primary_issue_tag(tags_payload: Any) -> str | None:
-    if isinstance(tags_payload, Mapping):
-        entries = tags_payload.get("tags")
-    else:
-        entries = tags_payload
-
-    if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes, bytearray)):
-        for entry in entries:
-            if not isinstance(entry, Mapping):
-                continue
-            kind = str(entry.get("kind") or "").strip().lower()
-            if kind != "issue":
-                continue
-            tag = str(entry.get("type") or entry.get("tag") or "").strip()
-            if tag:
-                return tag
-    return None
-
-
 def discover_note_style_response_accounts(
     sid: str, *, runs_root: Path | str | None = None
 ) -> list[NoteStyleResponseAccount]:
@@ -402,16 +382,13 @@ def build_note_style_pack_for_account(
     timestamp = _now_iso()
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
-    primary_issue = _primary_issue_tag(tags_payload)
     meta_context = _extract_meta_context(meta_payload)
     bureau_data = _extract_bureau_data(bureaus_payload)
     tags_context = _extract_tags_context(tags_payload)
-
     pack_context = {
         "meta": meta_context,
-        "bureau_data": bureau_data,
+        "bureaus": bureau_data,
         "tags": tags_context,
-        "primary_issue_tag": primary_issue,
     }
 
     user_message_content: dict[str, Any] = {

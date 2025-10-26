@@ -110,6 +110,9 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     assert context_payload["meta_name"] == "Capital One Services"
     assert context_payload["primary_issue_tag"] == "late_payment"
     assert context_payload["note_text"] == "Customer says the balance is wrong and wants help."
+    assert context_payload["meta"]["heading_guess"] == "Capital One Services"
+    assert context_payload["bureaus"]["transunion"]["reported_creditor"] == "Capital One"
+    assert context_payload["tags"] == tags_payload
 
     bureau_data = context_payload["bureau_data"]
     assert bureau_data["account_type"] == "Credit Card"

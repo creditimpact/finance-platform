@@ -253,10 +253,9 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert bureau_data["account_type"] == "Credit Card"
     assert bureau_data["account_status"] == "Closed"
     assert context_payload["primary_issue_tag"] == "late_payment"
-    assert "meta" not in context_payload
-    assert "bureaus" not in context_payload
-    assert "tags" not in context_payload
-    assert "account_name" not in context_payload
+    assert context_payload["meta"] == meta_payload
+    assert context_payload["bureaus"] == bureaus_payload
+    assert context_payload["tags"] == tags_payload
     assert pack_payload["messages"][0]["role"] == "system"
 
     user_message = pack_payload["messages"][1]
@@ -334,6 +333,8 @@ def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:
     bureau_data = context_payload["bureau_data"]
     assert bureau_data["account_type"] == "Credit Card"
     assert context_payload["primary_issue_tag"] == "balance_dispute"
+    assert context_payload["meta"]["account_name"] == "Sample Account"
+    assert context_payload["tags"] == tags_payload
 
 
 def test_note_style_stage_resolves_relative_manifest_paths(tmp_path: Path) -> None:
@@ -400,6 +401,7 @@ def test_note_style_stage_resolves_relative_manifest_paths(tmp_path: Path) -> No
     bureau_data = context_payload["bureau_data"]
     assert bureau_data["account_status"] == "Open"
     assert context_payload["primary_issue_tag"] == "relative_path"
+    assert context_payload["bureaus"]["experian"]["account_type"] == "Loan"
 
 
 def test_note_style_stage_handles_missing_context(
@@ -437,6 +439,9 @@ def test_note_style_stage_handles_missing_context(
     assert context_payload["meta_name"] == account_id
     assert context_payload.get("bureau_data", {}) == {}
     assert context_payload.get("primary_issue_tag") is None
+    assert context_payload["meta"] == {}
+    assert context_payload["bureaus"] == {}
+    assert context_payload["tags"] == []
 
     assert "NOTE_STYLE_WARN: missing context for account idx-002 (meta/tags/bureaus)" in caplog.text
 

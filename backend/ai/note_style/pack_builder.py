@@ -109,12 +109,7 @@ def _build_user_message_content(context_payload: Mapping[str, Any]) -> dict[str,
     if not isinstance(context_payload, Mapping):
         return {}
 
-    return {
-        "meta_name": context_payload.get("meta_name"),
-        "primary_issue_tag": context_payload.get("primary_issue_tag"),
-        "bureau_data": context_payload.get("bureau_data"),
-        "note_text": context_payload.get("note_text"),
-    }
+    return dict(context_payload)
 
 
 def build_pack(
@@ -159,7 +154,26 @@ def build_pack(
     bureau_data = _extract_bureau_data(bureaus_payload)
     primary_issue_tag = _extract_primary_issue_tag(tags_payload)
 
-    context_payload: dict[str, Any] = {}
+    sanitized_meta = _sanitize_context_payload(meta_payload)
+    if not isinstance(sanitized_meta, Mapping):
+        sanitized_meta = {}
+
+    sanitized_bureaus = _sanitize_context_payload(bureaus_payload)
+    if not isinstance(sanitized_bureaus, Mapping):
+        sanitized_bureaus = {}
+
+    sanitized_tags = _sanitize_context_payload(tags_payload)
+    if not (
+        isinstance(sanitized_tags, Sequence)
+        and not isinstance(sanitized_tags, (str, bytes, bytearray))
+    ):
+        sanitized_tags = []
+
+    context_payload: dict[str, Any] = {
+        "meta": sanitized_meta,
+        "bureaus": sanitized_bureaus,
+        "tags": sanitized_tags,
+    }
     if meta_name:
         context_payload["meta_name"] = meta_name
     if primary_issue_tag:

@@ -91,6 +91,48 @@ def test_note_style_paths_use_manifest_when_enabled(
     assert paths.debug_dir == (base_dir / "debug").resolve()
 
 
+def test_note_style_paths_normalize_windows_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SIDWIN"
+    run_dir = tmp_path / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    windows_base = f"C:\\author\\runs\\{sid}\\ai_packs\\note_style"
+    windows_packs = windows_base + "\\packs"
+    windows_results = windows_base + "\\results"
+    windows_index = windows_base + "\\index.json"
+    windows_logs = windows_base + "\\logs.txt"
+
+    manifest_payload = {
+        "ai": {
+            "packs": {
+                "note_style": {
+                    "base": windows_base,
+                    "packs_dir": windows_packs,
+                    "results_dir": windows_results,
+                    "index": windows_index,
+                    "logs": windows_logs,
+                }
+            }
+        }
+    }
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    monkeypatch.setattr("backend.config.NOTE_STYLE_USE_MANIFEST_PATHS", True, raising=False)
+
+    paths = ensure_note_style_paths(tmp_path, sid, create=False)
+
+    expected_base = (tmp_path / sid / "ai_packs" / "note_style").resolve()
+    assert paths.base == expected_base
+    assert paths.packs_dir == (expected_base / "packs").resolve()
+    assert paths.results_dir == (expected_base / "results").resolve()
+    assert paths.index_file == (expected_base / "index.json").resolve()
+    assert paths.log_file == (expected_base / "logs.txt").resolve()
+
+
 def test_note_style_filename_sanitizes_account_id() -> None:
     account_id = " idx/Account 42 "
     assert note_style_pack_filename(account_id) == "acc_idx_Account_42.jsonl"

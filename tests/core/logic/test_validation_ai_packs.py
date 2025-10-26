@@ -66,6 +66,24 @@ def test_ensure_validation_paths_honors_env_overrides(
     assert absolute_paths.results_dir == absolute_results.resolve()
 
 
+def test_ensure_validation_paths_normalizes_windows_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SIDWIN"
+    runs_root = tmp_path / "runs"
+
+    windows_base = f"C:\\author\\runs\\{sid}\\ai_packs\\validation"
+    monkeypatch.setenv(PACKS_OVERRIDE_ENV, windows_base + "\\packs")
+    monkeypatch.setenv(RESULTS_OVERRIDE_ENV, windows_base + "\\results")
+
+    paths = ensure_validation_paths(runs_root, sid, create=False)
+
+    expected_base = (runs_root / sid / "ai_packs" / "validation").resolve()
+    assert paths.base == expected_base
+    assert paths.packs_dir == (expected_base / "packs").resolve()
+    assert paths.results_dir == (expected_base / "results").resolve()
+
+
 def test_validation_path_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sid = "sid-paths"
     runs_root = tmp_path / "runs"

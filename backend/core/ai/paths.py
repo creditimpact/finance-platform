@@ -11,6 +11,54 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+_WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:[/\\]")
+
+
+def _normalize_stage_override(
+    value: object,
+    *,
+    run_base: Path,
+    fallback: Path,
+) -> Path:
+    """Return a normalized path for manifest or environment overrides.
+
+    The helper coerces ``value`` to a path, replaces Windows path separators,
+    strips drive letters, and rebases the location underneath ``run_base``
+    whenever the value originates from a Windows absolute path.
+    """
+
+    try:
+        text = os.fspath(value)
+    except TypeError:
+        text = ""
+
+    sanitized = str(text).strip()
+    if not sanitized:
+        return fallback.resolve()
+
+    sanitized = sanitized.replace("\\", "/")
+    drive_match = _WINDOWS_DRIVE_PATTERN.match(sanitized)
+
+    if drive_match:
+        remainder = sanitized[drive_match.end() :]
+        parts = [segment for segment in remainder.split("/") if segment]
+        if not parts:
+            return fallback.resolve()
+
+        sid_lower = run_base.name.lower()
+        for idx, part in enumerate(parts):
+            if part.lower() == sid_lower:
+                relative_parts = parts[idx + 1 :]
+                return run_base.joinpath(*relative_parts).resolve()
+
+        return fallback.resolve()
+
+    candidate = Path(sanitized)
+    if candidate.is_absolute():
+        return candidate.resolve()
+
+    return (run_base / candidate).resolve()
+
 from backend import config
 
 
@@ -66,19 +114,15 @@ def ensure_validation_paths(
     """Return the canonical validation AI pack paths for ``sid``."""
 
     runs_root_path = Path(runs_root).resolve()
-    base_path = (runs_root_path / sid / "ai_packs" / "validation").resolve()
+    run_base = (runs_root_path / sid).resolve()
+    base_path = (run_base / "ai_packs" / "validation").resolve()
 
     def _resolve_override(env_name: str, default: Path) -> Path:
         raw = os.getenv(env_name)
         if not raw:
             return default
 
-        candidate = Path(raw)
-        if not candidate.is_absolute():
-            candidate = (runs_root_path / sid / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
-        return candidate
+        return _normalize_stage_override(raw, run_base=run_base, fallback=default)
 
     packs_dir = _resolve_override("VALIDATION_PACKS_DIR", base_path / "packs")
     results_dir = _resolve_override("VALIDATION_RESULTS_DIR", base_path / "results")
@@ -232,7 +276,7 @@ def ensure_note_style_paths(
     """Return the canonical note_style AI pack paths for ``sid``."""
 
     runs_root_path = Path(runs_root).resolve()
-    run_base = runs_root_path / sid
+    run_base = (runs_root_path / sid).resolve()
     default_base = (run_base / config.NOTE_STYLE_STAGE_DIR).resolve()
     default_packs = (run_base / config.NOTE_STYLE_PACKS_DIR).resolve()
     default_results = (run_base / config.NOTE_STYLE_RESULTS_DIR).resolve()
@@ -264,58 +308,53 @@ def ensure_note_style_paths(
                     if isinstance(packs_section, dict):
                         note_style_section = packs_section.get("note_style")
                         if isinstance(note_style_section, dict):
-                            def _coerce_manifest_path(value: object) -> Path | None:
-                                if value is None:
-                                    return None
-                                if isinstance(value, Path):
-                                    candidate = value
-                                else:
-                                    try:
-                                        text = os.fspath(value)
-                                    except TypeError:
-                                        return None
-                                    if not str(text).strip():
-                                        return None
-                                    candidate = Path(str(text).strip())
-                                if not candidate.is_absolute():
-                                    candidate = (run_base / candidate).resolve()
-                                else:
-                                    candidate = candidate.resolve()
-                                return candidate
+                            base_fallback = default_base
 
-                            base_candidate = _coerce_manifest_path(
-                                note_style_section.get("base")
-                                or note_style_section.get("dir")
-                            )
-                            packs_candidate = _coerce_manifest_path(
-                                note_style_section.get("packs_dir")
-                                or note_style_section.get("packs")
-                            )
-                            results_candidate = _coerce_manifest_path(
-                                note_style_section.get("results_dir")
-                                or note_style_section.get("results")
-                            )
-                            index_candidate = _coerce_manifest_path(
-                                note_style_section.get("index")
-                            )
-                            log_candidate = _coerce_manifest_path(
-                                note_style_section.get("logs")
-                            )
-
-                            if base_candidate is not None:
+                            base_value = note_style_section.get("base") or note_style_section.get("dir")
+                            if base_value is not None:
+                                base_candidate = _normalize_stage_override(
+                                    base_value,
+                                    run_base=run_base,
+                                    fallback=default_base,
+                                )
                                 base_path = base_candidate
-                            if packs_candidate is not None:
-                                packs_dir = packs_candidate
-                            elif base_candidate is not None:
-                                packs_dir = (base_candidate / "packs").resolve()
-                            if results_candidate is not None:
-                                results_dir = results_candidate
-                            elif base_candidate is not None:
-                                results_dir = (base_candidate / "results").resolve()
-                            if index_candidate is not None:
-                                index_file = index_candidate
-                            if log_candidate is not None:
-                                log_file = log_candidate
+                                base_fallback = base_candidate
+
+                            packs_value = note_style_section.get("packs_dir") or note_style_section.get("packs")
+                            if packs_value is not None:
+                                packs_dir = _normalize_stage_override(
+                                    packs_value,
+                                    run_base=run_base,
+                                    fallback=(base_fallback / "packs").resolve(),
+                                )
+                            elif base_path is not None:
+                                packs_dir = (base_path / "packs").resolve()
+
+                            results_value = note_style_section.get("results_dir") or note_style_section.get("results")
+                            if results_value is not None:
+                                results_dir = _normalize_stage_override(
+                                    results_value,
+                                    run_base=run_base,
+                                    fallback=(base_fallback / "results").resolve(),
+                                )
+                            elif base_path is not None:
+                                results_dir = (base_path / "results").resolve()
+
+                            index_value = note_style_section.get("index")
+                            if index_value is not None:
+                                index_file = _normalize_stage_override(
+                                    index_value,
+                                    run_base=run_base,
+                                    fallback=(base_fallback / "index.json").resolve(),
+                                )
+
+                            log_value = note_style_section.get("logs")
+                            if log_value is not None:
+                                log_file = _normalize_stage_override(
+                                    log_value,
+                                    run_base=run_base,
+                                    fallback=(base_fallback / "logs.txt").resolve(),
+                                )
 
     if base_path is None:
         base_path = default_base

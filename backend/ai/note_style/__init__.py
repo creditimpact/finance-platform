@@ -7,7 +7,7 @@ import math
 import os
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from backend import config
 from backend.ai.manifest import ensure_note_style_section
@@ -94,18 +94,20 @@ def prepare_and_send(
             skipped += 1
 
     if built > 0:
-        for account_id in scheduled:
-            try:
-                schedule_send_for_account(
-                    sid_text, account_id, runs_root=runs_root_path
-                )
-            except Exception:  # pragma: no cover - defensive logging
-                log.warning(
-                    "NOTE_STYLE_SEND_TASK_SCHEDULE_FAILED sid=%s account_id=%s",
-                    sid_text,
-                    account_id,
-                    exc_info=True,
-                )
+        try:
+            schedule_send_for_sid(
+                sid_text,
+                runs_root=runs_root_path,
+                trigger="prepare",
+                account_ids=tuple(scheduled),
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "NOTE_STYLE_SEND_TASK_SCHEDULE_FAILED sid=%s accounts=%s",
+                sid_text,
+                scheduled,
+                exc_info=True,
+            )
 
     if not accounts:
         try:
@@ -161,13 +163,82 @@ def prepare_and_send(
     }
 
 
+def schedule_send_for_sid(
+    sid: str,
+    *,
+    runs_root: Path | str | None = None,
+    trigger: str | None = None,
+    account_ids: Sequence[str] | None = None,
+) -> None:
+    """Schedule the asynchronous send/ingest work for ``sid`` packs."""
+
+    sid_text = str(sid or "").strip()
+    if not sid_text:
+        return
+
+    if not config.NOTE_STYLE_ENABLED:
+        log.info("NOTE_STYLE_DISABLED sid=%s", sid_text)
+        return
+
+    if runs_root is None:
+        runs_root_arg: str | None = None
+    else:
+        try:
+            runs_root_arg = os.fspath(runs_root)
+        except TypeError:
+            runs_root_arg = str(runs_root)
+
+    normalized_accounts: Sequence[str] | None
+    if account_ids:
+        normalized_accounts = tuple(str(value).strip() for value in account_ids if str(value).strip())
+    else:
+        normalized_accounts = None
+
+    now_bucket = int(math.floor(time.time()))
+    task_id = f"note-style.send:{sid_text}:{now_bucket}"
+
+    log_structured_event(
+        "NOTE_STYLE_SEND_TASK_ENQUEUE",
+        logger=log,
+        sid=sid_text,
+        runs_root=runs_root_arg,
+        trigger=trigger or "explicit",
+        accounts=list(normalized_accounts) if normalized_accounts else None,
+    )
+
+    from backend.ai.note_style.tasks import note_style_send_sid_task
+
+    try:
+        note_style_send_sid_task.apply_async(
+            args=(sid_text,),
+            kwargs={"runs_root": runs_root_arg},
+            task_id=task_id,
+            expires=300,
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        if exc.__class__.__name__ == "DuplicateTaskError":
+            log_structured_event(
+                "NOTE_STYLE_SEND_TASK_ENQUEUE_DUPLICATE",
+                logger=log,
+                sid=sid_text,
+                runs_root=runs_root_arg,
+                trigger=trigger or "explicit",
+                accounts=list(normalized_accounts) if normalized_accounts else None,
+            )
+            return
+        log.warning(
+            "NOTE_STYLE_SEND_TASK_ENQUEUE_FAILED sid=%s", sid_text, exc_info=True
+        )
+        raise
+
+
 def schedule_send_for_account(
     sid: str,
     account_id: str,
     *,
     runs_root: Path | str | None = None,
 ) -> None:
-    """Enqueue a Celery task to send ``account_id``'s note_style pack."""
+    """Backward-compatible wrapper scheduling send work for ``sid``."""
 
     sid_text = str(sid or "").strip()
     account_text = str(account_id or "").strip()
@@ -192,10 +263,11 @@ def schedule_send_for_account(
         "NOTE_STYLE_ACCOUNT_TASK_ENQUEUE sid=%s account_id=%s", sid_text, account_text
     )
 
-    from backend.ai.note_style.tasks import note_style_send_account_task
-
-    note_style_send_account_task.delay(
-        sid_text, account_text, runs_root=runs_root_arg
+    schedule_send_for_sid(
+        sid_text,
+        runs_root=runs_root_arg,
+        trigger="account",
+        account_ids=(account_text,),
     )
 
 
@@ -280,5 +352,10 @@ def schedule_prepare_and_send(
         raise
 
 
-__all__ = ["prepare_and_send", "schedule_prepare_and_send", "schedule_send_for_account"]
+__all__ = [
+    "prepare_and_send",
+    "schedule_prepare_and_send",
+    "schedule_send_for_sid",
+    "schedule_send_for_account",
+]
 

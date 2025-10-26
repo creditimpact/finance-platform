@@ -70,7 +70,7 @@ from backend.runflow.decider import (
     reconcile_umbrella_barriers,
     refresh_frontend_stage_from_responses,
 )
-from backend.ai.note_style import schedule_prepare_and_send
+from backend.ai.note_style import schedule_send_for_account
 from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.domain.claims import (
     CLAIM_FIELD_LINK_MAP,
@@ -2102,9 +2102,10 @@ def api_frontend_review_answer(sid: str, account_id: str):
             exc_info=True,
         )
 
+    build_result: Mapping[str, Any] | None = None
     if config.NOTE_STYLE_ENABLED:
         try:
-            build_note_style_pack_for_account(
+            build_result = build_note_style_pack_for_account(
                 sid, account_id, runs_root=run_dir.parent
             )
         except Exception:  # pragma: no cover - defensive logging
@@ -2115,16 +2116,22 @@ def api_frontend_review_answer(sid: str, account_id: str):
                 exc_info=True,
             )
 
-        if config.NOTE_STYLE_SEND_ON_RESPONSE_WRITE:
-            try:
-                schedule_prepare_and_send(sid, runs_root=run_dir.parent)
-            except Exception:  # pragma: no cover - defensive logging
-                logger.warning(
-                    "NOTE_STYLE_PREPARE_SCHEDULE_FAILED sid=%s account_id=%s",
-                    sid,
-                    account_id,
-                    exc_info=True,
-                )
+        if config.NOTE_STYLE_SEND_ON_RESPONSE_WRITE and isinstance(
+            build_result, Mapping
+        ):
+            status_text = str(build_result.get("status") or "").strip().lower()
+            if status_text == "completed":
+                try:
+                    schedule_send_for_account(
+                        sid, account_id, runs_root=run_dir.parent
+                    )
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.warning(
+                        "NOTE_STYLE_SEND_SCHEDULE_FAILED sid=%s account_id=%s",
+                        sid,
+                        account_id,
+                        exc_info=True,
+                    )
 
     try:
         reconcile_umbrella_barriers(sid, runs_root=run_dir.parent)

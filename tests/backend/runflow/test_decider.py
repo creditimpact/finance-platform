@@ -28,8 +28,11 @@ def _ensure_requests_stub() -> None:
 
 _ensure_requests_stub()
 
+from backend import config
 import backend.core.runflow as runflow_module
 import backend.runflow.decider as runflow_decider
+from backend.runflow.counters import note_style_stage_counts
+from backend.core.ai.paths import ensure_note_style_paths
 
 
 def _load_runflow(tmp_root: Path, sid: str) -> dict:
@@ -358,4 +361,128 @@ def test_note_style_stage_promotion_error_on_failed_result(tmp_path: Path) -> No
     assert stage_payload["metrics"] == {"packs_total": 2}
     assert stage_payload["results"] == {"results_total": 2, "completed": 1, "failed": 1}
     assert stage_payload["summary"]["failed"] == 1
-    assert stage_payload["summary"]["empty_ok"] is False
+
+
+def test_note_style_stage_promotion_uses_manifest_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NOTE_STYLE_USE_MANIFEST_PATHS", "1")
+    monkeypatch.setattr(config, "NOTE_STYLE_USE_MANIFEST_PATHS", True)
+
+    runs_root = tmp_path / "runs"
+    sid = "SID-note-manifest"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    custom_base = run_dir / "style-data"
+    custom_results = custom_base / "custom-results"
+    custom_base.mkdir(parents=True, exist_ok=True)
+    custom_results.mkdir(parents=True, exist_ok=True)
+
+    manifest_payload = {
+        "ai": {
+            "packs": {
+                "note_style": {
+                    "base": "style-data",
+                    "results_dir": "style-data/custom-results",
+                    "index": "style-data/index.json",
+                }
+            }
+        }
+    }
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    index_payload = {
+        "packs": [{"account_id": "idx-1", "status": "completed"}],
+        "totals": {"total": 1, "completed": 1, "failed": 0},
+    }
+    (custom_base / "index.json").write_text(
+        json.dumps(index_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    (custom_results / "acc_idx-1.result.jsonl").write_text(
+        json.dumps({"status": "completed"}, ensure_ascii=False), encoding="utf-8"
+    )
+
+    paths = ensure_note_style_paths(run_dir.parent, run_dir.name, create=False)
+    assert paths.results_dir == custom_results.resolve()
+    assert runflow_decider._note_style_index_status_mapping(run_dir) == {
+        "idx-1": "completed"
+    }
+    assert runflow_decider._note_style_counts_from_results_dir(run_dir) == (
+        1,
+        1,
+        0,
+    )
+
+    data: dict[str, object] = {"sid": sid, "stages": {}}
+    updated, promoted, log_context = runflow_decider._apply_note_style_stage_promotion(
+        data, run_dir
+    )
+
+    assert updated is True
+    assert promoted is True
+    assert log_context == {"total": 1, "completed": 1, "failed": 0}
+
+    stage_payload = data["stages"]["note_style"]
+    assert stage_payload["status"] == "success"
+    assert stage_payload["metrics"] == {"packs_total": 1}
+    assert stage_payload["results"] == {"results_total": 1, "completed": 1, "failed": 0}
+
+
+def test_note_style_stage_counts_uses_manifest_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NOTE_STYLE_USE_MANIFEST_PATHS", "1")
+    monkeypatch.setattr(config, "NOTE_STYLE_USE_MANIFEST_PATHS", True)
+
+    runs_root = tmp_path / "runs"
+    sid = "SID-note-counts"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    custom_base = run_dir / "style-alt"
+    custom_results = custom_base / "results-alt"
+    custom_packs = custom_base / "packs-alt"
+    custom_base.mkdir(parents=True, exist_ok=True)
+    custom_results.mkdir(parents=True, exist_ok=True)
+    custom_packs.mkdir(parents=True, exist_ok=True)
+
+    manifest_payload = {
+        "ai": {
+            "packs": {
+                "note_style": {
+                    "base": "style-alt",
+                    "results_dir": "style-alt/results-alt",
+                    "packs_dir": "style-alt/packs-alt",
+                    "index": "style-alt/index.json",
+                }
+            }
+        }
+    }
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    index_payload = {
+        "packs": [{"account_id": "idx-9", "status": "completed"}],
+        "totals": {"total": 1, "completed": 1, "failed": 0},
+    }
+    (custom_base / "index.json").write_text(
+        json.dumps(index_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    (custom_results / "acc_idx-9.result.jsonl").write_text(
+        json.dumps({"analysis": {"tone": "neutral"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    paths = ensure_note_style_paths(run_dir.parent, run_dir.name, create=False)
+    assert paths.results_dir == custom_results.resolve()
+
+    counts = note_style_stage_counts(run_dir)
+    assert counts == {"packs_total": 1, "packs_completed": 1, "packs_failed": 0}

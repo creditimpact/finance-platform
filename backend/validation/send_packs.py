@@ -4102,7 +4102,13 @@ class ValidationPackSender:
     def _build_client(self) -> _ChatCompletionClient:
         api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         if not api_key:
-            raise ValidationPackError("OPENAI_API_KEY is required to send validation packs")
+            log.error(
+                "VALIDATION_OPENAI_CREDENTIAL_ERROR model=%s detail=missing_api_key",
+                getattr(self, "model", "<unknown>"),
+            )
+            raise ValidationPackError(
+                "OPENAI_API_KEY is required to send validation packs"
+            )
         base_url_raw = os.getenv("OPENAI_BASE_URL")
         base_url_clean = (base_url_raw or "").strip() or "https://api.openai.com/v1"
         timeout = _env_float("AI_REQUEST_TIMEOUT", _DEFAULT_TIMEOUT)
@@ -4119,6 +4125,12 @@ class ValidationPackSender:
                         base_url_clean,
                     )
                     _AUTH_READY = True
+        log.info(
+            "VALIDATION_OPENAI_CLIENT_READY model=%s base_url=%s key_present=yes timeout=%s",
+            getattr(self, "model", "<unknown>"),
+            base_url_clean,
+            timeout,
+        )
         return _ChatCompletionClient(
             base_url=base_url_clean,
             api_key=api_key,

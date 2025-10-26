@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend.ai.note_style.pack_builder import PackBuilderError, build_pack
+from backend.ai.note_style.prompt import build_base_system_prompt
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -136,7 +137,7 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
 
     messages = pack_payload["messages"]
     assert messages[0]["role"] == "system"
-    assert "Context hints:" in messages[0]["content"]
+    assert messages[0]["content"] == build_base_system_prompt()
     assert messages[1]["role"] == "user"
     assert messages[1]["content"]["note_text"] == pack_payload["note_text"]
     assert messages[1]["content"]["context"] == account_payload

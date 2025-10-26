@@ -7,13 +7,12 @@ from typing import Any, Iterable, Mapping
 
 
 _BASE_SYSTEM_PROMPT = (
-    "You analyze a customer's note_text about a credit account and must respond with JSON only. "
-    "Base output only on note_text; treat context hints as orientation and do not restate them verbatim. "
-    "Output schema: {\"tone\": <string>, \"context_hints\": {\"timeframe\": {\"month\": <string|null>, "
-    "\"relative\": <string|null>}, \"topic\": <string>, \"entities\": {\"creditor\": <string|null>, "
-    "\"amount\": <number|null>}}, \"emphasis\": [<string>], \"confidence\": <float>, \"risk_flags\": [<string>]}. "
-    "Rules: keep text concise, limit lists to ≤6 entries, set confidence ≤0.5 when the note is short or ambiguous, and "
-    "include [\"unsupported_claim\"] in risk_flags if the note alleges an unsupported legal claim."
+    "You analyse customer notes and respond with structured JSON.\n"
+    "Return exactly one JSON object using this schema:\n"
+    '{"tone": string, "context_hints": {"timeframe": {"month": string|null, "relative": '
+    'string|null}, "topic": string, "entities": {"creditor": string|null, "amount": '
+    'number|null}}, "emphasis": [string], "confidence": number, "risk_flags": [string]}.\n'
+    "Never include explanations or additional keys."
 )
 
 _CONTEXT_HINT_PREFIX = "Context hints: "

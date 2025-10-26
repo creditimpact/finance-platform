@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -12,10 +13,48 @@ from typing import Optional
 from backend import config
 from backend.ai.note_style import schedule_prepare_and_send
 from backend.core.paths.frontend_review import ensure_frontend_review_dirs
-from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest, persist_manifest
 
 
 log = logging.getLogger(__name__)
+
+
+_WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:[/\\]")
+
+
+def _normalize_manifest_path_value(
+    value: Path | str | None, *, run_dir: Path
+) -> str | None:
+    """Return a normalized string representation for manifest paths."""
+
+    if value is None:
+        return None
+
+    try:
+        text = os.fspath(value)
+    except TypeError:
+        return None
+
+    sanitized = str(text).strip()
+    if not sanitized:
+        return None
+
+    sanitized = sanitized.replace("\\", "/")
+
+    if _WINDOWS_DRIVE_PATTERN.match(sanitized):
+        sanitized = sanitized[2:]
+
+    run_dir_text = str(run_dir).strip().replace("\\", "/")
+    if _WINDOWS_DRIVE_PATTERN.match(run_dir_text):
+        run_dir_text = run_dir_text[2:]
+
+    run_dir_lower = run_dir_text.lower()
+    sanitized_lower = sanitized.lower()
+    if run_dir_lower and sanitized_lower.startswith(run_dir_lower):
+        suffix = sanitized[len(run_dir_text) :]
+        sanitized = run_dir_text + suffix
+
+    return sanitized
 
 
 def _resolve_manifest(
@@ -29,6 +68,7 @@ def _resolve_manifest(
 
     if runs_root is not None:
         base = Path(runs_root)
+        os.environ.setdefault(RUNS_ROOT_ENV, str(base))
         manifest_path = base / sid / "manifest.json"
         return RunManifest.load_or_create(manifest_path, sid=sid)
 
@@ -110,6 +150,8 @@ def update_manifest_frontend(
     run_dir = target_manifest.path.parent
     canonical_paths = ensure_frontend_review_dirs(str(run_dir))
 
+    run_dir_path = run_dir.resolve()
+
     packs_dir_path = canonical_paths["packs_dir"]
     responses_dir_path = canonical_paths["responses_dir"]
     review_dir_path = canonical_paths["review_dir"]
@@ -133,14 +175,18 @@ def update_manifest_frontend(
         last_built_value = str(last_built_at) if last_built_at else None
 
     target_manifest.data["frontend"] = {
-        "base": frontend_base,
-        "dir": review_dir_path,
-        "packs": packs_dir_path,
-        "packs_dir": packs_dir_path,
-        "results": responses_dir_path,
-        "results_dir": responses_dir_path,
-        "index": index_path,
-        "legacy_index": legacy_index_path,
+        "base": _normalize_manifest_path_value(frontend_base, run_dir=run_dir_path),
+        "dir": _normalize_manifest_path_value(review_dir_path, run_dir=run_dir_path),
+        "packs": _normalize_manifest_path_value(packs_dir_path, run_dir=run_dir_path),
+        "packs_dir": _normalize_manifest_path_value(packs_dir_path, run_dir=run_dir_path),
+        "results": _normalize_manifest_path_value(responses_dir_path, run_dir=run_dir_path),
+        "results_dir": _normalize_manifest_path_value(
+            responses_dir_path, run_dir=run_dir_path
+        ),
+        "index": _normalize_manifest_path_value(index_path, run_dir=run_dir_path),
+        "legacy_index": _normalize_manifest_path_value(
+            legacy_index_path, run_dir=run_dir_path
+        ),
         "built": bool(built),
         "packs_count": packs_count_value,
         "counts": {

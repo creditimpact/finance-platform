@@ -9,6 +9,7 @@ import pytest
 from backend.ai.note_style_sender import send_note_style_packs_for_sid
 from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
+from backend import config
 
 
 def _write_response(path: Path, payload: dict[str, object]) -> None:
@@ -307,6 +308,60 @@ def test_note_style_sender_skips_when_existing_result_matches(
     assert entry["status"] == "completed"
     assert "note_hash" not in entry
     assert entry.get("result_path") == account_paths.result_file.relative_to(paths.base).as_posix()
+
+
+def test_note_style_sender_respects_skip_env_when_result_has_analysis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID300"
+    account_id = "idx-300"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Already reviewed."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    existing_result = {
+        "sid": sid,
+        "account_id": account_id,
+        "analysis": {
+            "tone": "calm",
+            "context_hints": {
+                "timeframe": {"month": None, "relative": None},
+                "topic": "other",
+                "entities": {"creditor": None, "amount": None},
+            },
+            "emphasis": [],
+            "confidence": 0.5,
+            "risk_flags": [],
+        },
+    }
+    account_paths.result_file.write_text(
+        json.dumps(existing_result, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    client = _StubClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+    monkeypatch.setattr(config, "NOTE_STYLE_SKIP_IF_RESULT_EXISTS", True)
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+
+    assert processed == []
+    assert client.calls == []
 
 def test_note_style_sender_raises_when_pack_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

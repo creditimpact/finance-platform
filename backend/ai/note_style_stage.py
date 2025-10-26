@@ -51,6 +51,21 @@ _ZERO_WIDTH_TRANSLATION = {
     ord("\u2060"): " ",
 }
 
+_BUREAU_CONTEXT_FIELDS = (
+    "account_type",
+    "account_status",
+    "payment_status",
+    "creditor_type",
+    "date_opened",
+    "date_reported",
+    "date_of_last_activity",
+    "closed_date",
+    "last_verified",
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+)
+
 
 @dataclass(frozen=True)
 class NoteStyleResponseAccount:
@@ -127,6 +142,59 @@ def _sanitize_note_text(text: str) -> str:
     return collapsed.strip()
 
 
+def _select_bureau_payload(bureaus_payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    majority_values = bureaus_payload.get("majority_values")
+    if isinstance(majority_values, Mapping):
+        return majority_values
+
+    bureaus_section = bureaus_payload.get("bureaus")
+    if isinstance(bureaus_section, Mapping):
+        for entry in bureaus_section.values():
+            if isinstance(entry, Mapping):
+                return entry
+    elif isinstance(bureaus_section, Iterable) and not isinstance(
+        bureaus_section, (str, bytes, bytearray)
+    ):
+        for entry in bureaus_section:
+            if isinstance(entry, Mapping):
+                return entry
+
+    for key in ("experian", "equifax", "transunion"):
+        candidate = bureaus_payload.get(key)
+        if isinstance(candidate, Mapping):
+            return candidate
+
+    for value in bureaus_payload.values():
+        if isinstance(value, Mapping):
+            return value
+
+    return None
+
+
+def _extract_bureau_context(bureaus_payload: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if not isinstance(bureaus_payload, Mapping):
+        return {}
+
+    selected = _select_bureau_payload(bureaus_payload)
+    if not isinstance(selected, Mapping):
+        return {}
+
+    context: dict[str, Any] = {}
+    for field in _BUREAU_CONTEXT_FIELDS:
+        value = selected.get(field)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if not trimmed:
+                continue
+            context[field] = trimmed
+        else:
+            context[field] = value
+
+    return context
+
+
 def _resolve_response_path(sid: str, account_id: str, runs_root: Path) -> Path:
     return (runs_root / sid / "frontend" / "review" / "responses" / f"{account_id}.result.json").resolve()
 
@@ -191,6 +259,11 @@ def _write_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(serialized + "\n", encoding="utf-8")
 
 
+def _write_debug_snapshot(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _primary_issue_tag(tags_payload: Any) -> str | None:
     if isinstance(tags_payload, Mapping):
         entries = tags_payload.get("tags")
@@ -212,11 +285,30 @@ def _primary_issue_tag(tags_payload: Any) -> str | None:
 
 def _resolve_account_name(meta_payload: Mapping[str, Any] | None, account_id: str) -> str:
     if isinstance(meta_payload, Mapping):
-        for key in ("heading_guess", "display_name", "name", "account_name", "creditor_name"):
+        for key in ("heading_guess", "name"):
             value = meta_payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
-    return account_id
+    return ""
+
+
+def _compact_mapping(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    compact: dict[str, Any] = {}
+    for key, value in payload.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if not trimmed:
+                continue
+            compact[key] = trimmed
+        elif isinstance(value, Mapping):
+            nested = _compact_mapping(value)
+            if nested:
+                compact[key] = nested
+        else:
+            compact[key] = value
+    return compact
 
 
 def discover_note_style_response_accounts(
@@ -325,23 +417,30 @@ def build_note_style_pack_for_account(
 
     primary_issue = _primary_issue_tag(tags_payload)
     account_name = _resolve_account_name(meta_payload, account_id)
+    bureau_context = _extract_bureau_context(bureaus_payload)
 
-    pack_context = {
-        "meta_name": account_name,
-        "primary_issue_tag": primary_issue,
-        "bureau_data": bureaus_payload or {},
-        "note_text": note_text,
-    }
+    pack_context = _compact_mapping(
+        {
+            "meta_name": account_name,
+            "primary_issue_tag": primary_issue,
+            "bureau_context": bureau_context if bureau_context else None,
+        }
+    )
+
+    user_message_content: dict[str, Any] = {"note_text": note_text}
+    if pack_context:
+        user_message_content["context"] = pack_context
 
     pack_payload = {
         "sid": sid,
         "account_id": account_id,
         "model": "gpt-4o-mini",
         "built_at": timestamp,
+        "note_text": note_text,
         "context": pack_context,
         "messages": [
             {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
-            {"role": "user", "content": pack_context},
+            {"role": "user", "content": user_message_content},
         ],
     }
 
@@ -352,12 +451,17 @@ def build_note_style_pack_for_account(
     result_payload = {
         "sid": sid,
         "account_id": account_id,
-        "analysis": None,
         "note_metrics": note_metrics,
     }
 
     _write_jsonl(account_paths.pack_file, pack_payload)
     _write_jsonl(account_paths.result_file, result_payload)
+    debug_payload = {
+        "meta": meta_payload or {},
+        "bureaus": bureaus_payload or {},
+        "tags": tags_payload if isinstance(tags_payload, list) else tags_payload or [],
+    }
+    _write_debug_snapshot(account_paths.debug_file, debug_payload)
     index_payload = _ensure_index_entry(
         paths=paths,
         account_id=account_id,

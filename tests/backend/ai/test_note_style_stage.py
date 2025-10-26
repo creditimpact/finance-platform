@@ -203,14 +203,20 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert pack_payload["model"]
     assert pack_payload["context"]["meta_name"] == "Capital One"
     assert pack_payload["context"]["primary_issue_tag"] == "late_payment"
-    assert pack_payload["context"]["note_text"].startswith("Please help")
+    assert pack_payload["note_text"].startswith("Please help")
+    bureau_context = pack_payload["context"]["bureau_context"]
+    assert bureau_context["account_type"] == "Credit Card"
+    assert bureau_context["account_status"] == "Closed"
+    assert "reported_creditor" not in bureau_context
     assert pack_payload["messages"][0]["role"] == "system"
 
     user_message = pack_payload["messages"][1]
     assert user_message["role"] == "user"
-    parsed_content = json.loads(user_message["content"])
-    assert parsed_content["note_text"].startswith("Please help")
-    assert parsed_content["meta_name"] == "Capital One"
+    user_content = user_message["content"]
+    assert user_content["note_text"].startswith("Please help")
+    context_snapshot = user_content["context"]
+    assert context_snapshot["meta_name"] == "Capital One"
+    assert context_snapshot["primary_issue_tag"] == "late_payment"
 
     # Debug context snapshots should never leak into the pack payload that will be
     # forwarded to the AI model or the initial result stub.

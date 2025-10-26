@@ -69,6 +69,17 @@ _BUREAU_PRIORITY = ("transunion", "experian", "equifax")
 
 _BASE_SYSTEM_MESSAGE = build_base_system_prompt()
 
+_CONTEXT_NOISE_KEYS = (
+    "hash",
+    "salt",
+    "debug",
+    "raw",
+    "blob",
+    "token",
+    "signature",
+    "checksum",
+)
+
 
 def _build_system_message(
     account_context: Mapping[str, Any] | None,
@@ -86,12 +97,21 @@ class PackBuilderError(RuntimeError):
     """Raised when a note_style pack cannot be constructed."""
 
 
+def _build_user_message_content(
+    note_text: str, account_payload: Mapping[str, Any] | None
+) -> Mapping[str, Any]:
+    content: dict[str, Any] = {"note_text": note_text}
+    if account_payload:
+        content["context"] = account_payload
+    return content
+
+
 def build_pack(
     sid: str,
     account_id: str,
     *,
     runs_root: Path | str | None = None,
-    mirror_debug: bool = True,
+    mirror_debug: bool = False,
 ) -> Mapping[str, Any]:
     """Build a note_style pack for ``sid``/``account_id``.
 
@@ -124,6 +144,8 @@ def build_pack(
     tags_payload = _ensure_sequence(_load_json(account_dir / "tags.json"))
     meta_payload = _ensure_mapping(_load_json(account_dir / "meta.json"))
 
+    account_payload = _build_account_payload(meta_payload, bureaus_payload, tags_payload)
+
     bureaus_summary = _summarize_bureaus(bureaus_payload)
     account_context = _build_account_context(
         meta_payload, bureaus_payload, tags_payload, bureaus_summary
@@ -135,6 +157,7 @@ def build_pack(
     }
 
     system_message = _build_system_message(account_context, bureaus_summary)
+    user_message = _build_user_message_content(note_text, account_payload)
 
     pack_payload = {
         "sid": sid,
@@ -142,11 +165,12 @@ def build_pack(
         "channel": "frontend_review",
         "note_text": note_text,
         "note_metrics": note_metrics,
+        "account_payload": account_payload,
         "account_context": account_context,
         "bureaus_summary": bureaus_summary,
         "messages": [
             {"role": "system", "content": system_message},
-            {"role": "user", "content": note_text},
+            {"role": "user", "content": user_message},
         ],
     }
 
@@ -213,6 +237,28 @@ def _ensure_sequence(value: Any) -> Sequence[Any]:
     return []
 
 
+def _build_account_payload(
+    meta: Mapping[str, Any],
+    bureaus: Mapping[str, Any],
+    tags: Sequence[Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+
+    sanitized_meta = _sanitize_context_payload(meta)
+    if sanitized_meta:
+        payload["meta"] = sanitized_meta
+
+    sanitized_bureaus = _sanitize_context_payload(bureaus)
+    if sanitized_bureaus:
+        payload["bureaus"] = sanitized_bureaus
+
+    sanitized_tags = _sanitize_context_payload(tags)
+    if sanitized_tags:
+        payload["tags"] = sanitized_tags
+
+    return payload
+
+
 def _extract_note_text(payload: Any) -> str:
     if isinstance(payload, Mapping):
         for path in _NOTE_VALUE_PATHS:
@@ -234,6 +280,54 @@ def _normalize_text(value: Any) -> str:
     if isinstance(value, str):
         return unicodedata.normalize("NFKC", value).strip()
     return unicodedata.normalize("NFKC", str(value)).strip()
+
+
+def _sanitize_context_payload(value: Any, *, depth: int = 0) -> Any:
+    if depth > 6:
+        return None
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        sanitized: dict[str, Any] = {}
+        for key, raw in value.items():
+            if not isinstance(key, str):
+                continue
+            if _is_noise_key(key):
+                continue
+            cleaned = _sanitize_context_payload(raw, depth=depth + 1)
+            if _is_empty_context_value(cleaned):
+                continue
+            sanitized[key] = cleaned
+        return sanitized
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        sanitized_seq: list[Any] = []
+        for entry in value:
+            cleaned = _sanitize_context_payload(entry, depth=depth + 1)
+            if _is_empty_context_value(cleaned):
+                continue
+            sanitized_seq.append(cleaned)
+        return sanitized_seq
+    normalized = _normalize_text(value)
+    return normalized if normalized else None
+
+
+def _is_noise_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(fragment in lowered for fragment in _CONTEXT_NOISE_KEYS)
+
+
+def _is_empty_context_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, bytes, bytearray)):
+        return len(value) == 0
+    if isinstance(value, Mapping):
+        return all(_is_empty_context_value(v) for v in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return len(value) == 0 or all(_is_empty_context_value(v) for v in value)
+    return False
 
 
 def _normalize_amount(value: Any) -> str:

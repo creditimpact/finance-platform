@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from dataclasses import dataclass
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -150,13 +150,8 @@ def prepare_and_send(
     }
 
 
-@dataclass
-class _DebounceEntry:
-    timer: threading.Timer
-
-
 _DEBOUNCE_LOCK = threading.Lock()
-_PENDING: dict[str, _DebounceEntry] = {}
+_LAST_ENQUEUED: dict[str, float] = {}
 
 
 def schedule_prepare_and_send(
@@ -173,32 +168,38 @@ def schedule_prepare_and_send(
         return
 
     delay = _debounce_delay_seconds()
+    now = time.monotonic()
 
-    def _run() -> None:
-        try:
-            prepare_and_send(sid_text, runs_root=runs_root)
-        except Exception:  # pragma: no cover - defensive logging
-            log.exception("NOTE_STYLE_PREPARE_FAILED sid=%s", sid_text)
-        finally:
-            with _DEBOUNCE_LOCK:
-                _PENDING.pop(sid_text, None)
+    enqueue = True
+    if delay > 0:
+        with _DEBOUNCE_LOCK:
+            last = _LAST_ENQUEUED.get(sid_text)
+            if last is not None and (now - last) < delay:
+                enqueue = False
+            else:
+                _LAST_ENQUEUED[sid_text] = now
+    else:
+        with _DEBOUNCE_LOCK:
+            _LAST_ENQUEUED.pop(sid_text, None)
 
-    if delay <= 0:
-        _run()
+    if not enqueue:
+        log.info("NOTE_STYLE_PREPARE_DEBOUNCED sid=%s", sid_text)
         return
 
-    with _DEBOUNCE_LOCK:
-        existing = _PENDING.pop(sid_text, None)
-        if existing is not None:
-            try:
-                existing.timer.cancel()
-            except Exception:
-                pass
+    runs_root_arg: str | None
+    if runs_root is None:
+        runs_root_arg = None
+    else:
+        try:
+            runs_root_arg = os.fspath(runs_root)
+        except TypeError:
+            runs_root_arg = str(runs_root)
 
-        timer = threading.Timer(delay, _run)
-        timer.daemon = True
-        timer.start()
-        _PENDING[sid_text] = _DebounceEntry(timer=timer)
+    log.info("NOTE_STYLE_TASK_ENQUEUE sid=%s", sid_text)
+
+    from backend.ai.note_style.tasks import note_style_prepare_and_send_task
+
+    note_style_prepare_and_send_task.delay(sid_text, runs_root=runs_root_arg)
 
 
 __all__ = ["prepare_and_send", "schedule_prepare_and_send"]

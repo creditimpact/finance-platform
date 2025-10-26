@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import json
+import pytest
+
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     ensure_note_style_account_paths,
@@ -43,6 +46,49 @@ def test_ensure_note_style_paths_read_only(tmp_path: Path) -> None:
     assert not (base / "results_raw").exists()
     assert paths.debug_dir == (base / "debug").resolve()
     assert paths.log_file == (base / "logs.txt").resolve()
+
+
+def test_note_style_paths_use_manifest_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID999"
+    run_dir = tmp_path / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    base_dir = tmp_path / "custom_base"
+    packs_dir = base_dir / "packs_alt"
+    results_dir = base_dir / "results_alt"
+    index_path = base_dir / "custom_index.json"
+    log_path = base_dir / "custom_logs.txt"
+
+    manifest_payload = {
+        "ai": {
+            "packs": {
+                "note_style": {
+                    "base": str(base_dir),
+                    "packs_dir": str(packs_dir),
+                    "results_dir": str(results_dir),
+                    "index": str(index_path),
+                    "logs": str(log_path),
+                }
+            }
+        }
+    }
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    monkeypatch.setattr("backend.config.NOTE_STYLE_USE_MANIFEST_PATHS", True, raising=False)
+
+    paths = ensure_note_style_paths(tmp_path, sid, create=False)
+
+    assert paths.base == base_dir.resolve()
+    assert paths.packs_dir == packs_dir.resolve()
+    assert paths.results_dir == results_dir.resolve()
+    assert paths.index_file == index_path.resolve()
+    assert paths.log_file == log_path.resolve()
+    assert paths.results_raw_dir == (base_dir / "results_raw").resolve()
+    assert paths.debug_dir == (base_dir / "debug").resolve()
 
 
 def test_note_style_filename_sanitizes_account_id() -> None:

@@ -145,6 +145,13 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
     assert note_style_stage["status"] == "success"
     assert note_style_stage["results"]["completed"] >= 1
 
+    manifest_path = run_dir / "manifest.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stage_status = manifest_data["ai"]["status"]["note_style"]
+    assert stage_status["built"] is True
+    assert stage_status["sent"] is True
+    assert isinstance(stage_status["completed_at"], str)
+
 
 def test_prepare_and_send_records_empty_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sid = "SID201"
@@ -171,19 +178,19 @@ def test_prepare_and_send_records_empty_stage(tmp_path: Path, monkeypatch: pytes
     assert stage["empty_ok"] is True
 
 
-def test_schedule_prepare_and_send_invokes_prepare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    note_style_module._PENDING.clear()
+def test_schedule_prepare_and_send_invokes_celery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    note_style_module._LAST_ENQUEUED.clear()
 
     calls: list[tuple[str, Any]] = []
 
-    def _fake_prepare(sid: str, *, runs_root: Path | str | None = None) -> None:
+    def _fake_delay(sid: str, *, runs_root: str | None = None) -> None:
         calls.append((sid, runs_root))
 
-    monkeypatch.setattr(note_style_module, "prepare_and_send", _fake_prepare)
+    monkeypatch.setattr(
+        "backend.ai.note_style.tasks.note_style_prepare_and_send_task.delay",
+        _fake_delay,
+    )
 
-    try:
-        schedule_prepare_and_send("SID202", runs_root=tmp_path)
-    finally:
-        note_style_module._PENDING.clear()
+    schedule_prepare_and_send("SID202", runs_root=tmp_path)
 
-    assert calls == [("SID202", tmp_path)]
+    assert calls == [("SID202", str(tmp_path))]

@@ -132,7 +132,7 @@ def test_note_style_sender_sends_built_pack(
 
     assert "account_context" not in stored_payload
     assert "bureaus_summary" not in stored_payload
-    assert pack_payload["context"]["note_text"]
+    assert pack_payload["messages"][1]["content"]["note_text"]
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]

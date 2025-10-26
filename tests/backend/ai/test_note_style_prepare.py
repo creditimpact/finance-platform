@@ -265,19 +265,54 @@ def test_prepare_and_send_records_empty_stage(tmp_path: Path, monkeypatch: pytes
     assert stage["empty_ok"] is True
 
 
-def test_schedule_prepare_and_send_invokes_celery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    note_style_module._LAST_ENQUEUED.clear()
+def test_schedule_prepare_and_send_invokes_celery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NOTE_STYLE_DEBOUNCE_MS", raising=False)
 
-    calls: list[tuple[str, Any]] = []
+    calls: list[dict[str, Any]] = []
 
-    def _fake_delay(sid: str, *, runs_root: str | None = None) -> None:
-        calls.append((sid, runs_root))
+    def _fake_apply_async(*, args, kwargs, countdown=None, task_id=None, expires=None):
+        calls.append(
+            {
+                "args": args,
+                "kwargs": kwargs,
+                "countdown": countdown,
+                "task_id": task_id,
+                "expires": expires,
+            }
+        )
 
     monkeypatch.setattr(
-        "backend.ai.note_style.tasks.note_style_prepare_and_send_task.delay",
-        _fake_delay,
+        "backend.ai.note_style.tasks.note_style_prepare_and_send_task.apply_async",
+        _fake_apply_async,
     )
 
     schedule_prepare_and_send("SID202", runs_root=tmp_path)
 
-    assert calls == [("SID202", str(tmp_path))]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["args"] == ("SID202",)
+    assert call["kwargs"] == {"runs_root": str(tmp_path)}
+    assert call["countdown"] == note_style_module._debounce_delay_seconds()
+    if call["countdown"] and call["countdown"] > 0:
+        assert call["task_id"] is not None
+
+
+def test_schedule_prepare_and_send_dedupes_duplicate_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NOTE_STYLE_DEBOUNCE_MS", raising=False)
+
+    class DuplicateTaskError(Exception):
+        pass
+
+    def _raise_duplicate(**kwargs: Any) -> None:  # type: ignore[override]
+        raise DuplicateTaskError()
+
+    monkeypatch.setattr(
+        "backend.ai.note_style.tasks.note_style_prepare_and_send_task.apply_async",
+        _raise_duplicate,
+    )
+
+    schedule_prepare_and_send("SID303", runs_root=tmp_path)

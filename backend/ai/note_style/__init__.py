@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
-import threading
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -15,6 +15,7 @@ from backend.ai.note_style_stage import (
     build_note_style_pack_for_account,
     discover_note_style_response_accounts,
 )
+from backend.ai.note_style_logging import log_structured_event
 from backend.core.runflow import runflow_barriers_refresh
 from backend.runflow.decider import record_stage, reconcile_umbrella_barriers
 
@@ -198,10 +199,6 @@ def schedule_send_for_account(
     )
 
 
-_DEBOUNCE_LOCK = threading.Lock()
-_LAST_ENQUEUED: dict[str, float] = {}
-
-
 def schedule_prepare_and_send(
     sid: str, *, runs_root: Path | str | None = None
 ) -> None:
@@ -215,24 +212,17 @@ def schedule_prepare_and_send(
         log.info("NOTE_STYLE_DISABLED sid=%s", sid_text)
         return
 
-    delay = _debounce_delay_seconds()
-    now = time.monotonic()
+    delay = max(_debounce_delay_seconds(), 0.0)
+    now_wall = time.time()
+    task_id: str | None = None
+    expires: float | None = None
 
-    enqueue = True
     if delay > 0:
-        with _DEBOUNCE_LOCK:
-            last = _LAST_ENQUEUED.get(sid_text)
-            if last is not None and (now - last) < delay:
-                enqueue = False
-            else:
-                _LAST_ENQUEUED[sid_text] = now
+        bucket = int(math.floor(now_wall / delay)) if delay else int(now_wall)
+        task_id = f"note-style.prepare:{sid_text}:{bucket}"
+        expires = delay + 60
     else:
-        with _DEBOUNCE_LOCK:
-            _LAST_ENQUEUED.pop(sid_text, None)
-
-    if not enqueue:
-        log.info("NOTE_STYLE_PREPARE_DEBOUNCED sid=%s", sid_text)
-        return
+        expires = 60
 
     runs_root_arg: str | None
     if runs_root is None:
@@ -243,11 +233,51 @@ def schedule_prepare_and_send(
         except TypeError:
             runs_root_arg = str(runs_root)
 
-    log.info("NOTE_STYLE_TASK_ENQUEUE sid=%s", sid_text)
+    log_structured_event(
+        "NOTE_STYLE_TASK_ENQUEUE",
+        logger=log,
+        sid=sid_text,
+        delay_seconds=delay if delay > 0 else 0,
+        runs_root=runs_root_arg,
+        task_id=task_id,
+    )
 
     from backend.ai.note_style.tasks import note_style_prepare_and_send_task
 
-    note_style_prepare_and_send_task.delay(sid_text, runs_root=runs_root_arg)
+    apply_kwargs: dict[str, object] = {
+        "args": (sid_text,),
+        "kwargs": {"runs_root": runs_root_arg},
+    }
+    if delay > 0:
+        apply_kwargs["countdown"] = delay
+    if task_id:
+        apply_kwargs["task_id"] = task_id
+    if expires:
+        apply_kwargs["expires"] = expires
+
+    try:
+        note_style_prepare_and_send_task.apply_async(**apply_kwargs)
+    except Exception as exc:
+        if exc.__class__.__name__ == "DuplicateTaskError":
+            log_structured_event(
+                "NOTE_STYLE_TASK_ENQUEUE_DUPLICATE",
+                logger=log,
+                sid=sid_text,
+                runs_root=runs_root_arg,
+                task_id=task_id,
+            )
+            return
+        log_structured_event(
+            "NOTE_STYLE_TASK_ENQUEUE_FAILED",
+            logger=log,
+            sid=sid_text,
+            runs_root=runs_root_arg,
+            task_id=task_id,
+            error=str(exc),
+            level=logging.ERROR,
+        )
+        log.exception("NOTE_STYLE_TASK_ENQUEUE_FAILED sid=%s", sid_text)
+        raise
 
 
 __all__ = ["prepare_and_send", "schedule_prepare_and_send", "schedule_send_for_account"]

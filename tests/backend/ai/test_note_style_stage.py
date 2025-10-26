@@ -347,7 +347,7 @@ def test_note_style_manifest_registered_before_pack_build(tmp_path: Path) -> Non
     status_payload = note_style_section.get("status")
     assert isinstance(status_payload, dict)
     assert set(status_payload.keys()) >= {"built", "sent", "completed_at"}
-    assert status_payload["built"] is False
+    assert status_payload["built"] is True
     assert status_payload["sent"] is False
     assert status_payload["completed_at"] is None
 

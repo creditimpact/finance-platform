@@ -2179,6 +2179,7 @@ def api_frontend_review_answer(sid: str, account_id: str):
                     sid,
                     account_id,
                     runs_root=run_dir.parent,
+                    delay_ms=max(_NOTE_STYLE_SEND_DELAY_MS, 300),
                 )
 
     try:

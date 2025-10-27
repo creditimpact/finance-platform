@@ -542,7 +542,10 @@ def test_frontend_review_submit_schedules_note_style_send_when_enabled(
     assert len(prepare_calls) == 1
     call_args, call_kwargs = prepare_calls[0]
     assert call_args == (sid, account_id)
-    assert call_kwargs == {"runs_root": runs_root}
+    assert call_kwargs == {
+        "runs_root": runs_root,
+        "delay_ms": 300,
+    }
 def test_frontend_review_submit_honors_stage_responses_override(api_client, monkeypatch):
     client, runs_root = api_client
     sid = "S778"

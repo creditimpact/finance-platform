@@ -1207,19 +1207,21 @@ def _apply_note_style_stage_promotion(
     total_value = max(total, 0)
     completed_value = max(min(completed, total_value), 0)
     failed_value = max(failed, 0)
+    terminal_value = max(min(completed_value + failed_value, total_value), 0)
     empty_ok = total_value == 0
+
+    stage_terminal = total_value == 0 or terminal_value >= total_value
 
     stages = _ensure_stages_dict(data)
     existing = stages.get("note_style") if isinstance(stages, Mapping) else None
     previous_status = _stage_status(stages, "note_style")
 
-    if total_value > 0 and failed_value > 0:
-        status_value = "error"
-    elif total_value == 0:
-        status_value = "success"
-    elif completed_value == total_value:
-        status_value = "success"
-    elif allow_partial_success:
+    if stage_terminal:
+        if failed_value > 0 and completed_value == 0:
+            status_value = "error"
+        else:
+            status_value = "success"
+    elif allow_partial_success and completed_value > 0:
         status_value = "success"
     else:
         status_value = "built"
@@ -1283,10 +1285,25 @@ def _apply_note_style_stage_promotion(
     existing_results = _normalize_results(existing.get("results")) if isinstance(existing, Mapping) else {}
     existing_summary = _normalize_summary(existing.get("summary")) if isinstance(existing, Mapping) else {}
     existing_empty_ok = bool(existing.get("empty_ok")) if isinstance(existing, Mapping) else False
+    existing_sent = bool(existing.get("sent")) if isinstance(existing, Mapping) else False
+    if isinstance(existing, Mapping):
+        completed_raw = existing.get("completed_at")
+    else:
+        completed_raw = None
+    if isinstance(completed_raw, str):
+        existing_completed_at = completed_raw.strip() or None
+    else:
+        existing_completed_at = None
     existing_status = (
         _normalize_stage_status_value(existing.get("status"))
         if isinstance(existing, Mapping)
         else ""
+    )
+
+    desired_sent = stage_terminal
+    completed_matches = (
+        (stage_terminal and existing_completed_at is not None)
+        or (not stage_terminal and existing_completed_at is None)
     )
 
     update_required = True
@@ -1297,6 +1314,8 @@ def _apply_note_style_stage_promotion(
             and existing_metrics == metrics_payload
             and existing_results == results_payload
             and existing_summary == summary_payload
+            and existing_sent == desired_sent
+            and completed_matches
         ):
             update_required = False
 
@@ -1311,6 +1330,11 @@ def _apply_note_style_stage_promotion(
         return (False, promoted, log_context)
 
     timestamp = _now_iso()
+    sent_value = desired_sent
+    if sent_value:
+        completed_at_value = existing_completed_at or timestamp
+    else:
+        completed_at_value = None
     stage_payload = {
         "status": status_value,
         "last_at": timestamp,
@@ -1318,6 +1342,8 @@ def _apply_note_style_stage_promotion(
         "metrics": dict(metrics_payload),
         "results": dict(results_payload),
         "summary": summary_payload,
+        "sent": sent_value,
+        "completed_at": completed_at_value,
     }
 
     stages["note_style"] = stage_payload
@@ -1867,6 +1893,12 @@ def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
     total = 0
     completed = 0
     failed = 0
+    totals_payload = document.get("totals") if isinstance(document, Mapping) else None
+    packs_total_hint = None
+    if isinstance(totals_payload, Mapping):
+        packs_total_hint = _coerce_int(totals_payload.get("packs_total")) or _coerce_int(
+            totals_payload.get("total")
+        )
 
     for entry in entries:
         raw_status = entry.get("status")
@@ -1883,10 +1915,12 @@ def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
         elif status == "failed":
             failed += 1
 
-    if not entries:
-        totals_payload = document.get("totals")
+    if entries:
+        if packs_total_hint is not None and packs_total_hint > total:
+            total = packs_total_hint
+    else:
         if isinstance(totals_payload, Mapping):
-            total = _coerce_int(totals_payload.get("total")) or 0
+            total = packs_total_hint or 0
             completed = _coerce_int(totals_payload.get("completed")) or 0
             failed = _coerce_int(totals_payload.get("failed")) or 0
         else:
@@ -1895,7 +1929,8 @@ def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
     if total == 0:
         return (0, 0, failed or 0, True)
 
-    ready = completed == total and failed == 0
+    terminal = completed + failed
+    ready = terminal >= total
     return (total, completed, failed or 0, ready)
 
 

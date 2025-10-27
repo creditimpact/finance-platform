@@ -283,6 +283,8 @@ def test_note_style_stage_promotion_requires_completed_results(tmp_path: Path) -
     assert summary["completed"] == 1
     assert summary["failed"] == 0
     assert summary["empty_ok"] is False
+    assert stage_payload["sent"] is False
+    assert stage_payload["completed_at"] is None
 
     completed_entries = [
         {"account_id": "idx-1", "status": "completed"},
@@ -305,6 +307,9 @@ def test_note_style_stage_promotion_requires_completed_results(tmp_path: Path) -
     assert final_stage["results"]["failed"] == 0
     assert final_stage["summary"]["completed"] == 2
     assert final_stage["summary"]["empty_ok"] is False
+    assert final_stage["sent"] is True
+    assert isinstance(final_stage["completed_at"], str)
+    assert final_stage["completed_at"].endswith("Z")
 
 
 def test_note_style_stage_promotion_empty_index_marks_success(tmp_path: Path) -> None:
@@ -332,9 +337,12 @@ def test_note_style_stage_promotion_empty_index_marks_success(tmp_path: Path) ->
     assert stage_payload["summary"]["empty_ok"] is True
     assert stage_payload["summary"]["results_total"] == 0
     assert stage_payload["summary"]["completed"] == 0
+    assert stage_payload["sent"] is True
+    assert isinstance(stage_payload["completed_at"], str)
+    assert stage_payload["completed_at"].endswith("Z")
 
 
-def test_note_style_stage_promotion_error_on_failed_result(tmp_path: Path) -> None:
+def test_note_style_stage_promotion_partial_failures_mark_success(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
     sid = "SID-note-failure"
     run_dir = runs_root / sid
@@ -352,15 +360,50 @@ def test_note_style_stage_promotion_error_on_failed_result(tmp_path: Path) -> No
     )
 
     assert updated is True
-    assert promoted is False
+    assert promoted is True
     assert log_context == {"total": 2, "completed": 1, "failed": 1}
+
+    stage_payload = data["stages"]["note_style"]
+    assert stage_payload["status"] == "success"
+    assert stage_payload["empty_ok"] is False
+    assert stage_payload["metrics"] == {"packs_total": 2}
+    assert stage_payload["results"] == {"results_total": 2, "completed": 1, "failed": 1}
+    assert stage_payload["summary"]["failed"] == 1
+    assert stage_payload["sent"] is True
+    assert isinstance(stage_payload["completed_at"], str)
+    assert stage_payload["completed_at"].endswith("Z")
+
+
+def test_note_style_stage_promotion_all_failed_marks_error(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID-note-all-failed"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    entries = [
+        {"account_id": "idx-1", "status": "failed"},
+        {"account_id": "idx-2", "status": "failed"},
+    ]
+    _write_note_style_index(run_dir, entries)
+
+    data: dict[str, object] = {"sid": sid, "stages": {}}
+    updated, promoted, log_context = runflow_decider._apply_note_style_stage_promotion(
+        data, run_dir
+    )
+
+    assert updated is True
+    assert promoted is False
+    assert log_context == {"total": 2, "completed": 0, "failed": 2}
 
     stage_payload = data["stages"]["note_style"]
     assert stage_payload["status"] == "error"
     assert stage_payload["empty_ok"] is False
     assert stage_payload["metrics"] == {"packs_total": 2}
-    assert stage_payload["results"] == {"results_total": 2, "completed": 1, "failed": 1}
-    assert stage_payload["summary"]["failed"] == 1
+    assert stage_payload["results"] == {"results_total": 2, "completed": 0, "failed": 2}
+    assert stage_payload["summary"]["failed"] == 2
+    assert stage_payload["sent"] is True
+    assert isinstance(stage_payload["completed_at"], str)
+    assert stage_payload["completed_at"].endswith("Z")
 
 
 def test_note_style_stage_promotion_uses_manifest_paths(

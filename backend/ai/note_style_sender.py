@@ -21,10 +21,10 @@ from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
     ensure_note_style_account_paths,
-    ensure_note_style_paths,
     normalize_note_style_account_id,
 )
 from backend.core.services.ai_client import get_ai_client
+from backend.runflow.manifest import resolve_note_style_stage_paths
 
 
 log = logging.getLogger(__name__)
@@ -775,7 +775,7 @@ def send_note_style_packs_for_sid(
     """
 
     runs_root_path = _resolve_runs_root(runs_root)
-    paths = ensure_note_style_paths(runs_root_path, sid, create=False)
+    paths = resolve_note_style_stage_paths(runs_root_path, sid, create=False)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
     manifest_candidates: list[_PackCandidate] = []
@@ -937,7 +937,7 @@ def send_note_style_pack_for_account(
     runs_root: Path | str | None = None,
 ) -> bool:
     runs_root_path = _resolve_runs_root(runs_root)
-    paths = ensure_note_style_paths(runs_root_path, sid, create=False)
+    paths = resolve_note_style_stage_paths(runs_root_path, sid, create=False)
     candidate: _PackCandidate | None = None
     if config.NOTE_STYLE_USE_MANIFEST_PATHS:
         target = normalize_note_style_account_id(account_id)

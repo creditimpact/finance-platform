@@ -23,11 +23,11 @@ from backend.ai.note_style_paths import _normalize_path_for_worker
 from backend.core.ai.paths import (
     NoteStylePaths,
     ensure_note_style_account_paths,
-    ensure_note_style_paths,
     note_style_pack_filename,
     note_style_result_filename,
     normalize_note_style_account_id,
 )
+from backend.runflow.manifest import resolve_note_style_stage_paths
 from backend.runflow.decider import record_stage
 
 
@@ -680,7 +680,7 @@ def build_note_style_pack_for_account(
 ) -> Mapping[str, Any]:
     runs_root_path = _resolve_runs_root(runs_root)
     ensure_note_style_section(sid, runs_root=runs_root_path)
-    paths = ensure_note_style_paths(runs_root_path, sid, create=True)
+    paths = resolve_note_style_stage_paths(runs_root_path, sid, create=True)
 
     response_path = _resolve_response_path(sid, account_id, runs_root_path)
     payload = _load_json_data(response_path)

@@ -7,7 +7,10 @@ from typing import Any
 import pytest
 
 
-@pytest.mark.parametrize("env_value,expected_calls", [("0", []), ("1", ["SID-123"])])
+@pytest.mark.parametrize(
+    "env_value,expected_calls",
+    [("0", []), ("1", ["SID-123"]), (None, ["SID-123"])],
+)
 def test_maybe_autobuild_review_honors_generate_frontend_env(monkeypatch, env_value, expected_calls):
     """_maybe_autobuild_review should defer to GENERATE_FRONTEND_ON_VALIDATION."""
 
@@ -21,7 +24,10 @@ def test_maybe_autobuild_review_honors_generate_frontend_env(monkeypatch, env_va
 
     monkeypatch.setattr(auto_ai_tasks, "generate_frontend_packs_task", _TaskStub())
 
-    monkeypatch.setenv("GENERATE_FRONTEND_ON_VALIDATION", env_value)
+    if env_value is None:
+        monkeypatch.delenv("GENERATE_FRONTEND_ON_VALIDATION", raising=False)
+    else:
+        monkeypatch.setenv("GENERATE_FRONTEND_ON_VALIDATION", env_value)
 
     auto_ai_tasks._maybe_autobuild_review("SID-123")
 

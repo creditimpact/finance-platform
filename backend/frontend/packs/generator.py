@@ -9,12 +9,13 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from backend.core.io.json_io import _atomic_write_json
+from backend.core.io.json_io import _atomic_write_json as _shared_atomic_write_json
 from backend.core.paths.frontend_review import (
     ensure_frontend_review_dirs,
     get_frontend_review_paths,
@@ -231,6 +232,35 @@ def _load_json_payload(path: Path) -> Any:
     except json.JSONDecodeError:
         log.warning("FRONTEND_PACK_PARSE_FAILED path=%s", path, exc_info=True)
         return None
+
+
+def _is_frontend_review_index(path: Path) -> bool:
+    normalized = path.as_posix()
+    return normalized.endswith("frontend/review/index.json")
+
+
+def _atomic_write_frontend_review_index(path: Path, payload: Any) -> None:
+    directory = path.parent
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix="index.", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        shutil.move(tmp_path, os.fspath(path))
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+def _atomic_write_json(path: Path | str, payload: Any) -> None:
+    path_obj = Path(path)
+    if _is_frontend_review_index(path_obj):
+        _atomic_write_frontend_review_index(path_obj, payload)
+        return
+    _shared_atomic_write_json(path_obj, payload)
 
 
 def _write_json_if_changed(path: Path, payload: Any) -> bool:

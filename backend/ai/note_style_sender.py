@@ -947,7 +947,6 @@ def send_note_style_packs_for_sid(
 
     client = get_ai_client()
     processed: list[str] = []
-    processed_accounts: set[str] = set()
     index_account_map = _load_index_account_map(paths)
 
     for candidate in pack_candidates:
@@ -1007,11 +1006,6 @@ def send_note_style_packs_for_sid(
                     "STYLE_SEND_ACCOUNT_UNKNOWN sid=%s pack=%s", sid, pack_path
                 )
                 continue
-            normalized_account = normalize_note_style_account_id(account_id)
-            if normalized_account in processed_accounts:
-                continue
-            processed_accounts.add(normalized_account)
-
             account_paths = _account_paths_for_candidate(paths, account_id, candidate)
 
             log.info(

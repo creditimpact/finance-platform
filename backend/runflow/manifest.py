@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import glob
 import json
 import logging
 import os
@@ -410,18 +409,19 @@ def update_manifest_frontend(
 
     run_dir_path = run_dir.resolve()
 
-    packs_dir_path = canonical_paths["packs_dir"]
-    responses_dir_path = canonical_paths["responses_dir"]
-    review_dir_path = canonical_paths["review_dir"]
-    frontend_base = canonical_paths["frontend_base"]
-    index_path = canonical_paths["index"]
-    legacy_index_path = canonical_paths.get("legacy_index")
+    frontend_base_path = Path(canonical_paths["frontend_base"]).resolve()
+    review_dir_path = Path(canonical_paths["review_dir"]).resolve()
+    packs_dir_path = Path(canonical_paths["packs_dir"]).resolve()
+    responses_dir_path = Path(canonical_paths["responses_dir"]).resolve()
+    index_path = Path(canonical_paths["index"]).resolve()
+    legacy_index_value = canonical_paths.get("legacy_index")
+    legacy_index_path = Path(legacy_index_value).resolve() if legacy_index_value else None
 
-    packs_count_glob = len(glob.glob(os.path.join(packs_dir_path, "idx-*.json")))
+    packs_count_glob = len(list(packs_dir_path.glob("idx-*.json")))
     packs_count_param = int(packs_count or 0)
     packs_count_value = max(packs_count_glob, packs_count_param)
 
-    responses_count = len(glob.glob(os.path.join(responses_dir_path, "*.json")))
+    responses_count = len(list(responses_dir_path.glob("*.json")))
     now_iso = _now_iso()
 
     last_built_value: str | None
@@ -432,19 +432,24 @@ def update_manifest_frontend(
     else:
         last_built_value = str(last_built_at) if last_built_at else None
 
+    base_value = _normalize_manifest_path_value(frontend_base_path, run_dir=run_dir_path)
+    dir_value = _normalize_manifest_path_value(review_dir_path, run_dir=run_dir_path)
+    packs_value = _normalize_manifest_path_value(packs_dir_path, run_dir=run_dir_path)
+    results_value = _normalize_manifest_path_value(responses_dir_path, run_dir=run_dir_path)
+    index_value = _normalize_manifest_path_value(index_path, run_dir=run_dir_path)
+    legacy_index_normalized = _normalize_manifest_path_value(
+        legacy_index_path, run_dir=run_dir_path
+    )
+
     target_manifest.data["frontend"] = {
-        "base": _normalize_manifest_path_value(frontend_base, run_dir=run_dir_path),
-        "dir": _normalize_manifest_path_value(review_dir_path, run_dir=run_dir_path),
-        "packs": _normalize_manifest_path_value(packs_dir_path, run_dir=run_dir_path),
-        "packs_dir": _normalize_manifest_path_value(packs_dir_path, run_dir=run_dir_path),
-        "results": _normalize_manifest_path_value(responses_dir_path, run_dir=run_dir_path),
-        "results_dir": _normalize_manifest_path_value(
-            responses_dir_path, run_dir=run_dir_path
-        ),
-        "index": _normalize_manifest_path_value(index_path, run_dir=run_dir_path),
-        "legacy_index": _normalize_manifest_path_value(
-            legacy_index_path, run_dir=run_dir_path
-        ),
+        "base": base_value,
+        "dir": dir_value,
+        "packs": packs_value,
+        "packs_dir": packs_value,
+        "results": results_value,
+        "results_dir": results_value,
+        "index": index_value,
+        "legacy_index": legacy_index_normalized,
         "built": bool(built),
         "packs_count": packs_count_value,
         "counts": {
@@ -456,6 +461,13 @@ def update_manifest_frontend(
     }
 
     persist_manifest(target_manifest)
+    if built:
+        log.info(
+            "FRONTEND_BUILT sid=%s packs=%s index=%s",
+            sid,
+            packs_count_value,
+            index_value or str(index_path),
+        )
     return target_manifest
 
 

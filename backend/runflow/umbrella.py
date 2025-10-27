@@ -67,6 +67,18 @@ def _count_note_style_packs(packs_dir: Path) -> int:
     return total
 
 
+def _env_flag_enabled(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    lowered = raw.strip().lower()
+    if lowered in {"", "0", "false", "no", "off"}:
+        return False
+
+    return True
+
+
 def _normalize_runs_root_arg(runs_root: Path | None) -> str | None:
     if runs_root is None:
         return None
@@ -83,11 +95,24 @@ def schedule_note_style_after_validation(
 ) -> None:
     """Schedule note_style autosend after validation completes for ``sid``."""
 
-    if not config.NOTE_STYLE_ENABLED:
-        return
-
     sid_text = str(sid or "").strip()
     if not sid_text:
+        return
+
+    if not config.NOTE_STYLE_ENABLED:
+        log.info("NOTE_STYLE_AUTOSEND_DISABLED sid=%s reason=feature", sid_text)
+        return
+
+    if not _env_flag_enabled("NOTE_STYLE_AUTOSEND", default=True):
+        log.info("NOTE_STYLE_AUTOSEND_DISABLED sid=%s reason=env", sid_text)
+        return
+
+    if not _env_flag_enabled("NOTE_STYLE_STAGE_AUTORUN", default=True):
+        log.info("NOTE_STYLE_STAGE_AUTORUN_DISABLED sid=%s", sid_text)
+        return
+
+    if not _env_flag_enabled("NOTE_STYLE_SEND_ON_RESPONSE_WRITE", default=True):
+        log.info("NOTE_STYLE_SEND_ON_RESPONSE_WRITE_DISABLED sid=%s", sid_text)
         return
 
     run_dir_path = Path(run_dir)

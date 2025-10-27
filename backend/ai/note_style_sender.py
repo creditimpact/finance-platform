@@ -820,6 +820,18 @@ def send_note_style_packs_for_sid(
     _warn_if_index_thin(paths, sid=sid)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
+    env_glob = os.getenv("NOTE_STYLE_PACK_GLOB")
+    fallback_glob = "acc_*.jsonl"
+    default_glob = env_glob or fallback_glob
+
+    log.info(
+        "NOTE_STYLE_SEND_START sid=%s packs_dir=%s glob=%s use_manifest=%s",
+        sid,
+        packs_dir,
+        "<manifest>" if config.NOTE_STYLE_USE_MANIFEST_PATHS else default_glob,
+        config.NOTE_STYLE_USE_MANIFEST_PATHS,
+    )
+
     manifest_candidates: list[_PackCandidate] = []
     if config.NOTE_STYLE_USE_MANIFEST_PATHS:
         manifest_candidates = _load_manifest_pack_entries(paths, sid=sid)
@@ -835,9 +847,7 @@ def send_note_style_packs_for_sid(
             True,
         )
     else:
-        env_glob = os.getenv("NOTE_STYLE_PACK_GLOB")
-        fallback_glob = "acc_*.jsonl"
-        glob_pattern = env_glob or fallback_glob
+        glob_pattern = default_glob
 
         def _collect_candidates(pattern: str) -> list[Path]:
             raw_matches = sorted(packs_dir.glob(pattern))
@@ -884,7 +894,19 @@ def send_note_style_packs_for_sid(
             len(pack_candidates),
         )
 
+    sample_candidates = [
+        _relativize(candidate.pack_path, paths.base)
+        for candidate in pack_candidates[:5]
+    ]
+    log.info(
+        "NOTE_STYLE_PACKS_FOUND sid=%s count=%s sample=%s",
+        sid,
+        len(pack_candidates),
+        sample_candidates,
+    )
+
     if not pack_candidates:
+        log.info("NOTE_STYLE_NO_PACKS sid=%s", sid)
         return []
 
     client = get_ai_client()
@@ -956,6 +978,13 @@ def send_note_style_packs_for_sid(
 
             account_paths = _account_paths_for_candidate(paths, account_id, candidate)
 
+            log.info(
+                "NOTE_STYLE_SENDING sid=%s account_id=%s file=%s",
+                sid,
+                account_id,
+                pack_relative,
+            )
+
             if _send_pack_payload(
                 sid=sid,
                 account_id=account_id,
@@ -968,6 +997,12 @@ def send_note_style_packs_for_sid(
                 client=client,
             ):
                 processed.append(account_id)
+
+    log.info(
+        "NOTE_STYLE_SEND_DONE sid=%s processed=%s",
+        sid,
+        processed,
+    )
 
     return processed
 

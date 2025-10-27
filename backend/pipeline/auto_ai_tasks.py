@@ -48,6 +48,7 @@ from backend.runflow.decider import (
     reconcile_umbrella_barriers,
 )
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
+from backend.api.tasks import generate_frontend_packs_task
 from backend.runflow.manifest import (
     update_manifest_frontend,
     update_manifest_state,
@@ -66,6 +67,13 @@ LEGACY_PIPELINE_DIRNAME = "ai_packs"
 LEGACY_MARKER_FILENAME = "auto_ai_pipeline_in_progress.json"
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_autobuild_review(sid: str) -> None:
+    """Kick off Frontend/Review packs build after validation has run."""
+    if os.getenv("GENERATE_FRONTEND_ON_VALIDATION", "1") != "1":
+        return
+    generate_frontend_packs_task.delay(sid)
 
 
 _PAIR_TAG_BY_DECISION: dict[str, str] = {
@@ -1151,6 +1159,7 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
         "send",
         metrics={"packs": int(payload.get("validation_packs", 0) or 0)},
     )
+    _maybe_autobuild_review(sid)
     return payload
 
 

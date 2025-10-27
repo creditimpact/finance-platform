@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -158,6 +159,86 @@ def _log_stage_paths(
         str(config.packs_dir),
         str(config.responses_dir),
     )
+
+
+def _frontend_build_lock_path(run_dir: Path) -> Path:
+    return run_dir / "frontend" / ".locks" / "build.lock"
+
+
+def _acquire_frontend_build_lock(run_dir: Path, sid: str) -> tuple[str, Path | None]:
+    lock_path = _frontend_build_lock_path(run_dir)
+
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "FRONTEND_BUILD_LOCK_DIR_FAILED sid=%s path=%s",
+            sid,
+            lock_path.parent,
+            exc_info=True,
+        )
+
+    try:
+        fd = os.open(os.fspath(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return "locked", lock_path
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "FRONTEND_BUILD_LOCK_ACQUIRE_FAILED sid=%s path=%s",
+            sid,
+            lock_path,
+            exc_info=True,
+        )
+        return "error", None
+
+    payload = {
+        "sid": sid,
+        "acquired_at": time.time(),
+        "pid": os.getpid(),
+    }
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "FRONTEND_BUILD_LOCK_WRITE_FAILED sid=%s path=%s",
+            sid,
+            lock_path,
+            exc_info=True,
+        )
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "FRONTEND_BUILD_LOCK_CLEANUP_FAILED sid=%s path=%s",
+                sid,
+                lock_path,
+                exc_info=True,
+            )
+        return "error", None
+
+    return "acquired", lock_path
+
+
+def _release_frontend_build_lock(lock_path: Path, sid: str) -> None:
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "FRONTEND_BUILD_LOCK_RELEASE_FAILED sid=%s path=%s",
+            sid,
+            lock_path,
+            exc_info=True,
+        )
 
 
 def _log_build_summary(
@@ -1330,150 +1411,575 @@ def generate_frontend_packs_for_run(
 
     stage_name = _env_override("FRONTEND_STAGE_NAME", "FRONTEND_STAGE", default="review")
 
-    config = load_frontend_stage_config(run_dir)
-
-    stage_dir = config.stage_dir
-    stage_packs_dir = config.packs_dir
-    stage_responses_dir = config.responses_dir
-    stage_index_path = config.index_path
-    debug_packs_dir = stage_dir / "debug"
-
-    canonical_paths = ensure_frontend_review_dirs(str(run_dir))
-
-    _log_stage_paths(sid, config, canonical_paths)
-
-    legacy_accounts_dir = run_dir / "frontend" / "accounts"
-    if legacy_accounts_dir.is_dir():
-        log.warning(
-            "FRONTEND_LEGACY_ACCOUNTS_DIR sid=%s path=%s",
-            sid,
-            legacy_accounts_dir,
+    lock_state, lock_path = _acquire_frontend_build_lock(run_dir, sid)
+    if lock_state == "locked":
+        canonical_paths = get_frontend_review_paths(str(run_dir))
+        packs_dir_candidate = canonical_paths.get("packs_dir")
+        packs_dir_path = (
+            Path(packs_dir_candidate)
+            if isinstance(packs_dir_candidate, str) and packs_dir_candidate
+            else run_dir / "frontend" / "review" / "packs"
         )
-
-    legacy_index_env = _env_override("FRONTEND_INDEX_PATH", "FRONTEND_INDEX")
-    if legacy_index_env:
-        candidate = Path(legacy_index_env)
-        if not candidate.is_absolute():
-            redirect_stub_path = run_dir / candidate
-        else:
-            redirect_stub_path = candidate
-    else:
-        redirect_stub_path = Path(
-            canonical_paths.get("legacy_index", canonical_paths["index"])
-        )
-
-    _migrate_legacy_frontend_root_packs(
-        sid=sid,
-        stage_name=stage_name,
-        run_dir=run_dir,
-        stage_dir=stage_dir,
-        stage_packs_dir=stage_packs_dir,
-        stage_responses_dir=stage_responses_dir,
-        stage_index_path=stage_index_path,
-        redirect_stub_path=redirect_stub_path,
-    )
-    packs_dir_str = str(stage_packs_dir.absolute())
-
-    frontend_autorun_enabled = _env_flag_enabled("FRONTEND_STAGE_AUTORUN", True)
-    review_autorun_enabled = _env_flag_enabled("REVIEW_STAGE_AUTORUN", True)
-    if not (frontend_autorun_enabled and review_autorun_enabled):
-        if not frontend_autorun_enabled and not review_autorun_enabled:
-            reason = "autorun_disabled"
-        elif not frontend_autorun_enabled:
-            reason = "frontend_stage_autorun_disabled"
-        else:
-            reason = "review_stage_autorun_disabled"
-        log.info(
-            "FRONTEND_AUTORUN_DISABLED sid=%s reason=%s",
-            sid,
-            reason,
-        )
+        packs_dir_str = str(packs_dir_path.absolute())
+        log.info("FRONTEND_BUILD_SKIP sid=%s reason=%s", sid, "locked")
         return {
-            "status": reason,
+            "status": "locked",
             "packs_count": 0,
             "empty_ok": True,
             "built": False,
             "packs_dir": packs_dir_str,
             "last_built_at": None,
-            "autorun_disabled": True,
+            "skip_reason": "locked",
         }
+    lock_acquired = lock_state == "acquired"
 
-    runflow_stage_start("frontend", sid=sid)
-    current_account_id: str | None = None
     try:
-        account_dirs: list[Path] = (
-            sorted(
-                [path for path in accounts_dir.iterdir() if path.is_dir()],
-                key=_account_sort_key,
-            )
-            if accounts_dir.is_dir()
-            else []
-        )
-        total_accounts = len(account_dirs)
+        config = load_frontend_stage_config(run_dir)
 
-        runflow_step(
-            sid,
-            "frontend",
-            "frontend_review_start",
-            metrics={"accounts": total_accounts},
+        stage_dir = config.stage_dir
+        stage_packs_dir = config.packs_dir
+        stage_responses_dir = config.responses_dir
+        stage_index_path = config.index_path
+        debug_packs_dir = stage_dir / "debug"
+    
+        canonical_paths = ensure_frontend_review_dirs(str(run_dir))
+    
+        _log_stage_paths(sid, config, canonical_paths)
+    
+        legacy_accounts_dir = run_dir / "frontend" / "accounts"
+        if legacy_accounts_dir.is_dir():
+            log.warning(
+                "FRONTEND_LEGACY_ACCOUNTS_DIR sid=%s path=%s",
+                sid,
+                legacy_accounts_dir,
+            )
+    
+        legacy_index_env = _env_override("FRONTEND_INDEX_PATH", "FRONTEND_INDEX")
+        if legacy_index_env:
+            candidate = Path(legacy_index_env)
+            if not candidate.is_absolute():
+                redirect_stub_path = run_dir / candidate
+            else:
+                redirect_stub_path = candidate
+        else:
+            redirect_stub_path = Path(
+                canonical_paths.get("legacy_index", canonical_paths["index"])
+            )
+    
+        _migrate_legacy_frontend_root_packs(
+            sid=sid,
+            stage_name=stage_name,
+            run_dir=run_dir,
+            stage_dir=stage_dir,
+            stage_packs_dir=stage_packs_dir,
+            stage_responses_dir=stage_responses_dir,
+            stage_index_path=stage_index_path,
+            redirect_stub_path=redirect_stub_path,
         )
-
-        if not _frontend_packs_enabled():
-            responses_count = _emit_responses_scan(sid, stage_responses_dir)
-            summary = {
-                "packs_count": 0,
-                "responses_received": responses_count,
-                "empty_ok": True,
-                "reason": "disabled",
-            }
-            runflow_step(
+        packs_dir_str = str(stage_packs_dir.absolute())
+    
+        frontend_autorun_enabled = _env_flag_enabled("FRONTEND_STAGE_AUTORUN", True)
+        review_autorun_enabled = _env_flag_enabled("REVIEW_STAGE_AUTORUN", True)
+        if not (frontend_autorun_enabled and review_autorun_enabled):
+            if not frontend_autorun_enabled and not review_autorun_enabled:
+                reason = "autorun_disabled"
+            elif not frontend_autorun_enabled:
+                reason = "frontend_stage_autorun_disabled"
+            else:
+                reason = "review_stage_autorun_disabled"
+            log.info(
+                "FRONTEND_AUTORUN_DISABLED sid=%s reason=%s",
                 sid,
-                "frontend",
-                "frontend_review_no_candidates",
-                out={"reason": "disabled"},
+                reason,
             )
-            record_frontend_responses_progress(
-                sid,
-                accounts_published=0,
-                answers_received=responses_count,
-                answers_required=0,
-            )
-            runflow_step(
-                sid,
-                "frontend",
-                "frontend_review_finish",
-                status="skipped",
-                metrics={"packs": 0},
-                out={"reason": "disabled"},
-            )
-            runflow_stage_end(
-                "frontend",
-                sid=sid,
-                status="skipped",
-                summary=summary,
-                empty_ok=True,
-            )
-            _log_done(sid, 0, status="skipped", reason="disabled")
-            result = {
-                "status": "skipped",
+            return {
+                "status": reason,
                 "packs_count": 0,
                 "empty_ok": True,
                 "built": False,
                 "packs_dir": packs_dir_str,
                 "last_built_at": None,
+                "autorun_disabled": True,
             }
-            _log_build_summary(sid, packs_count=0, last_built_at=None)
-            return result
-
-        stage_dir.mkdir(parents=True, exist_ok=True)
-        os.makedirs(stage_packs_dir, exist_ok=True)
-        os.makedirs(stage_responses_dir, exist_ok=True)
-        stage_index_path.parent.mkdir(parents=True, exist_ok=True)
-
-        lean_enabled = _frontend_packs_lean_enabled()
-        debug_mirror_enabled = _frontend_packs_debug_mirror_enabled()
-
-        if not account_dirs:
+    
+        runflow_stage_start("frontend", sid=sid)
+        current_account_id: str | None = None
+        try:
+            account_dirs: list[Path] = (
+                sorted(
+                    [path for path in accounts_dir.iterdir() if path.is_dir()],
+                    key=_account_sort_key,
+                )
+                if accounts_dir.is_dir()
+                else []
+            )
+            total_accounts = len(account_dirs)
+    
+            runflow_step(
+                sid,
+                "frontend",
+                "frontend_review_start",
+                metrics={"accounts": total_accounts},
+            )
+    
+            if not _frontend_packs_enabled():
+                responses_count = _emit_responses_scan(sid, stage_responses_dir)
+                summary = {
+                    "packs_count": 0,
+                    "responses_received": responses_count,
+                    "empty_ok": True,
+                    "reason": "disabled",
+                }
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "frontend_review_no_candidates",
+                    out={"reason": "disabled"},
+                )
+                record_frontend_responses_progress(
+                    sid,
+                    accounts_published=0,
+                    answers_received=responses_count,
+                    answers_required=0,
+                )
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "frontend_review_finish",
+                    status="skipped",
+                    metrics={"packs": 0},
+                    out={"reason": "disabled"},
+                )
+                runflow_stage_end(
+                    "frontend",
+                    sid=sid,
+                    status="skipped",
+                    summary=summary,
+                    empty_ok=True,
+                )
+                _log_done(sid, 0, status="skipped", reason="disabled")
+                result = {
+                    "status": "skipped",
+                    "packs_count": 0,
+                    "empty_ok": True,
+                    "built": False,
+                    "packs_dir": packs_dir_str,
+                    "last_built_at": None,
+                }
+                _log_build_summary(sid, packs_count=0, last_built_at=None)
+                return result
+    
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            os.makedirs(stage_packs_dir, exist_ok=True)
+            os.makedirs(stage_responses_dir, exist_ok=True)
+            stage_index_path.parent.mkdir(parents=True, exist_ok=True)
+    
+            lean_enabled = _frontend_packs_lean_enabled()
+            debug_mirror_enabled = _frontend_packs_debug_mirror_enabled()
+    
+            if not account_dirs:
+                manifest_payload = _build_stage_manifest(
+                    sid=sid,
+                    stage_name=stage_name,
+                    run_dir=run_dir,
+                    stage_packs_dir=stage_packs_dir,
+                    stage_responses_dir=stage_responses_dir,
+                    stage_index_path=stage_index_path,
+                    question_set=_QUESTION_SET,
+                )
+                _ensure_frontend_index_redirect_stub(redirect_stub_path)
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "frontend_review_no_candidates",
+                    metrics={"accounts": total_accounts},
+                )
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "frontend_review_finish",
+                    metrics={"packs": 0},
+                )
+                responses_count = _emit_responses_scan(sid, stage_responses_dir)
+                summary = {
+                    "packs_count": 0,
+                    "responses_received": responses_count,
+                    "empty_ok": True,
+                }
+                record_frontend_responses_progress(
+                    sid,
+                    accounts_published=0,
+                    answers_received=responses_count,
+                    answers_required=0,
+                )
+                runflow_stage_end(
+                    "frontend",
+                    sid=sid,
+                    summary=summary,
+                    empty_ok=True,
+                )
+                _log_done(sid, 0, status="success")
+                result = {
+                    "status": "success",
+                    "packs_count": 0,
+                    "empty_ok": True,
+                    "built": True,
+                    "packs_dir": packs_dir_str,
+                    "last_built_at": manifest_payload.get("generated_at"),
+                }
+                _log_build_summary(
+                    sid,
+                    packs_count=0,
+                    last_built_at=manifest_payload.get("generated_at"),
+                )
+                return result
+    
+            if not force and stage_index_path.exists():
+                existing = _load_json(stage_index_path)
+                if existing:
+                    pointer_backfill_required = _index_requires_pointer_backfill(
+                        existing, run_dir
+                    )
+                    if pointer_backfill_required:
+                        log.info("FRONTEND_PACK_POINTER_BACKFILL sid=%s", sid)
+                    else:
+                        packs_count = int(existing.get("packs_count", 0) or 0)
+                        if not packs_count:
+                            accounts = existing.get("accounts")
+                            if isinstance(accounts, list):
+                                packs_count = len(accounts)
+                        log.debug(
+                            "FRONTEND_PACKS_EXISTS sid=%s path=%s",
+                            sid,
+                            stage_index_path,
+                        )
+                        generated_at = existing.get("generated_at")
+                        last_built = (
+                            str(generated_at) if isinstance(generated_at, str) else None
+                        )
+                        _ensure_frontend_index_redirect_stub(redirect_stub_path)
+                        if not debug_mirror_enabled and debug_packs_dir.is_dir():
+                            for mirror_path in debug_packs_dir.glob("*.full.json"):
+                                try:
+                                    mirror_path.unlink()
+                                except FileNotFoundError:
+                                    continue
+                                except OSError:  # pragma: no cover - defensive logging
+                                    log.warning(
+                                        "FRONTEND_PACK_DEBUG_MIRROR_UNLINK_FAILED path=%s",
+                                        mirror_path,
+                                        exc_info=True,
+                                    )
+                        if packs_count == 0:
+                            runflow_step(
+                                sid,
+                                "frontend",
+                                "frontend_review_no_candidates",
+                                out={"reason": "cache"},
+                            )
+                        runflow_step(
+                            sid,
+                            "frontend",
+                            "frontend_review_finish",
+                            status="success",
+                            metrics={"packs": packs_count},
+                            out={"cache_hit": True},
+                        )
+                        responses_count = _emit_responses_scan(sid, stage_responses_dir)
+                        summary = {
+                            "packs_count": packs_count,
+                            "responses_received": responses_count,
+                            "empty_ok": packs_count == 0,
+                            "cache_hit": True,
+                        }
+                        record_frontend_responses_progress(
+                            sid,
+                            accounts_published=packs_count,
+                            answers_received=responses_count,
+                            answers_required=packs_count,
+                        )
+                        runflow_stage_end(
+                            "frontend",
+                            sid=sid,
+                            summary=summary,
+                            empty_ok=packs_count == 0,
+                        )
+                        _log_done(sid, packs_count, status="success", cache_hit=True)
+                        result = {
+                            "status": "success",
+                            "packs_count": packs_count,
+                            "empty_ok": packs_count == 0,
+                            "built": True,
+                            "packs_dir": packs_dir_str,
+                            "last_built_at": last_built,
+                        }
+                        _log_build_summary(
+                            sid,
+                            packs_count=packs_count,
+                            last_built_at=last_built,
+                        )
+                        return result
+    
+            built_docs = 0
+            unchanged_docs = 0
+            skipped_missing = 0
+            skip_reasons = {"missing_summary": 0}
+            write_errors: list[tuple[str, Exception]] = []
+            pack_count = 0
+    
+            for account_dir in account_dirs:
+                summary_path = account_dir / "summary.json"
+                summary = _load_json(summary_path)
+                if not summary:
+                    skipped_missing += 1
+                    skip_reasons["missing_summary"] = skip_reasons.get("missing_summary", 0) + 1
+                    log.warning(
+                        "FRONTEND_PACK_MISSING_SUMMARY sid=%s path=%s",
+                        sid,
+                        summary_path,
+                    )
+                    continue
+    
+                account_id = str(summary.get("account_id") or account_dir.name)
+                current_account_id = account_id
+    
+                flat_path = account_dir / "fields_flat.json"
+                fields_flat_payload = _load_json(flat_path)
+                if fields_flat_payload is None:
+                    log.warning(
+                        "FRONTEND_PACK_MISSING_FLAT sid=%s account=%s path=%s",
+                        sid,
+                        account_id,
+                        flat_path,
+                    )
+    
+                tags_path = account_dir / "tags.json"
+                if not tags_path.exists():
+                    log.warning(
+                        "FRONTEND_PACK_MISSING_TAGS sid=%s account=%s path=%s",
+                        sid,
+                        account_id,
+                        tags_path,
+                    )
+    
+                labels = _extract_summary_labels(summary)
+                holder_name = _derive_holder_name_from_summary(summary, fields_flat_payload)
+                primary_issue, issues = _extract_issue_tags(tags_path)
+                if not primary_issue:
+                    primary_issue = "unknown"
+    
+                display_holder_name = _coerce_display_text(
+                    holder_name or labels.get("creditor_name") or ""
+                )
+                if not display_holder_name:
+                    display_holder_name = "Unknown"
+                display_primary_issue = _coerce_display_text(primary_issue or "unknown")
+    
+                account_number_values_raw = _collect_flat_field_per_bureau(
+                    fields_flat_payload, "account_number_display"
+                )
+                account_number_per_bureau = _normalize_per_bureau(account_number_values_raw)
+                account_number_consensus = _resolve_account_number_consensus(
+                    account_number_per_bureau
+                )
+    
+                account_type_values_raw = _collect_flat_field_per_bureau(
+                    fields_flat_payload, "account_type"
+                )
+                account_type_per_bureau = _normalize_per_bureau(account_type_values_raw)
+                account_type_consensus = _resolve_majority_consensus(account_type_per_bureau)
+                if account_type_consensus == "--":
+                    fallback_account_type = labels.get("account_type") or _collect_flat_consensus(
+                        fields_flat_payload, "account_type"
+                    )
+                    if fallback_account_type:
+                        account_type_consensus = fallback_account_type
+    
+                status_values_raw = _collect_flat_field_per_bureau(
+                    fields_flat_payload, "account_status"
+                )
+                status_per_bureau = _normalize_per_bureau(status_values_raw)
+                status_consensus = _resolve_majority_consensus(status_per_bureau)
+                if status_consensus == "--":
+                    fallback_status = labels.get("status") or _collect_flat_consensus(
+                        fields_flat_payload, "account_status"
+                    )
+                    if fallback_status:
+                        status_consensus = fallback_status
+    
+                balance_values_raw = _collect_flat_field_per_bureau(
+                    fields_flat_payload, "balance_owed"
+                )
+                balance_per_bureau = _normalize_per_bureau(balance_values_raw)
+    
+                date_opened_values_raw = _collect_flat_field_per_bureau(
+                    fields_flat_payload, "date_opened"
+                )
+                date_opened_per_bureau = _normalize_per_bureau(date_opened_values_raw)
+    
+                closed_date_values_raw = _collect_flat_field_per_bureau(
+                    fields_flat_payload, "closed_date"
+                )
+                closed_date_per_bureau = _normalize_per_bureau(closed_date_values_raw)
+    
+                date_reported_values_raw = _collect_flat_field_per_bureau(
+                    fields_flat_payload, "date_reported"
+                )
+                date_reported_per_bureau = _normalize_per_bureau(date_reported_values_raw)
+    
+                reported_bureaus = _determine_reported_bureaus(summary, fields_flat_payload)
+                bureau_summary = _prepare_bureau_payload_from_flat(
+                    account_number_values=account_number_per_bureau,
+                    balance_values=balance_per_bureau,
+                    date_opened_values=date_opened_per_bureau,
+                    closed_date_values=closed_date_per_bureau,
+                    date_reported_values=date_reported_per_bureau,
+                    reported_bureaus=reported_bureaus,
+                )
+    
+                creditor_name_value = labels.get("creditor_name") or _stringify_flat_value(
+                    _flat_lookup(fields_flat_payload, "creditor_name")
+                ) or _extract_text(summary.get("creditor_name"))
+                account_type_value = (
+                    account_type_consensus
+                    if account_type_consensus != "--"
+                    else labels.get("account_type")
+                )
+                status_value = (
+                    status_consensus if status_consensus != "--" else labels.get("status")
+                )
+    
+                display_payload = build_display_payload(
+                    holder_name=display_holder_name,
+                    primary_issue=display_primary_issue,
+                    account_number_per_bureau=account_number_per_bureau,
+                    account_number_consensus=account_number_consensus,
+                    account_type_per_bureau=account_type_per_bureau,
+                    account_type_consensus=account_type_consensus,
+                    status_per_bureau=status_per_bureau,
+                    status_consensus=status_consensus,
+                    balance_per_bureau=balance_per_bureau,
+                    date_opened_per_bureau=date_opened_per_bureau,
+                    closed_date_per_bureau=closed_date_per_bureau,
+                )
+    
+                try:
+                    relative_account_dir = account_dir.relative_to(run_dir).as_posix()
+                except ValueError:
+                    relative_account_dir = account_dir.as_posix()
+    
+                pointers = {
+                    "summary": f"{relative_account_dir}/summary.json",
+                    "tags": f"{relative_account_dir}/tags.json",
+                    "flat": f"{relative_account_dir}/fields_flat.json",
+                }
+    
+                full_pack_payload: dict[str, Any] | None = None
+                if debug_mirror_enabled or not lean_enabled:
+                    full_pack_payload = build_pack_doc(
+                        sid=sid,
+                        account_id=account_id,
+                        creditor_name=creditor_name_value,
+                        account_type=account_type_value,
+                        status=status_value,
+                        bureau_summary=bureau_summary,
+                        holder_name=holder_name,
+                        primary_issue=primary_issue,
+                        display_payload=display_payload,
+                        pointers=pointers,
+                        issues=issues if issues else None,
+                    )
+    
+                stage_pack_payload = build_stage_pack_doc(
+                    account_id=account_id,
+                    holder_name=display_holder_name,
+                    primary_issue=display_primary_issue,
+                    display_payload=display_payload,
+                )
+    
+                account_filename = _safe_account_dirname(account_id, account_dir.name)
+                stage_pack_path = stage_packs_dir / f"{account_filename}.json"
+    
+                existing_stage_pack: Mapping[str, Any] | None = None
+                if stage_pack_path.exists():
+                    existing_payload = _load_json_payload(stage_pack_path)
+                    if isinstance(existing_payload, Mapping):
+                        existing_stage_pack = existing_payload
+    
+                stage_pack_payload["questions"] = _resolve_stage_pack_questions(
+                    existing_pack=existing_stage_pack,
+                    question_set=_QUESTION_SET,
+                )
+    
+                try:
+                    stage_changed = _write_json_if_changed(
+                        stage_pack_path, stage_pack_payload
+                    )
+                    changed = stage_changed
+                    if debug_mirror_enabled and full_pack_payload is not None:
+                        debug_packs_dir.mkdir(parents=True, exist_ok=True)
+                        mirror_path = debug_packs_dir / f"{account_filename}.full.json"
+                        _write_json_if_changed(mirror_path, full_pack_payload)
+                    elif not debug_mirror_enabled:
+                        mirror_path = debug_packs_dir / f"{account_filename}.full.json"
+                        try:
+                            mirror_path.unlink()
+                        except FileNotFoundError:
+                            pass
+                        except OSError:  # pragma: no cover - defensive logging
+                            log.warning(
+                                "FRONTEND_PACK_DEBUG_MIRROR_UNLINK_FAILED path=%s",
+                                mirror_path,
+                                exc_info=True,
+                            )
+                except Exception as exc:
+                    log.exception(
+                        "FRONTEND_PACK_WRITE_FAILED sid=%s account=%s path=%s",
+                        sid,
+                        account_id,
+                        stage_pack_path,
+                    )
+                    write_errors.append((account_id, exc))
+                    continue
+    
+                if changed:
+                    built_docs += 1
+                else:
+                    unchanged_docs += 1
+    
+                try:
+                    relative_pack = stage_pack_path.relative_to(run_dir).as_posix()
+                except ValueError:
+                    relative_pack = str(stage_pack_path)
+    
+                pack_count += 1
+    
+                try:
+                    relative_stage_pack = stage_pack_path.relative_to(run_dir).as_posix()
+                except ValueError:
+                    relative_stage_pack = str(stage_pack_path)
+    
+                if stage_changed and runflow_account_steps_enabled():
+                    runflow_step(
+                        sid,
+                        "frontend",
+                        "frontend_review_pack_created",
+                        out={
+                            "account_id": account_id,
+                            "bytes": stage_pack_path.stat().st_size,
+                            "path": relative_stage_pack,
+                        },
+                    )
+    
+            build_metrics = {
+                "accounts": total_accounts,
+                "built": built_docs,
+                "skipped_missing": skipped_missing,
+                "unchanged": unchanged_docs,
+            }
+            skip_summary = {key: value for key, value in skip_reasons.items() if value}
+    
+            generated_at = _now_iso()
             manifest_payload = _build_stage_manifest(
                 sid=sid,
                 stage_name=stage_name,
@@ -1484,505 +1990,106 @@ def generate_frontend_packs_for_run(
                 question_set=_QUESTION_SET,
             )
             _ensure_frontend_index_redirect_stub(redirect_stub_path)
-            runflow_step(
-                sid,
-                "frontend",
-                "frontend_review_no_candidates",
-                metrics={"accounts": total_accounts},
-            )
+            done_status = "error" if write_errors else "success"
+            _log_done(sid, pack_count, status=done_status)
+    
+            finish_out: dict[str, Any] = {
+                "skip_reasons": skip_summary or None,
+                "write_failures": len(write_errors) if write_errors else None,
+            }
+            finish_out = {key: value for key, value in finish_out.items() if value is not None}
+    
+            if pack_count == 0:
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "frontend_review_no_candidates",
+                )
             runflow_step(
                 sid,
                 "frontend",
                 "frontend_review_finish",
-                metrics={"packs": 0},
+                status=done_status,
+                metrics={**build_metrics, "packs": pack_count},
+                out=finish_out or None,
+                error=(
+                    {
+                        "type": "PackWriteError",
+                        "message": f"{len(write_errors)} pack writes failed",
+                    }
+                    if write_errors
+                    else None
+                ),
             )
+    
             responses_count = _emit_responses_scan(sid, stage_responses_dir)
             summary = {
-                "packs_count": 0,
+                "packs_count": pack_count,
                 "responses_received": responses_count,
-                "empty_ok": True,
+                "empty_ok": pack_count == 0,
+                "skipped_missing": skipped_missing,
             }
+            if built_docs:
+                summary["built"] = built_docs
+            if unchanged_docs:
+                summary["unchanged"] = unchanged_docs
+            if write_errors:
+                summary["write_failures"] = len(write_errors)
             record_frontend_responses_progress(
                 sid,
-                accounts_published=0,
+                accounts_published=pack_count,
                 answers_received=responses_count,
-                answers_required=0,
+                answers_required=pack_count,
             )
             runflow_stage_end(
                 "frontend",
                 sid=sid,
                 summary=summary,
-                empty_ok=True,
+                empty_ok=pack_count == 0,
             )
-            _log_done(sid, 0, status="success")
+    
             result = {
                 "status": "success",
-                "packs_count": 0,
-                "empty_ok": True,
+                "packs_count": pack_count,
+                "empty_ok": pack_count == 0,
                 "built": True,
                 "packs_dir": packs_dir_str,
                 "last_built_at": manifest_payload.get("generated_at"),
             }
             _log_build_summary(
                 sid,
-                packs_count=0,
+                packs_count=pack_count,
                 last_built_at=manifest_payload.get("generated_at"),
             )
             return result
-
-        if not force and stage_index_path.exists():
-            existing = _load_json(stage_index_path)
-            if existing:
-                pointer_backfill_required = _index_requires_pointer_backfill(
-                    existing, run_dir
-                )
-                if pointer_backfill_required:
-                    log.info("FRONTEND_PACK_POINTER_BACKFILL sid=%s", sid)
-                else:
-                    packs_count = int(existing.get("packs_count", 0) or 0)
-                    if not packs_count:
-                        accounts = existing.get("accounts")
-                        if isinstance(accounts, list):
-                            packs_count = len(accounts)
-                    log.debug(
-                        "FRONTEND_PACKS_EXISTS sid=%s path=%s",
-                        sid,
-                        stage_index_path,
-                    )
-                    generated_at = existing.get("generated_at")
-                    last_built = (
-                        str(generated_at) if isinstance(generated_at, str) else None
-                    )
-                    _ensure_frontend_index_redirect_stub(redirect_stub_path)
-                    if not debug_mirror_enabled and debug_packs_dir.is_dir():
-                        for mirror_path in debug_packs_dir.glob("*.full.json"):
-                            try:
-                                mirror_path.unlink()
-                            except FileNotFoundError:
-                                continue
-                            except OSError:  # pragma: no cover - defensive logging
-                                log.warning(
-                                    "FRONTEND_PACK_DEBUG_MIRROR_UNLINK_FAILED path=%s",
-                                    mirror_path,
-                                    exc_info=True,
-                                )
-                    if packs_count == 0:
-                        runflow_step(
-                            sid,
-                            "frontend",
-                            "frontend_review_no_candidates",
-                            out={"reason": "cache"},
-                        )
-                    runflow_step(
-                        sid,
-                        "frontend",
-                        "frontend_review_finish",
-                        status="success",
-                        metrics={"packs": packs_count},
-                        out={"cache_hit": True},
-                    )
-                    responses_count = _emit_responses_scan(sid, stage_responses_dir)
-                    summary = {
-                        "packs_count": packs_count,
-                        "responses_received": responses_count,
-                        "empty_ok": packs_count == 0,
-                        "cache_hit": True,
-                    }
-                    record_frontend_responses_progress(
-                        sid,
-                        accounts_published=packs_count,
-                        answers_received=responses_count,
-                        answers_required=packs_count,
-                    )
-                    runflow_stage_end(
-                        "frontend",
-                        sid=sid,
-                        summary=summary,
-                        empty_ok=packs_count == 0,
-                    )
-                    _log_done(sid, packs_count, status="success", cache_hit=True)
-                    result = {
-                        "status": "success",
-                        "packs_count": packs_count,
-                        "empty_ok": packs_count == 0,
-                        "built": True,
-                        "packs_dir": packs_dir_str,
-                        "last_built_at": last_built,
-                    }
-                    _log_build_summary(
-                        sid,
-                        packs_count=packs_count,
-                        last_built_at=last_built,
-                    )
-                    return result
-
-        built_docs = 0
-        unchanged_docs = 0
-        skipped_missing = 0
-        skip_reasons = {"missing_summary": 0}
-        write_errors: list[tuple[str, Exception]] = []
-        pack_count = 0
-
-        for account_dir in account_dirs:
-            summary_path = account_dir / "summary.json"
-            summary = _load_json(summary_path)
-            if not summary:
-                skipped_missing += 1
-                skip_reasons["missing_summary"] = skip_reasons.get("missing_summary", 0) + 1
-                log.warning(
-                    "FRONTEND_PACK_MISSING_SUMMARY sid=%s path=%s",
-                    sid,
-                    summary_path,
-                )
-                continue
-
-            account_id = str(summary.get("account_id") or account_dir.name)
-            current_account_id = account_id
-
-            flat_path = account_dir / "fields_flat.json"
-            fields_flat_payload = _load_json(flat_path)
-            if fields_flat_payload is None:
-                log.warning(
-                    "FRONTEND_PACK_MISSING_FLAT sid=%s account=%s path=%s",
-                    sid,
-                    account_id,
-                    flat_path,
-                )
-
-            tags_path = account_dir / "tags.json"
-            if not tags_path.exists():
-                log.warning(
-                    "FRONTEND_PACK_MISSING_TAGS sid=%s account=%s path=%s",
-                    sid,
-                    account_id,
-                    tags_path,
-                )
-
-            labels = _extract_summary_labels(summary)
-            holder_name = _derive_holder_name_from_summary(summary, fields_flat_payload)
-            primary_issue, issues = _extract_issue_tags(tags_path)
-            if not primary_issue:
-                primary_issue = "unknown"
-
-            display_holder_name = _coerce_display_text(
-                holder_name or labels.get("creditor_name") or ""
-            )
-            if not display_holder_name:
-                display_holder_name = "Unknown"
-            display_primary_issue = _coerce_display_text(primary_issue or "unknown")
-
-            account_number_values_raw = _collect_flat_field_per_bureau(
-                fields_flat_payload, "account_number_display"
-            )
-            account_number_per_bureau = _normalize_per_bureau(account_number_values_raw)
-            account_number_consensus = _resolve_account_number_consensus(
-                account_number_per_bureau
-            )
-
-            account_type_values_raw = _collect_flat_field_per_bureau(
-                fields_flat_payload, "account_type"
-            )
-            account_type_per_bureau = _normalize_per_bureau(account_type_values_raw)
-            account_type_consensus = _resolve_majority_consensus(account_type_per_bureau)
-            if account_type_consensus == "--":
-                fallback_account_type = labels.get("account_type") or _collect_flat_consensus(
-                    fields_flat_payload, "account_type"
-                )
-                if fallback_account_type:
-                    account_type_consensus = fallback_account_type
-
-            status_values_raw = _collect_flat_field_per_bureau(
-                fields_flat_payload, "account_status"
-            )
-            status_per_bureau = _normalize_per_bureau(status_values_raw)
-            status_consensus = _resolve_majority_consensus(status_per_bureau)
-            if status_consensus == "--":
-                fallback_status = labels.get("status") or _collect_flat_consensus(
-                    fields_flat_payload, "account_status"
-                )
-                if fallback_status:
-                    status_consensus = fallback_status
-
-            balance_values_raw = _collect_flat_field_per_bureau(
-                fields_flat_payload, "balance_owed"
-            )
-            balance_per_bureau = _normalize_per_bureau(balance_values_raw)
-
-            date_opened_values_raw = _collect_flat_field_per_bureau(
-                fields_flat_payload, "date_opened"
-            )
-            date_opened_per_bureau = _normalize_per_bureau(date_opened_values_raw)
-
-            closed_date_values_raw = _collect_flat_field_per_bureau(
-                fields_flat_payload, "closed_date"
-            )
-            closed_date_per_bureau = _normalize_per_bureau(closed_date_values_raw)
-
-            date_reported_values_raw = _collect_flat_field_per_bureau(
-                fields_flat_payload, "date_reported"
-            )
-            date_reported_per_bureau = _normalize_per_bureau(date_reported_values_raw)
-
-            reported_bureaus = _determine_reported_bureaus(summary, fields_flat_payload)
-            bureau_summary = _prepare_bureau_payload_from_flat(
-                account_number_values=account_number_per_bureau,
-                balance_values=balance_per_bureau,
-                date_opened_values=date_opened_per_bureau,
-                closed_date_values=closed_date_per_bureau,
-                date_reported_values=date_reported_per_bureau,
-                reported_bureaus=reported_bureaus,
-            )
-
-            creditor_name_value = labels.get("creditor_name") or _stringify_flat_value(
-                _flat_lookup(fields_flat_payload, "creditor_name")
-            ) or _extract_text(summary.get("creditor_name"))
-            account_type_value = (
-                account_type_consensus
-                if account_type_consensus != "--"
-                else labels.get("account_type")
-            )
-            status_value = (
-                status_consensus if status_consensus != "--" else labels.get("status")
-            )
-
-            display_payload = build_display_payload(
-                holder_name=display_holder_name,
-                primary_issue=display_primary_issue,
-                account_number_per_bureau=account_number_per_bureau,
-                account_number_consensus=account_number_consensus,
-                account_type_per_bureau=account_type_per_bureau,
-                account_type_consensus=account_type_consensus,
-                status_per_bureau=status_per_bureau,
-                status_consensus=status_consensus,
-                balance_per_bureau=balance_per_bureau,
-                date_opened_per_bureau=date_opened_per_bureau,
-                closed_date_per_bureau=closed_date_per_bureau,
-            )
-
-            try:
-                relative_account_dir = account_dir.relative_to(run_dir).as_posix()
-            except ValueError:
-                relative_account_dir = account_dir.as_posix()
-
-            pointers = {
-                "summary": f"{relative_account_dir}/summary.json",
-                "tags": f"{relative_account_dir}/tags.json",
-                "flat": f"{relative_account_dir}/fields_flat.json",
-            }
-
-            full_pack_payload: dict[str, Any] | None = None
-            if debug_mirror_enabled or not lean_enabled:
-                full_pack_payload = build_pack_doc(
-                    sid=sid,
-                    account_id=account_id,
-                    creditor_name=creditor_name_value,
-                    account_type=account_type_value,
-                    status=status_value,
-                    bureau_summary=bureau_summary,
-                    holder_name=holder_name,
-                    primary_issue=primary_issue,
-                    display_payload=display_payload,
-                    pointers=pointers,
-                    issues=issues if issues else None,
-                )
-
-            stage_pack_payload = build_stage_pack_doc(
-                account_id=account_id,
-                holder_name=display_holder_name,
-                primary_issue=display_primary_issue,
-                display_payload=display_payload,
-            )
-
-            account_filename = _safe_account_dirname(account_id, account_dir.name)
-            stage_pack_path = stage_packs_dir / f"{account_filename}.json"
-
-            existing_stage_pack: Mapping[str, Any] | None = None
-            if stage_pack_path.exists():
-                existing_payload = _load_json_payload(stage_pack_path)
-                if isinstance(existing_payload, Mapping):
-                    existing_stage_pack = existing_payload
-
-            stage_pack_payload["questions"] = _resolve_stage_pack_questions(
-                existing_pack=existing_stage_pack,
-                question_set=_QUESTION_SET,
-            )
-
-            try:
-                stage_changed = _write_json_if_changed(
-                    stage_pack_path, stage_pack_payload
-                )
-                changed = stage_changed
-                if debug_mirror_enabled and full_pack_payload is not None:
-                    debug_packs_dir.mkdir(parents=True, exist_ok=True)
-                    mirror_path = debug_packs_dir / f"{account_filename}.full.json"
-                    _write_json_if_changed(mirror_path, full_pack_payload)
-                elif not debug_mirror_enabled:
-                    mirror_path = debug_packs_dir / f"{account_filename}.full.json"
-                    try:
-                        mirror_path.unlink()
-                    except FileNotFoundError:
-                        pass
-                    except OSError:  # pragma: no cover - defensive logging
-                        log.warning(
-                            "FRONTEND_PACK_DEBUG_MIRROR_UNLINK_FAILED path=%s",
-                            mirror_path,
-                            exc_info=True,
-                        )
-            except Exception as exc:
-                log.exception(
-                    "FRONTEND_PACK_WRITE_FAILED sid=%s account=%s path=%s",
-                    sid,
-                    account_id,
-                    stage_pack_path,
-                )
-                write_errors.append((account_id, exc))
-                continue
-
-            if changed:
-                built_docs += 1
-            else:
-                unchanged_docs += 1
-
-            try:
-                relative_pack = stage_pack_path.relative_to(run_dir).as_posix()
-            except ValueError:
-                relative_pack = str(stage_pack_path)
-
-            pack_count += 1
-
-            try:
-                relative_stage_pack = stage_pack_path.relative_to(run_dir).as_posix()
-            except ValueError:
-                relative_stage_pack = str(stage_pack_path)
-
-            if stage_changed and runflow_account_steps_enabled():
-                runflow_step(
-                    sid,
-                    "frontend",
-                    "frontend_review_pack_created",
-                    out={
-                        "account_id": account_id,
-                        "bytes": stage_pack_path.stat().st_size,
-                        "path": relative_stage_pack,
-                    },
-                )
-
-        build_metrics = {
-            "accounts": total_accounts,
-            "built": built_docs,
-            "skipped_missing": skipped_missing,
-            "unchanged": unchanged_docs,
-        }
-        skip_summary = {key: value for key, value in skip_reasons.items() if value}
-
-        generated_at = _now_iso()
-        manifest_payload = _build_stage_manifest(
-            sid=sid,
-            stage_name=stage_name,
-            run_dir=run_dir,
-            stage_packs_dir=stage_packs_dir,
-            stage_responses_dir=stage_responses_dir,
-            stage_index_path=stage_index_path,
-            question_set=_QUESTION_SET,
-        )
-        _ensure_frontend_index_redirect_stub(redirect_stub_path)
-        done_status = "error" if write_errors else "success"
-        _log_done(sid, pack_count, status=done_status)
-
-        finish_out: dict[str, Any] = {
-            "skip_reasons": skip_summary or None,
-            "write_failures": len(write_errors) if write_errors else None,
-        }
-        finish_out = {key: value for key, value in finish_out.items() if value is not None}
-
-        if pack_count == 0:
+        except Exception as exc:
             runflow_step(
                 sid,
                 "frontend",
-                "frontend_review_no_candidates",
+                "frontend_review_finish",
+                status="error",
+                out={
+                    "account_id": current_account_id,
+                    "error_class": exc.__class__.__name__,
+                    "message": str(exc),
+                },
+                error={
+                    "type": exc.__class__.__name__,
+                    "message": str(exc),
+                },
             )
-        runflow_step(
-            sid,
-            "frontend",
-            "frontend_review_finish",
-            status=done_status,
-            metrics={**build_metrics, "packs": pack_count},
-            out=finish_out or None,
-            error=(
-                {
-                    "type": "PackWriteError",
-                    "message": f"{len(write_errors)} pack writes failed",
-                }
-                if write_errors
-                else None
-            ),
-        )
-
-        responses_count = _emit_responses_scan(sid, stage_responses_dir)
-        summary = {
-            "packs_count": pack_count,
-            "responses_received": responses_count,
-            "empty_ok": pack_count == 0,
-            "skipped_missing": skipped_missing,
-        }
-        if built_docs:
-            summary["built"] = built_docs
-        if unchanged_docs:
-            summary["unchanged"] = unchanged_docs
-        if write_errors:
-            summary["write_failures"] = len(write_errors)
-        record_frontend_responses_progress(
-            sid,
-            accounts_published=pack_count,
-            answers_received=responses_count,
-            answers_required=pack_count,
-        )
-        runflow_stage_end(
-            "frontend",
-            sid=sid,
-            summary=summary,
-            empty_ok=pack_count == 0,
-        )
-
-        result = {
-            "status": "success",
-            "packs_count": pack_count,
-            "empty_ok": pack_count == 0,
-            "built": True,
-            "packs_dir": packs_dir_str,
-            "last_built_at": manifest_payload.get("generated_at"),
-        }
-        _log_build_summary(
-            sid,
-            packs_count=pack_count,
-            last_built_at=manifest_payload.get("generated_at"),
-        )
-        return result
-    except Exception as exc:
-        runflow_step(
-            sid,
-            "frontend",
-            "frontend_review_finish",
-            status="error",
-            out={
-                "account_id": current_account_id,
-                "error_class": exc.__class__.__name__,
-                "message": str(exc),
-            },
-            error={
-                "type": exc.__class__.__name__,
-                "message": str(exc),
-            },
-        )
-        runflow_stage_error(
-            "frontend",
-            sid=sid,
-            error_type=exc.__class__.__name__,
-            message=str(exc),
-            traceback_tail=format_exception_tail(exc),
-            hint=compose_hint("frontend pack generation", exc),
-        )
-        raise
-
-
+            runflow_stage_error(
+                "frontend",
+                sid=sid,
+                error_type=exc.__class__.__name__,
+                message=str(exc),
+                traceback_tail=format_exception_tail(exc),
+                hint=compose_hint("frontend pack generation", exc),
+            )
+            raise
+    finally:
+        if lock_acquired and lock_path is not None:
+            _release_frontend_build_lock(lock_path, sid)
+    
+    
 __all__ = ["generate_frontend_packs_for_run"]

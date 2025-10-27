@@ -22,7 +22,7 @@ from backend.core.ai.paths import (
     ensure_note_style_account_paths,
     normalize_note_style_account_id,
 )
-from backend.core.paths import normalize_stage_path
+from backend.core.paths import normalize_worker_path
 from backend.core.services.ai_client import get_ai_client
 from backend.runflow.manifest import resolve_note_style_stage_paths
 
@@ -43,17 +43,10 @@ def _resolve_runs_root(runs_root: Path | str | None) -> Path:
             return Path("runs").resolve()
 
         sanitized = text.replace("\\", "/")
-        if len(sanitized) >= 2 and sanitized[1] == ":":
-            try:
-                return normalize_stage_path(Path("/"), sanitized)
-            except ValueError:
-                return Path("runs").resolve()
-
-        candidate = Path(sanitized)
-        if candidate.is_absolute():
-            return candidate.resolve()
-
-        return (Path.cwd() / candidate).resolve()
+        try:
+            return normalize_worker_path(Path.cwd(), sanitized)
+        except ValueError:
+            return Path("runs").resolve()
 
     if runs_root is None:
         env_value = os.getenv("RUNS_ROOT")
@@ -69,7 +62,7 @@ def _resolve_packs_dir(paths: NoteStylePaths) -> Path:
     if override:
         run_dir = paths.base.parent.parent
         try:
-            candidate = normalize_stage_path(run_dir, override)
+            candidate = normalize_worker_path(run_dir, override)
         except ValueError:
             candidate = paths.packs_dir
         return candidate
@@ -274,7 +267,7 @@ def _normalize_manifest_entry_path(
     run_dir = paths.base.parent.parent
 
     try:
-        candidate = normalize_stage_path(run_dir, sanitized)
+        candidate = normalize_worker_path(run_dir, sanitized)
     except ValueError:
         return None
 
@@ -291,7 +284,7 @@ def _normalize_manifest_entry_path(
 
     if not _is_within_directory(candidate, stage_base):
         try:
-            candidate = normalize_stage_path(
+            candidate = normalize_worker_path(
                 default_dir.parent, sanitized_for_stage
             )
         except ValueError:

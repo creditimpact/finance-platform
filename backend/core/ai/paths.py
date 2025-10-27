@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from backend.core.paths import coerce_stage_path
+from backend.core.paths import coerce_stage_path, normalize_worker_path
 
 
 def _normalize_stage_override(
@@ -323,11 +323,41 @@ def ensure_note_style_paths(
 
     if base_path is None:
         base_path = default_base
+
+    try:
+        base_path = normalize_worker_path(run_base, os.fspath(base_path))
+    except ValueError:
+        base_path = default_base
+
     if packs_dir is None:
-        packs_dir = default_packs if base_path == default_base else (base_path / "packs").resolve()
+        packs_dir = (
+            default_packs
+            if base_path == default_base
+            else (base_path / "packs").resolve()
+        )
     if results_dir is None:
         results_dir = (
-            default_results if base_path == default_base else (base_path / "results").resolve()
+            default_results
+            if base_path == default_base
+            else (base_path / "results").resolve()
+        )
+
+    try:
+        packs_dir = normalize_worker_path(run_base, os.fspath(packs_dir))
+    except ValueError:
+        packs_dir = (
+            default_packs
+            if base_path == default_base
+            else (base_path / "packs").resolve()
+        )
+
+    try:
+        results_dir = normalize_worker_path(run_base, os.fspath(results_dir))
+    except ValueError:
+        results_dir = (
+            default_results
+            if base_path == default_base
+            else (base_path / "results").resolve()
         )
 
     results_raw_dir = base_path / "results_raw"
@@ -342,8 +372,18 @@ def ensure_note_style_paths(
 
     if index_file is None:
         index_file = base_path / "index.json"
+    else:
+        try:
+            index_file = normalize_worker_path(run_base, os.fspath(index_file))
+        except ValueError:
+            index_file = base_path / "index.json"
     if log_file is None:
         log_file = base_path / "logs.txt"
+    else:
+        try:
+            log_file = normalize_worker_path(run_base, os.fspath(log_file))
+        except ValueError:
+            log_file = base_path / "logs.txt"
 
     return NoteStylePaths(
         base=base_path.resolve(),

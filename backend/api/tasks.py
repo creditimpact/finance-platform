@@ -120,8 +120,19 @@ def _flatten_task_routes(routes: object) -> dict[str, dict]:
     return mapping
 
 
+_TARGETED_TASK_ROUTES = {
+    "backend.api.tasks.generate_frontend_packs_task": "frontend",
+    "backend.ai.note_style.tasks.note_style_prepare_and_send_task": "note_style",
+    "backend.ai.note_style.tasks.note_style_send_account_task": "note_style",
+    "backend.ai.note_style.tasks.note_style_send_sid_task": "note_style",
+    "backend.pipeline.auto_ai_tasks.validation_send": "validation",
+}
+
+_LAST_TARGETED_ROUTES: dict[str, str] = {}
+
+
 def _ensure_frontend_queue_configuration() -> None:
-    """Ensure Celery is aware of the dedicated frontend queue."""
+    """Ensure Celery is aware of the dedicated frontend and note_style queues."""
 
     default_queue = _default_queue_name()
     frontend_queue = _frontend_queue_name()
@@ -145,24 +156,22 @@ def _ensure_frontend_queue_configuration() -> None:
     )
     app.conf.task_queues = queues
 
-    targeted_tasks = {
-        "backend.api.tasks.generate_frontend_packs_task": frontend_queue,
-        "backend.ai.note_style.tasks.note_style_prepare_and_send_task": "note_style",
-        "backend.ai.note_style.tasks.note_style_send_account_task": "note_style",
-        "backend.ai.note_style.tasks.note_style_send_sid_task": "note_style",
-        "backend.pipeline.auto_ai_tasks.validation_send": "validation",
-    }
+    targeted_routes = dict(_TARGETED_TASK_ROUTES)
+    targeted_routes["backend.api.tasks.generate_frontend_packs_task"] = frontend_queue
+
+    global _LAST_TARGETED_ROUTES
 
     routes_config = getattr(app.conf, "task_routes", None)
     if not routes_config:
         app.conf.task_routes = {
             task_name: {"queue": queue_name, "routing_key": queue_name}
-            for task_name, queue_name in targeted_tasks.items()
+            for task_name, queue_name in targeted_routes.items()
         }
+        _LAST_TARGETED_ROUTES = dict(targeted_routes)
         return
 
     if isinstance(routes_config, dict):
-        for task_name, queue_name in targeted_tasks.items():
+        for task_name, queue_name in targeted_routes.items():
             existing = routes_config.get(task_name)
             if isinstance(existing, dict):
                 existing.setdefault("queue", queue_name)
@@ -173,11 +182,12 @@ def _ensure_frontend_queue_configuration() -> None:
                     "routing_key": queue_name,
                 }
         app.conf.task_routes = routes_config
+        _LAST_TARGETED_ROUTES = dict(targeted_routes)
         return
 
     if isinstance(routes_config, (list, tuple)):
         updated_routes = list(routes_config)
-        for task_name, queue_name in targeted_tasks.items():
+        for task_name, queue_name in targeted_routes.items():
             applied = False
             for entry in updated_routes:
                 if not isinstance(entry, dict) or task_name not in entry:
@@ -193,6 +203,7 @@ def _ensure_frontend_queue_configuration() -> None:
                     {task_name: {"queue": queue_name, "routing_key": queue_name}}
                 )
         app.conf.task_routes = updated_routes
+        _LAST_TARGETED_ROUTES = dict(targeted_routes)
         return
 
     # Fallback: leave exotic configurations untouched but append our routes.
@@ -200,12 +211,61 @@ def _ensure_frontend_queue_configuration() -> None:
         routes_config,
         {
             task_name: {"queue": queue_name, "routing_key": queue_name}
-            for task_name, queue_name in targeted_tasks.items()
+            for task_name, queue_name in targeted_routes.items()
         },
     ]
+    _LAST_TARGETED_ROUTES = dict(targeted_routes)
 
 
 _ensure_frontend_queue_configuration()
+
+
+def _log_active_queue_configuration() -> None:
+    queues = getattr(app.conf, "task_queues", []) or []
+    queue_descriptions: list[dict[str, object]] = []
+    queue_names: list[str] = []
+    for queue in queues:
+        try:
+            queue_name = getattr(queue, "name", None)
+            exchange = getattr(queue, "exchange", None)
+            routing_key = getattr(queue, "routing_key", None)
+        except Exception as exc:  # pragma: no cover - defensive
+            queue_descriptions.append({"repr": repr(queue), "error": str(exc)})
+            continue
+        if isinstance(queue_name, str):
+            queue_names.append(queue_name)
+        queue_descriptions.append(
+            {
+                "name": queue_name,
+                "exchange": getattr(exchange, "name", exchange),
+                "routing_key": routing_key,
+            }
+        )
+
+    routes = _flatten_task_routes(getattr(app.conf, "task_routes", None))
+    note_style_routes = {
+        task_name: route
+        for task_name, route in routes.items()
+        if task_name.startswith("backend.ai.note_style.")
+    }
+
+    logger.info(
+        "CELERY_QUEUE_ACTIVE default=%s frontend=%s known=%s queues=%s note_style_in_queues=%s",
+        _default_queue_name(),
+        _frontend_queue_name(),
+        sorted(_known_queue_names()),
+        queue_descriptions,
+        "note_style" in queue_names,
+    )
+    if note_style_routes:
+        logger.info("CELERY_NOTE_STYLE_ROUTES routes=%s", note_style_routes)
+    else:
+        logger.warning("CELERY_NOTE_STYLE_ROUTES routes=missing")
+
+    if _LAST_TARGETED_ROUTES:
+        logger.info("CELERY_TARGETED_ROUTES routes=%s", _LAST_TARGETED_ROUTES)
+    else:
+        logger.warning("CELERY_TARGETED_ROUTES routes=uninitialized")
 
 
 def _parse_task_routes(raw: str) -> object | None:
@@ -245,6 +305,8 @@ def configure_worker(**_):
             logger.info("CELERY_TASK_ROUTES_ACTIVE routes=%s", configured_routes)
         else:
             logger.info("CELERY_TASK_ROUTES_ACTIVE routes=none")
+
+        _log_active_queue_configuration()
     except EnvironmentError as exc:
         logger.warning("Starting in parser-only mode: %s", exc)
 

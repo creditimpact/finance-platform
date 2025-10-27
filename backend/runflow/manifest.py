@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from backend import config
 from backend.core.ai.paths import NoteStylePaths
-from backend.core.paths import normalize_stage_path
+from backend.core.paths import normalize_stage_path, normalize_worker_path
 from backend.core.paths.frontend_review import ensure_frontend_review_dirs
 from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest, persist_manifest
 
@@ -111,7 +111,7 @@ def _normalize_note_style_stage_path(
     sanitized = sanitized.replace("\\", "/")
 
     try:
-        candidate = normalize_stage_path(run_dir, sanitized)
+        candidate = normalize_worker_path(run_dir, sanitized)
     except ValueError:
         return fallback
 

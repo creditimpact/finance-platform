@@ -9,6 +9,7 @@ from typing import Any
 
 __all__ = [
     "normalize_stage_path",
+    "normalize_worker_path",
     "coerce_stage_path",
     "sanitize_stage_path_value",
     "ensure_frontend_review_dirs",
@@ -67,6 +68,36 @@ def normalize_stage_path(run_root: Path | str, raw: Any) -> Path:
             return candidate
 
     candidate = run_root_path / candidate
+
+    try:
+        return candidate.resolve()
+    except OSError:
+        return candidate
+
+
+def normalize_worker_path(base_dir: Path | str, raw: os.PathLike[str] | str) -> Path:
+    """Return a normalized worker path for manifest or environment values."""
+
+    base_path = Path(base_dir).resolve()
+
+    try:
+        text = os.fspath(raw)
+    except TypeError:
+        text = str(raw)
+
+    sanitized = str(text).strip()
+    if not sanitized:
+        raise ValueError("path value must be a non-empty string")
+
+    sanitized = sanitized.replace("\\", "/")
+
+    drive_match = _WINDOWS_DRIVE_PATTERN.match(sanitized)
+    if drive_match:
+        sanitized = sanitized[drive_match.end():]
+
+    candidate = Path(sanitized)
+    if not candidate.is_absolute():
+        candidate = base_path / candidate
 
     try:
         return candidate.resolve()

@@ -602,24 +602,50 @@ def _enqueue_frontend_after_cases(
             return
         _FRONTEND_ENQUEUED.add(sid)
 
-    queue_name = _frontend_queue_name()
+    try:
+        from pipeline.hooks import on_cases_built
+    except Exception:  # pragma: no cover - defensive logging
+        log.error("FRONTEND_ENQUEUE_HOOK_IMPORT_FAILED sid=%s", sid, exc_info=True)
+        queue_name = _frontend_queue_name()
+        try:
+            generate_frontend_packs_task.apply_async(args=[sid], queue=queue_name)
+        except Exception:  # pragma: no cover - defensive logging
+            log.error("FRONTEND_ENQUEUE_AFTER_CASES_FAILED sid=%s", sid, exc_info=True)
+            if not marker_written:
+                _FRONTEND_ENQUEUED.discard(sid)
+            elif marker_path is not None:
+                try:
+                    marker_path.unlink()
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.warning(
+                        "FRONTEND_ENQUEUE_LOCK_CLEANUP_FAILED sid=%s path=%s",
+                        sid,
+                        marker_path,
+                        exc_info=True,
+                    )
+        return
 
     try:
-        generate_frontend_packs_task.apply_async(args=[sid], queue=queue_name)
+        on_cases_built(sid)
     except Exception:  # pragma: no cover - defensive logging
-        log.error("FRONTEND_ENQUEUE_AFTER_CASES_FAILED sid=%s", sid, exc_info=True)
-        if not marker_written:
-            _FRONTEND_ENQUEUED.discard(sid)
-        elif marker_path is not None:
-            try:
-                marker_path.unlink()
-            except Exception:  # pragma: no cover - defensive logging
-                logger.warning(
-                    "FRONTEND_ENQUEUE_LOCK_CLEANUP_FAILED sid=%s path=%s",
-                    sid,
-                    marker_path,
-                    exc_info=True,
-                )
+        log.error("FRONTEND_ENQUEUE_HOOK_FAILED sid=%s", sid, exc_info=True)
+        queue_name = _frontend_queue_name()
+        try:
+            generate_frontend_packs_task.apply_async(args=[sid], queue=queue_name)
+        except Exception:  # pragma: no cover - defensive logging
+            log.error("FRONTEND_ENQUEUE_AFTER_CASES_FAILED sid=%s", sid, exc_info=True)
+            if not marker_written:
+                _FRONTEND_ENQUEUED.discard(sid)
+            elif marker_path is not None:
+                try:
+                    marker_path.unlink()
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.warning(
+                        "FRONTEND_ENQUEUE_LOCK_CLEANUP_FAILED sid=%s path=%s",
+                        sid,
+                        marker_path,
+                        exc_info=True,
+                    )
         return
 
     log.info("FRONTEND_ENQUEUE_AFTER_CASES sid=%s", sid)

@@ -820,7 +820,12 @@ def send_note_style_packs_for_sid(
     _warn_if_index_thin(paths, sid=sid)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
-    env_glob = os.getenv("NOTE_STYLE_PACK_GLOB")
+    env_glob_raw = os.getenv("NOTE_STYLE_PACK_GLOB")
+    env_glob = None
+    if env_glob_raw:
+        sanitized_glob = env_glob_raw.strip().replace("\\", "/")
+        if sanitized_glob:
+            env_glob = sanitized_glob
     fallback_glob = "acc_*.jsonl"
     default_glob = env_glob or fallback_glob
 
@@ -850,7 +855,13 @@ def send_note_style_packs_for_sid(
         glob_pattern = default_glob
 
         def _collect_candidates(pattern: str) -> list[Path]:
-            raw_matches = sorted(packs_dir.glob(pattern))
+            try:
+                raw_matches = sorted(packs_dir.glob(pattern))
+            except ValueError:
+                log.warning(
+                    "NOTE_STYLE_PACK_GLOB_INVALID sid=%s glob=%s", sid, pattern
+                )
+                return []
             filtered: list[Path] = []
             packs_dir_resolved = packs_dir.resolve()
             debug_dir_resolved = debug_dir.resolve()

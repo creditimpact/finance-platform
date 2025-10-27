@@ -408,6 +408,52 @@ def test_note_style_sender_respects_skip_env_when_result_has_analysis(
     assert client.calls == []
 
 
+def test_note_style_sender_respects_skip_env_when_result_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID301"
+    account_id = "idx-301"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Processing failed."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    failure_payload = {
+        "status": "failed",
+        "account": account_id,
+        "sid": sid,
+        "error": {"message": "upstream error"},
+        "completed_at": "2024-01-01T00:00:00Z",
+    }
+    account_paths.result_file.write_text(
+        json.dumps(failure_payload, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    client = _StubClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+    monkeypatch.setattr(config, "NOTE_STYLE_SKIP_IF_RESULT_EXISTS", True)
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+
+    assert processed == []
+    assert client.calls == []
+
+
 def test_note_style_sender_calls_when_skip_flag_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

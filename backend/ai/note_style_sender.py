@@ -474,18 +474,18 @@ def _account_paths_for_candidate(
     )
 
 
-def _result_has_completed_analysis(result_path: Path) -> bool:
+def _load_result_payload(result_path: Path) -> Mapping[str, Any] | None:
     try:
         raw = result_path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return False
+        return None
     except OSError:
         log.warning(
             "STYLE_SEND_EXISTING_READ_FAILED path=%s",
             result_path,
             exc_info=True,
         )
-        return False
+        return None
 
     for line in raw.splitlines():
         candidate = line.strip()
@@ -499,11 +499,52 @@ def _result_has_completed_analysis(result_path: Path) -> bool:
                 result_path,
                 exc_info=True,
             )
-            return False
-        analysis = payload.get("analysis")
-        if isinstance(analysis, Mapping) and bool(analysis):
-            return True
+            return None
+        if not isinstance(payload, Mapping):
+            log.warning(
+                "STYLE_SEND_EXISTING_INVALID_PAYLOAD path=%s",
+                result_path,
+            )
+            return None
+        return payload
+    return None
+
+
+def _payload_has_completed_analysis(payload: Mapping[str, Any] | None) -> bool:
+    if not isinstance(payload, Mapping):
         return False
+    analysis = payload.get("analysis")
+    if isinstance(analysis, Mapping) and bool(analysis):
+        return True
+    return False
+
+
+def _result_skip_reason(payload: Mapping[str, Any] | None) -> str | None:
+    if _payload_has_completed_analysis(payload):
+        return "existing_analysis"
+    if isinstance(payload, Mapping):
+        status = str(payload.get("status") or "").strip().lower()
+        if status == "failed":
+            return "existing_failure"
+    return None
+
+
+def _result_has_completed_analysis(result_path: Path) -> bool:
+    payload = _load_result_payload(result_path)
+    return _payload_has_completed_analysis(payload)
+
+
+def _result_is_terminal(
+    result_path: Path, payload: Mapping[str, Any] | None = None
+) -> bool:
+    if payload is None:
+        payload = _load_result_payload(result_path)
+    if _payload_has_completed_analysis(payload):
+        return True
+    if isinstance(payload, Mapping):
+        status = str(payload.get("status") or "").strip().lower()
+        if status == "failed":
+            return True
     return False
 
 
@@ -737,22 +778,28 @@ def _send_pack_payload(
         pack_path,
     )
 
-    if config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS and _result_has_completed_analysis(
-        account_paths.result_file
-    ):
+    skip_reason: str | None = None
+    if config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS:
+        skip_reason = _result_skip_reason(
+            _load_result_payload(account_paths.result_file)
+        )
+
+    if skip_reason:
+        result_relative = _relativize(account_paths.result_file, paths.base)
         log.info(
-            "STYLE_SEND_SKIP_EXISTING sid=%s account_id=%s result=%s",
+            "STYLE_SEND_SKIP_EXISTING sid=%s account_id=%s result=%s reason=%s",
             sid,
             account_id,
-            _relativize(account_paths.result_file, paths.base),
+            result_relative,
+            skip_reason,
         )
         log_structured_event(
             "NOTE_STYLE_SEND_SKIPPED",
             logger=log,
             sid=sid,
             account_id=account_id,
-            reason="existing_analysis",
-            result_path=_relativize(account_paths.result_file, paths.base),
+            reason=skip_reason,
+            result_path=result_relative,
         )
         return False
 

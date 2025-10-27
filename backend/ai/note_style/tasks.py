@@ -76,6 +76,7 @@ def note_style_prepare_and_send_task(
 
     sid_text = str(sid or "").strip()
     if not _note_style_has_packs(sid_text, runs_root=runs_root):
+        log.info("NOTE_STYLE_AUTO: skip_send sid=%s reason=no_note_style_packs", sid_text)
         return {
             "sid": sid_text,
             "built": 0,
@@ -119,6 +120,12 @@ def note_style_prepare_and_send_task(
         sid=sid_text,
         runs_root=runs_root,
         duration_seconds=duration,
+    )
+    log.info(
+        "NOTE_STYLE_AUTO: sent sid=%s built=%s sent=%s",
+        sid_text,
+        result.get("built"),
+        result.get("sent"),
     )
     return result
 

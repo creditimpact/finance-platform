@@ -100,6 +100,22 @@ logger = logging.getLogger(__name__)
 log = logger
 
 api_bp = Blueprint("api", __name__)
+review_bp = Blueprint("review", __name__, url_prefix="/api")
+
+
+@review_bp.get("/runs/<sid>/frontend/index")
+def get_review_index_status(sid: str):
+    index_path = os.path.join(
+        os.getenv("RUNS_ROOT", "runs"),
+        sid,
+        "frontend",
+        "review",
+        "index.json",
+    )
+    min_bytes = int(os.getenv("NOTE_STYLE_INDEX_MIN_BYTES", "20"))
+    if os.path.exists(index_path) and os.path.getsize(index_path) >= min_bytes:
+        return jsonify({"ok": True, "path": "frontend/review/index.json"}), 200
+    return jsonify({"ok": False, "error": "index_not_found"}), 404
 
 
 SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
@@ -3028,6 +3044,7 @@ def create_app() -> Flask:
             supports_credentials=True,
         )
     app.register_blueprint(admin_bp)
+    app.register_blueprint(review_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(ai_bp)
     app.register_blueprint(ui_event_bp)

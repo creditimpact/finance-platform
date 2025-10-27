@@ -464,6 +464,55 @@ def test_note_style_sender_calls_when_skip_flag_disabled(
     )
     assert stored_result["analysis"]["tone"] == "Empathetic"
 
+
+def test_note_style_sender_warns_but_sends_when_index_thin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sid = "SID306"
+    account_id = "idx-306"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Need review."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    # Overwrite the index with a very small payload so the warning triggers.
+    paths.index_file.write_text("{}", encoding="utf-8")
+
+    client = _StubClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+    monkeypatch.setattr(config, "NOTE_STYLE_WAIT_FOR_INDEX", True)
+    monkeypatch.setenv("NOTE_STYLE_WAIT_FOR_INDEX", "1")
+
+    caplog.set_level("WARNING", logger="backend.ai.note_style_sender")
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+
+    assert processed == [account_id]
+    assert len(client.calls) == 1
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_sender"
+    ]
+    assert any("NOTE_STYLE_INDEX_THIN" in message for message in messages)
+
+
 def test_note_style_sender_raises_when_pack_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

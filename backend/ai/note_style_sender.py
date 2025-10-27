@@ -30,6 +30,9 @@ from backend.runflow.manifest import resolve_note_style_stage_paths
 log = logging.getLogger(__name__)
 
 
+_INDEX_THIN_THRESHOLD_BYTES = 128
+
+
 def _resolve_runs_root(runs_root: Path | str | None) -> Path:
     def _coerce(value: Path | str) -> Path:
         if isinstance(value, Path):
@@ -382,6 +385,44 @@ def _load_manifest_pack_entries(
         )
 
     return candidates
+
+
+def _warn_if_index_thin(paths: NoteStylePaths, *, sid: str) -> None:
+    if not config.NOTE_STYLE_WAIT_FOR_INDEX:
+        return
+
+    index_path = getattr(paths, "index_file", None)
+    if not isinstance(index_path, Path):
+        return
+
+    display_path = _relativize(index_path, paths.base)
+
+    try:
+        size = index_path.stat().st_size
+    except FileNotFoundError:
+        log.warning(
+            "NOTE_STYLE_INDEX_THIN sid=%s path=%s reason=missing",
+            sid,
+            display_path,
+        )
+        return
+    except OSError:
+        log.warning(
+            "NOTE_STYLE_INDEX_THIN sid=%s path=%s reason=stat_failed",
+            sid,
+            display_path,
+            exc_info=True,
+        )
+        return
+
+    if size < _INDEX_THIN_THRESHOLD_BYTES:
+        log.warning(
+            "NOTE_STYLE_INDEX_THIN sid=%s bytes=%s threshold=%s path=%s",
+            sid,
+            size,
+            _INDEX_THIN_THRESHOLD_BYTES,
+            display_path,
+        )
 
 
 def _account_paths_for_candidate(
@@ -776,6 +817,7 @@ def send_note_style_packs_for_sid(
 
     runs_root_path = _resolve_runs_root(runs_root)
     paths = resolve_note_style_stage_paths(runs_root_path, sid, create=False)
+    _warn_if_index_thin(paths, sid=sid)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
     manifest_candidates: list[_PackCandidate] = []
@@ -938,6 +980,7 @@ def send_note_style_pack_for_account(
 ) -> bool:
     runs_root_path = _resolve_runs_root(runs_root)
     paths = resolve_note_style_stage_paths(runs_root_path, sid, create=False)
+    _warn_if_index_thin(paths, sid=sid)
     candidate: _PackCandidate | None = None
     if config.NOTE_STYLE_USE_MANIFEST_PATHS:
         target = normalize_note_style_account_id(account_id)

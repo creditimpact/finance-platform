@@ -199,6 +199,82 @@ def _run_dir_for_sid(sid: str) -> Path:
     return _runs_root_path() / validated
 
 
+def _env_flag_enabled(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    lowered = raw.strip().lower()
+    if lowered in {"", "0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def _run_has_inputs(runs_root: Path, sid: str) -> bool:
+    base = runs_root / sid
+    uploads_dir = base / "uploads"
+    try:
+        if any((uploads_dir).glob("*.pdf")):
+            return True
+    except OSError:
+        return False
+
+    responses_dir = base / "frontend" / "review" / "responses"
+    try:
+        if any(responses_dir.glob("*.result.json")):
+            return True
+    except OSError:
+        return False
+
+    return False
+
+
+def _iter_run_sids(runs_root: Path) -> Iterable[str]:
+    try:
+        entries = sorted(runs_root.iterdir())
+    except FileNotFoundError:
+        return []
+    except OSError:
+        logger.warning("RUNFLOW_DISCOVER_SIDS_FAILED root=%s", runs_root, exc_info=True)
+        return []
+
+    return [entry.name for entry in entries if entry.is_dir()]
+
+
+def _reconcile_runs_on_boot() -> None:
+    runs_root = _runs_root_path()
+    ignore_empty = _env_flag_enabled("RUNFLOW_IGNORE_EMPTY_SIDS", default=True)
+
+    for sid in _iter_run_sids(runs_root):
+        if ignore_empty and not _run_has_inputs(runs_root, sid):
+            continue
+        try:
+            reconcile_umbrella_barriers(sid, runs_root=runs_root)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "RUNFLOW_BOOT_RECONCILE_FAILED sid=%s runs_root=%s",
+                sid,
+                runs_root,
+                exc_info=True,
+            )
+
+
+def _note_style_ready_from_barriers(
+    barriers: Mapping[str, Any] | None,
+) -> bool:
+    if not isinstance(barriers, Mapping):
+        return True
+
+    merge_ready = bool(barriers.get("merge_ready"))
+    review_ready = bool(barriers.get("review_ready"))
+    validation_ready = bool(barriers.get("validation_ready"))
+
+    strict_validation = _env_flag_enabled(
+        "UMBRELLA_BARRIERS_STRICT_VALIDATION", default=False
+    )
+    if strict_validation:
+        return merge_ready and review_ready and validation_ready
+    return merge_ready and review_ready
+
 def _frontend_stage_dir(run_dir: Path) -> Path:
     config = load_frontend_stage_config(run_dir)
     return config.stage_dir
@@ -2136,8 +2212,9 @@ def api_frontend_review_answer(sid: str, account_id: str):
 
     _review_stream_broker.publish(sid, "responses_written", {"account_id": account_id})
 
+    barriers_payload: Mapping[str, Any] | None = None
     try:
-        runflow_barriers_refresh(sid)
+        barriers_payload = runflow_barriers_refresh(sid)
     except Exception:  # pragma: no cover - defensive logging
         logger.warning(
             "FRONTEND_BARRIERS_REFRESH_FAILED sid=%s account_id=%s",
@@ -2155,8 +2232,26 @@ def api_frontend_review_answer(sid: str, account_id: str):
             account_id,
             exc_info=True,
         )
+    else:
+        try:
+            refreshed_barriers = runflow_barriers_refresh(sid)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "FRONTEND_BARRIERS_REFRESH_AFTER_STAGE_FAILED sid=%s account_id=%s",
+                sid,
+                account_id,
+                exc_info=True,
+            )
+        else:
+            if isinstance(refreshed_barriers, Mapping):
+                barriers_payload = refreshed_barriers
 
     build_result: Mapping[str, Any] | None = None
+    send_on_write_enabled = _env_flag_enabled(
+        "NOTE_STYLE_SEND_ON_RESPONSE_WRITE",
+        default=config.NOTE_STYLE_SEND_ON_RESPONSE_WRITE,
+    )
+
     if config.NOTE_STYLE_ENABLED:
         try:
             build_result = build_note_style_pack_for_account(
@@ -2170,8 +2265,10 @@ def api_frontend_review_answer(sid: str, account_id: str):
                 exc_info=True,
             )
 
-        if config.NOTE_STYLE_SEND_ON_RESPONSE_WRITE and isinstance(
-            build_result, Mapping
+        if (
+            send_on_write_enabled
+            and isinstance(build_result, Mapping)
+            and _note_style_ready_from_barriers(barriers_payload)
         ):
             status_text = str(build_result.get("status") or "").strip().lower()
             if status_text == "completed":
@@ -2614,7 +2711,7 @@ def start_process():
                 print("File is not a valid PDF")
                 return jsonify({"status": "error", "message": "Invalid PDF file"}), 400
 
-        manifest = RunManifest.for_sid(session_id)
+        manifest = RunManifest.for_sid(session_id, allow_create=True)
         uploads_dir = manifest.ensure_run_subdir("uploads_dir", "uploads")
         dst = (uploads_dir / pdf_path.name).resolve()
         if pdf_path.resolve() != dst:
@@ -2761,7 +2858,7 @@ def api_upload():
         if not pdf_path.exists():
             return jsonify({"ok": False, "message": "File upload failed"}), 400
 
-        manifest = RunManifest.for_sid(session_id)
+        manifest = RunManifest.for_sid(session_id, allow_create=True)
         uploads_dir = manifest.ensure_run_subdir("uploads_dir", "uploads")
         dst = (uploads_dir / pdf_path.name).resolve()
         if pdf_path.resolve() != dst:
@@ -2934,9 +3031,24 @@ def create_app() -> Flask:
     app.register_blueprint(run_assets_bp)
     app.register_blueprint(smoke_bp, url_prefix="/smoke")
 
+    def _run_boot_reconcile_once() -> None:
+        if getattr(app, "_runflow_boot_reconciled", False):
+            return
+        should_run = _env_flag_enabled("RUNFLOW_RECONCILE_ON_BOOT", default=False)
+        if not should_run:
+            app._runflow_boot_reconciled = True
+            return
+        try:
+            _reconcile_runs_on_boot()
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning("RUNFLOW_BOOT_RECONCILE_ABORTED", exc_info=True)
+        finally:
+            app._runflow_boot_reconciled = True
+
     @app.before_request
     def _load_config() -> None:
         if getattr(app, "_config_loaded", False):
+            _run_boot_reconcile_once()
             return
         cfg = get_app_config()
         celery_app.conf.update(
@@ -2950,6 +3062,7 @@ def create_app() -> Flask:
         logger.info("Flask app starting with OPENAI_BASE_URL=%s", cfg.ai.base_url)
         logger.info("Flask app OPENAI_API_KEY present=%s", bool(cfg.ai.api_key))
         app._config_loaded = True
+        _run_boot_reconcile_once()
 
     @app.before_request
     def _auth_and_throttle() -> tuple[dict, int] | None:

@@ -721,42 +721,51 @@ def ai_validation_requirements_step(
                 "AUTO_AI_FRONTEND_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
             )
     else:
-        packs_count = int(fe_result.get("packs_count", 0) or 0)
-        frontend_status_value = str(fe_result.get("status") or "success")
-        frontend_stage_status: StageStatus = (
-            "error" if frontend_status_value == "error" else "published"
-        )
-        notes_override = (
-            frontend_status_value if frontend_status_value not in {"", "success"} else None
-        )
-        empty_ok_frontend = bool(fe_result.get("empty_ok", packs_count == 0))
-
-        record_stage(
-            sid,
-            "frontend",
-            status=frontend_stage_status,
-            counts={"packs_count": packs_count},
-            empty_ok=empty_ok_frontend,
-            notes=notes_override,
-            runs_root=runs_root_path,
-        )
-
-        try:
-            reconcile_umbrella_barriers(sid, runs_root=runs_root_path)
-        except Exception:  # pragma: no cover - defensive logging
-            logger.warning(
-                "AUTO_AI_FRONTEND_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
-            )
-
-        if frontend_stage_status == "success":
-            update_manifest_frontend(
+        if fe_result.get("autorun_disabled"):
+            logger.info(
+                "AUTO_AI_FRONTEND_AUTORUN_DISABLED sid=%s status=%s",
                 sid,
-                packs_dir=fe_result.get("packs_dir"),
-                packs_count=packs_count,
-                built=bool(fe_result.get("built", False)),
-                last_built_at=fe_result.get("last_built_at"),
+                fe_result.get("status"),
+            )
+        else:
+            packs_count = int(fe_result.get("packs_count", 0) or 0)
+            frontend_status_value = str(fe_result.get("status") or "success")
+            frontend_stage_status: StageStatus = (
+                "error" if frontend_status_value == "error" else "published"
+            )
+            notes_override = (
+                frontend_status_value
+                if frontend_status_value not in {"", "success"}
+                else None
+            )
+            empty_ok_frontend = bool(fe_result.get("empty_ok", packs_count == 0))
+
+            record_stage(
+                sid,
+                "frontend",
+                status=frontend_stage_status,
+                counts={"packs_count": packs_count},
+                empty_ok=empty_ok_frontend,
+                notes=notes_override,
                 runs_root=runs_root_path,
             )
+
+            try:
+                reconcile_umbrella_barriers(sid, runs_root=runs_root_path)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "AUTO_AI_FRONTEND_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
+                )
+
+            if frontend_stage_status == "success":
+                update_manifest_frontend(
+                    sid,
+                    packs_dir=fe_result.get("packs_dir"),
+                    packs_count=packs_count,
+                    built=bool(fe_result.get("built", False)),
+                    last_built_at=fe_result.get("last_built_at"),
+                    runs_root=runs_root_path,
+                )
 
     decision = decide_next(sid, runs_root=runs_root_path)
     next_action = decision.get("next")

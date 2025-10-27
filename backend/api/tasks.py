@@ -1,13 +1,15 @@
 # ruff: noqa: E402
 import ast
 import json
-import shutil
 import logging
 import os
+import shutil
 import sys
+import time
 import uuid
 import warnings
 from pathlib import Path
+from typing import Mapping
 
 from dotenv import load_dotenv
 
@@ -320,6 +322,8 @@ logging.getLogger("pdfminer").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message=".*FontBBox.*")
 
 _AUTO_AI_PIPELINE_ENQUEUED: set[str] = set()
+_FRONTEND_ENQUEUED: set[str] = set()
+_FRONTEND_ENQUEUE_LOCK_FILENAME = "frontend_enqueued.lock"
 
 # Verify that session_manager is importable at startup. This helps catch
 # cases where the worker is launched from a directory that omits the
@@ -472,6 +476,154 @@ def generate_frontend_packs_task(
     return generate_frontend_packs_for_run(sid, runs_root=runs_root, force=force)
 
 
+def _resolve_run_dir_for_frontend(
+    sid: str,
+    cases_info: Mapping[str, object] | object,
+    *,
+    runs_root: Path | None,
+) -> Path | None:
+    """Best-effort resolution of the run directory for ``sid``."""
+
+    run_dir: Path | None = None
+
+    if isinstance(cases_info, Mapping):
+        dir_value = cases_info.get("dir")
+        if isinstance(dir_value, str) and dir_value:
+            try:
+                accounts_dir = Path(dir_value).resolve()
+            except Exception:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "FRONTEND_ENQUEUE_RUN_DIR_RESOLVE_FAILED sid=%s dir=%s",
+                    sid,
+                    dir_value,
+                    exc_info=True,
+                )
+            else:
+                for ancestor in (accounts_dir, *accounts_dir.parents):
+                    if ancestor.name == sid:
+                        run_dir = ancestor
+                        break
+                if run_dir is None:
+                    parent = accounts_dir.parent
+                    run_dir = parent if parent != accounts_dir else accounts_dir
+
+    if run_dir is None and runs_root is not None:
+        try:
+            run_dir = (runs_root / sid).resolve()
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "FRONTEND_ENQUEUE_RUN_DIR_FALLBACK_FAILED sid=%s runs_root=%s",
+                sid,
+                runs_root,
+                exc_info=True,
+            )
+            run_dir = None
+
+    return run_dir
+
+
+def _create_frontend_enqueue_marker(lock_path: Path, sid: str) -> bool:
+    """Create a marker file guarding duplicate frontend enqueues."""
+
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "FRONTEND_ENQUEUE_LOCK_DIR_FAILED sid=%s dir=%s",
+            sid,
+            lock_path.parent,
+            exc_info=True,
+        )
+        return False
+
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "FRONTEND_ENQUEUE_LOCK_WRITE_FAILED sid=%s path=%s",
+            sid,
+            lock_path,
+            exc_info=True,
+        )
+        return False
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"sid": sid, "queued_at": time.time()}, handle, ensure_ascii=False)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "FRONTEND_ENQUEUE_LOCK_WRITE_PAYLOAD_FAILED sid=%s path=%s",
+            sid,
+            lock_path,
+            exc_info=True,
+        )
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+        try:
+            lock_path.unlink()
+        except Exception:
+            logger.warning(
+                "FRONTEND_ENQUEUE_LOCK_CLEANUP_FAILED sid=%s path=%s",
+                sid,
+                lock_path,
+                exc_info=True,
+            )
+        return False
+
+    return True
+
+
+def _enqueue_frontend_after_cases(
+    sid: str,
+    cases_info: Mapping[str, object] | object,
+    *,
+    runs_root: Path | None,
+) -> None:
+    """Enqueue the frontend pack builder after cases are materialised."""
+
+    run_dir = _resolve_run_dir_for_frontend(sid, cases_info, runs_root=runs_root)
+    marker_written = False
+    marker_path: Path | None = None
+
+    if run_dir is not None:
+        marker_path = run_dir / ".locks" / _FRONTEND_ENQUEUE_LOCK_FILENAME
+        marker_written = _create_frontend_enqueue_marker(marker_path, sid)
+        if not marker_written and marker_path.exists():
+            logger.info("FRONTEND_ENQUEUE_AFTER_CASES_ALREADY sid=%s", sid)
+            return
+
+    if not marker_written:
+        if sid in _FRONTEND_ENQUEUED:
+            logger.info("FRONTEND_ENQUEUE_AFTER_CASES_ALREADY sid=%s", sid)
+            return
+        _FRONTEND_ENQUEUED.add(sid)
+
+    queue_name = _frontend_queue_name()
+
+    try:
+        generate_frontend_packs_task.apply_async(args=[sid], queue=queue_name)
+    except Exception:  # pragma: no cover - defensive logging
+        log.error("FRONTEND_ENQUEUE_AFTER_CASES_FAILED sid=%s", sid, exc_info=True)
+        if not marker_written:
+            _FRONTEND_ENQUEUED.discard(sid)
+        elif marker_path is not None:
+            try:
+                marker_path.unlink()
+            except Exception:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "FRONTEND_ENQUEUE_LOCK_CLEANUP_FAILED sid=%s path=%s",
+                    sid,
+                    marker_path,
+                    exc_info=True,
+                )
+        return
+
+    log.info("FRONTEND_ENQUEUE_AFTER_CASES sid=%s", sid)
+
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
 def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = None) -> dict:
     """Create per-account case folders for problematic candidates under runs/<SID>/cases/accounts.
@@ -516,6 +668,11 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
 
     summary = build_problem_cases(sid, candidates=candidates)
     cases_info = summary.get("cases", {}) if isinstance(summary, dict) else {}
+    runs_root = _ensure_manifest_root()
+    try:
+        _enqueue_frontend_after_cases(sid, cases_info, runs_root=runs_root)
+    except Exception:  # pragma: no cover - defensive logging
+        log.error("FRONTEND_ENQUEUE_AFTER_CASES_HANDLER_FAILED sid=%s", sid, exc_info=True)
     log.info(
         "CASES_BUILD_DONE sid=%s count=%s dir=%s",
         sid,
@@ -628,7 +785,7 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
                     "FRONTEND_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
                 )
 
-            if frontend_stage_status == "success":
+            if frontend_stage_status != "error":
                 manifest = update_manifest_frontend(
                     sid,
                     packs_dir=fe_result.get("packs_dir"),

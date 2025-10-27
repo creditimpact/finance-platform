@@ -11,8 +11,11 @@ class _TaskStub:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def apply_async(self, *, args: list[Any], queue: str) -> None:  # pragma: no cover - exercised in tests
-        self.calls.append({"args": args, "queue": queue})
+    def delay(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover - exercised in tests
+        self.calls.append({"method": "delay", "args": args, "kwargs": kwargs})
+
+    def apply_async(self, *, args: list[Any], queue: str) -> None:  # pragma: no cover - compatibility fallback
+        self.calls.append({"method": "apply_async", "args": tuple(args), "kwargs": {"queue": queue}})
 
 
 @pytest.fixture()
@@ -33,7 +36,9 @@ def test_on_cases_built_default_enabled(monkeypatch: pytest.MonkeyPatch, task_st
 
     hooks.on_cases_built("SID-456")
 
-    assert task_stub.calls == [{"args": ["SID-456"], "queue": "frontend"}]
+    assert task_stub.calls == [
+        {"method": "delay", "args": ("SID-456",), "kwargs": {}}
+    ]
 
 
 def test_on_cases_built_respects_env_flag(monkeypatch: pytest.MonkeyPatch, task_stub: _TaskStub) -> None:

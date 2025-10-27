@@ -18,4 +18,4 @@ def on_cases_built(sid: str) -> None:
 
     from backend.api.tasks import generate_frontend_packs_task
 
-    generate_frontend_packs_task.apply_async(args=[sid], queue="frontend")
+    generate_frontend_packs_task.delay(sid)

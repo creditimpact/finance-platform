@@ -773,11 +773,33 @@ def send_note_style_packs_for_sid(
         env_glob = os.getenv("NOTE_STYLE_PACK_GLOB")
         fallback_glob = "acc_*.jsonl"
         glob_pattern = env_glob or fallback_glob
-        file_candidates = sorted(packs_dir.glob(glob_pattern))
+
+        def _collect_candidates(pattern: str) -> list[Path]:
+            raw_matches = sorted(packs_dir.glob(pattern))
+            filtered: list[Path] = []
+            packs_dir_resolved = packs_dir.resolve()
+            debug_dir_resolved = debug_dir.resolve()
+            for match in raw_matches:
+                if match.is_dir():
+                    continue
+                if _is_within_directory(match, debug_dir_resolved):
+                    continue
+                try:
+                    relative_parts = match.resolve().relative_to(packs_dir_resolved).parts
+                except ValueError:
+                    relative_parts = match.parts
+                if any(part.startswith("results") for part in relative_parts):
+                    continue
+                if match.name.startswith("results"):
+                    continue
+                filtered.append(match)
+            return filtered
+
+        file_candidates = _collect_candidates(glob_pattern)
         effective_glob = glob_pattern
 
         if env_glob and not file_candidates and glob_pattern != fallback_glob:
-            fallback_candidates = sorted(packs_dir.glob(fallback_glob))
+            fallback_candidates = _collect_candidates(fallback_glob)
             if fallback_candidates:
                 log.info(
                     "NOTE_STYLE_PACK_GLOB_FALLBACK sid=%s glob=%s fallback=%s matches=%s",

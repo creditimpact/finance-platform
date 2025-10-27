@@ -62,17 +62,22 @@ export function enableFrontendReviewMock(options: FrontendReviewMockOptions = {}
       {
         ...manifestPack,
         pack_path: `frontend/review/packs/${accountId}.json`,
-        pack_path_rel: `review/packs/${accountId}.json`,
+        pack_path_rel: `packs/${accountId}.json`,
         path: `frontend/review/packs/${accountId}.json`,
       },
     ],
     index_path: 'frontend/review/index.json',
     index_rel: 'review/index.json',
+    packs_dir: 'frontend/review/packs',
     packs_dir_path: 'frontend/review/packs',
     packs_dir_rel: 'review/packs',
+    responses_dir: 'frontend/review/responses',
     responses_dir_path: 'frontend/review/responses',
     responses_dir_rel: 'review/responses',
+    packs_index: [{ account: accountId, file: `packs/${accountId}.json` }],
   };
+  manifest.generated_at = manifest.generated_at ?? new Date().toISOString();
+  manifest.built_at = manifest.generated_at;
 
   const rootIndex = {
     review: {
@@ -109,6 +114,10 @@ export function enableFrontendReviewMock(options: FrontendReviewMockOptions = {}
 
     if (method === 'GET' && pathname === `/runs/${encodedSid}/frontend/index.json`) {
       return createResponse(rootIndex);
+    }
+
+    if (method === 'GET' && pathname === `/api/runs/${encodedSid}/frontend/review/index`) {
+      return createResponse({ frontend: { review: manifest } });
     }
 
     if (method === 'GET' && pathname === `/runs/${encodedSid}/frontend/review/index.json`) {

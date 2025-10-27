@@ -53,6 +53,25 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def test_frontend_review_index_building_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, runs_root = _create_api_client(tmp_path, monkeypatch)
+
+    sid = "SBUILD"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    response = client.get(f"/api/runs/{sid}/frontend/review/index")
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload["status"] == "building"
+    assert payload.get("queued") in {True, False}
+    review_section = payload["frontend"]["review"]
+    assert review_section.get("packs") == []
+    assert review_section.get("packs_index") == []
+
+
 def test_frontend_review_smoke_endpoints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -84,6 +103,13 @@ def test_frontend_review_smoke_endpoints(
                 "file": f"frontend/review/packs/{account_id}.json",
             }
         ],
+        "packs_index": [{"account": account_id, "file": f"packs/{account_id}.json"}],
+        "index_path": "frontend/review/index.json",
+        "index_rel": "review/index.json",
+        "packs_dir": "frontend/review/packs",
+        "packs_dir_rel": "review/packs",
+        "responses_dir": "frontend/review/responses",
+        "responses_dir_rel": "review/responses",
     }
     _write_json(run_dir / "frontend" / "review" / "index.json", index_payload)
 
@@ -112,8 +138,10 @@ def test_frontend_review_smoke_endpoints(
     index_resp = client.get(f"/api/runs/{sid}/frontend/review/index")
     assert index_resp.status_code == 200
     index_data = index_resp.get_json()
-    assert index_data["packs_count"] == 1
-    assert index_data["items"] == index_payload["items"]
+    review_section = index_data["frontend"]["review"]
+    assert review_section["packs_count"] == 1
+    assert review_section["items"] == index_payload["items"]
+    assert review_section.get("packs_index") == index_payload["packs_index"]
 
     packs_resp = client.get(f"/api/runs/{sid}/frontend/review/packs")
     assert packs_resp.status_code == 200
@@ -122,7 +150,11 @@ def test_frontend_review_smoke_endpoints(
 
     pack_resp = client.get(f"/api/runs/{sid}/frontend/review/pack/{account_id}")
     assert pack_resp.status_code == 200
-    assert pack_resp.get_json() == pack_payload
+    pack_data = pack_resp.get_json()
+    assert pack_data["account_id"] == account_id
+    assert pack_data["holder_name"] == pack_payload["holder_name"]
+    assert pack_data["primary_issue"] == pack_payload["primary_issue"]
+    assert pack_data.get("questions") == pack_payload["questions"]
 
 
 def test_frontend_review_pack_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

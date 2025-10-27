@@ -80,10 +80,20 @@ def test_build_stage_manifest_scans_review_pack_directory(tmp_path: Path) -> Non
     assert manifest_payload["stage"] == "review"
     assert manifest_payload["schema_version"] == "1.0"
     assert manifest_payload["responses_dir"] == "frontend/review/responses"
+    assert manifest_payload["responses_dir_rel"] == "responses"
+    assert manifest_payload["packs_dir"] == "frontend/review/packs"
+    assert manifest_payload["packs_dir_rel"] == "packs"
+    assert manifest_payload["index_path"] == "frontend/review/index.json"
+    assert manifest_payload["index_rel"] == "index.json"
     assert manifest_payload["counts"] == {"packs": 2, "responses": 0}
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", manifest_payload["generated_at"])
+    assert manifest_payload["built_at"] == manifest_payload["generated_at"]
     assert manifest_payload["packs_count"] == 2
     assert manifest_payload["questions"] == list(generator_module._QUESTION_SET)
+    assert manifest_payload["packs_index"] == [
+        {"account": "idx-001", "file": "packs/idx-001.json"},
+        {"account": "idx-002", "file": "packs/idx-002.json"},
+    ]
 
     pack_entries = manifest_payload["packs"]
     assert [entry["account_id"] for entry in pack_entries] == ["idx-001", "idx-002"]
@@ -96,6 +106,8 @@ def test_build_stage_manifest_scans_review_pack_directory(tmp_path: Path) -> Non
     assert first_entry["primary_issue"] == "wrong_account"
     assert first_entry["path"] == "frontend/review/packs/idx-001.json"
     assert first_entry["pack_path"] == "frontend/review/packs/idx-001.json"
+    assert first_entry["pack_path_rel"] == "packs/idx-001.json"
+    assert first_entry["file"] == "frontend/review/packs/idx-001.json"
     assert first_entry["bytes"] == pack_one_path.stat().st_size
     assert first_entry["has_questions"] is True
     assert "display" not in first_entry
@@ -104,6 +116,8 @@ def test_build_stage_manifest_scans_review_pack_directory(tmp_path: Path) -> Non
     assert second_entry["primary_issue"] == "identity_theft"
     assert second_entry["path"] == "frontend/review/packs/idx-002.json"
     assert second_entry["pack_path"] == "frontend/review/packs/idx-002.json"
+    assert second_entry["pack_path_rel"] == "packs/idx-002.json"
+    assert second_entry["file"] == "frontend/review/packs/idx-002.json"
     assert second_entry["bytes"] == pack_two_path.stat().st_size
     assert "display" not in second_entry
 

@@ -111,8 +111,12 @@ def test_frontend_review_waiting_flow(ensure_frontend_dependencies: Path, ensure
         "packs_count": 0,
         "counts": {"packs": 0, "responses": 0},
         "packs": [],
+        "packs_index": [],
+        "index_path": "frontend/review/index.json",
         "index_rel": "review/index.json",
+        "packs_dir": "frontend/review/packs",
         "packs_dir_rel": "review/packs",
+        "responses_dir": "frontend/review/responses",
         "responses_dir_rel": "review/responses",
     }
 
@@ -128,13 +132,22 @@ def test_frontend_review_waiting_flow(ensure_frontend_dependencies: Path, ensure
                 "holder_name": holder_name,
                 "primary_issue": "incorrect_information",
                 "pack_path": f"frontend/review/packs/{account_id}.json",
+                "pack_path_rel": f"packs/{account_id}.json",
                 "path": f"frontend/review/packs/{account_id}.json",
+                "file": f"frontend/review/packs/{account_id}.json",
                 "has_questions": True,
             }
             for account_id, holder_name, _ in accounts
         ],
+        "packs_index": [
+            {"account": account_id, "file": f"packs/{account_id}.json"}
+            for account_id, _, _ in accounts
+        ],
+        "index_path": "frontend/review/index.json",
         "index_rel": "review/index.json",
+        "packs_dir": "frontend/review/packs",
         "packs_dir_rel": "review/packs",
+        "responses_dir": "frontend/review/responses",
         "responses_dir_rel": "review/responses",
     }
 
@@ -231,6 +244,18 @@ def test_frontend_review_waiting_flow(ensure_frontend_dependencies: Path, ensure
                 count = len(accounts) if manifest_ready["value"] else 0
                 _fulfill_json(route, {"packs_count": count})
 
+            def handle_frontend_review_index_api(route, request):
+                if manifest_ready["value"]:
+                    payload = {"frontend": {"review": ready_stage}}
+                    _fulfill_json(route, payload)
+                else:
+                    payload = {
+                        "status": "building",
+                        "queued": True,
+                        "frontend": {"review": waiting_stage},
+                    }
+                    _fulfill_json(route, payload, status=202)
+
             def handle_pack_listing(route, request):
                 if manifest_ready["value"]:
                     _fulfill_json(route, pack_listing)
@@ -265,6 +290,10 @@ def test_frontend_review_waiting_flow(ensure_frontend_dependencies: Path, ensure
             page.route(f"{api_origin}/runs/{sid}/frontend/index.json", handle_root_index)
             page.route(f"{api_origin}/runs/{sid}/frontend/review/index.json", handle_stage_index)
             page.route(f"{api_origin}/api/runs/{sid}/frontend/index", handle_frontend_index_api)
+            page.route(
+                f"{api_origin}/api/runs/{sid}/frontend/review/index",
+                handle_frontend_review_index_api,
+            )
             page.route(f"{api_origin}/api/runs/{sid}/frontend/review/packs", handle_pack_listing)
             page.route(f"{api_origin}/runs/{sid}/frontend/review/packs/*.json", handle_pack_asset)
             page.route(f"{api_origin}/api/runs/{sid}/frontend/review/response/*", handle_response_post)

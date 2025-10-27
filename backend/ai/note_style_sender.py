@@ -146,6 +146,41 @@ _DISALLOWED_MESSAGE_KEY_SUBSTRINGS: tuple[str, ...] = (
 )
 
 
+def _normalize_message_content(value: Any) -> str | Sequence[Any]:
+    """Return content compatible with the chat API."""
+
+    if isinstance(value, str):
+        return value
+
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8", "ignore")
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        normalized: list[Any] = []
+        for item in value:
+            if isinstance(item, str):
+                normalized.append(item)
+            elif isinstance(item, (bytes, bytearray)):
+                normalized.append(item.decode("utf-8", "ignore"))
+            elif isinstance(item, Mapping):
+                normalized.append({str(key): _safe_json_payload(val) for key, val in item.items()})
+            else:
+                normalized.append(str(item))
+        return normalized
+
+    if isinstance(value, Mapping):
+        safe_payload = _safe_json_payload(value)
+        try:
+            return json.dumps(safe_payload, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return json.dumps(str(safe_payload), ensure_ascii=False)
+
+    if value is None:
+        return ""
+
+    return str(value)
+
+
 def _sanitize_message_entry(entry: Mapping[str, Any]) -> Mapping[str, Any]:
     sanitized: dict[str, Any] = {}
     for key, value in entry.items():
@@ -158,7 +193,34 @@ def _sanitize_message_entry(entry: Mapping[str, Any]) -> Mapping[str, Any]:
     if "role" not in sanitized or "content" not in sanitized:
         raise ValueError("Pack message missing required role/content fields")
 
+    sanitized["content"] = _normalize_message_content(sanitized["content"])
+
     return sanitized
+
+
+def _coerce_response_format(pack_payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    candidate = pack_payload.get("response_format")
+    if candidate is None:
+        return {"type": "json_object"}
+
+    if isinstance(candidate, Mapping):
+        sanitized: dict[str, Any] = {}
+        for key, value in candidate.items():
+            sanitized[str(key)] = value
+        type_value = sanitized.get("type")
+        if isinstance(type_value, str):
+            sanitized["type"] = type_value.strip() or "json_object"
+        elif type_value is None:
+            sanitized["type"] = "json_object"
+        return sanitized
+
+    if isinstance(candidate, str):
+        type_text = candidate.strip()
+        if type_text:
+            return {"type": type_text}
+        return {"type": "json_object"}
+
+    return {"type": "json_object"}
 
 
 def _coerce_messages(payload: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
@@ -711,8 +773,7 @@ def _write_failure_result(
     paths: NoteStylePaths,
     error_payload: Mapping[str, Any],
 ) -> Path:
-    filename = f"acc_{account_paths.account_id}.result.json"
-    failure_path = paths.results_dir / filename
+    failure_path = account_paths.result_file
     failure_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "status": "failed",
@@ -808,13 +869,19 @@ def _send_pack_payload(
         model = config.NOTE_STYLE_MODEL
     messages = _coerce_messages(pack_payload)
 
+    response_format = _coerce_response_format(pack_payload)
+
     start = time.perf_counter()
     try:
+        response_kwargs: dict[str, Any] = {}
+        if response_format is not None:
+            response_kwargs["response_format"] = response_format
+
         response = client.chat_completion(
             model=model or None,
             messages=list(messages),
             temperature=0,
-            response_format={"type": "json_object"},
+            **response_kwargs,
         )
         latency = time.perf_counter() - start
         log.info(

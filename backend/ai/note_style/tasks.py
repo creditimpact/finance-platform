@@ -26,6 +26,16 @@ from backend.core.ai.paths import ensure_note_style_paths
 log = logging.getLogger(__name__)
 
 
+def _note_style_has_packs(
+    sid: str, runs_root: str | Path | None = None
+) -> bool:
+    runs_root_path = _resolve_runs_root(runs_root)
+    base = runs_root_path / sid / "ai_packs" / "note_style" / "packs"
+    if not base.is_dir():
+        return False
+    return any(child.suffix == ".jsonl" for child in base.iterdir())
+
+
 def _resolve_runs_root(runs_root: str | Path | None) -> Path:
     if runs_root is None:
         env_value = os.getenv("RUNS_ROOT")
@@ -64,8 +74,16 @@ def note_style_prepare_and_send_task(
 ) -> Mapping[str, Any]:
     """Celery task wrapper around :func:`prepare_and_send`."""
 
-    start = time.monotonic()
     sid_text = str(sid or "").strip()
+    if not _note_style_has_packs(sid_text, runs_root=runs_root):
+        return {
+            "sid": sid_text,
+            "built": 0,
+            "sent": 0,
+            "reason": "no_note_style_packs",
+        }
+
+    start = time.monotonic()
     log_structured_event(
         "NOTE_STYLE_CELERY_START",
         logger=log,

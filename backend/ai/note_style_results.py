@@ -1373,6 +1373,7 @@ def _refresh_after_index_update(
             runs_root=runs_root_path,
             built=packs_total > 0,
             sent=sent_flag,
+            failed=packs_failed > 0,
             completed_at=completed_timestamp,
         )
     except Exception:  # pragma: no cover - defensive logging

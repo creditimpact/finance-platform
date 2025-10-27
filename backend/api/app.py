@@ -65,6 +65,7 @@ from backend.frontend.packs.claim_schema import (
     resolve_issue_claims,
 )
 from backend.frontend.packs.config import load_frontend_stage_config
+from backend.frontend.review_writer import maybe_trigger_note_style_on_response_write
 from backend.core.runflow import runflow_barriers_refresh
 from backend.runflow.decider import (
     reconcile_umbrella_barriers,
@@ -2209,6 +2210,8 @@ def api_frontend_review_answer(sid: str, account_id: str):
     resp_path = responses_dir / filename
     with resp_path.open("w", encoding="utf-8") as handle:
         json.dump(record, handle, ensure_ascii=False, indent=2)
+
+    maybe_trigger_note_style_on_response_write(sid)
 
     _review_stream_broker.publish(sid, "responses_written", {"account_id": account_id})
 

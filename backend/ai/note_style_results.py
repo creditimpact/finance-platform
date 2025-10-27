@@ -1355,9 +1355,7 @@ def _refresh_after_index_update(
 
     any_results = (packs_completed + packs_failed) > 0
     completed_timestamp: str | None
-    if packs_total == 0:
-        completed_timestamp = _now_iso()
-    elif packs_total > 0 and (packs_completed + packs_failed) >= packs_total:
+    if packs_total == 0 or any_results:
         completed_timestamp = _now_iso()
     else:
         completed_timestamp = None

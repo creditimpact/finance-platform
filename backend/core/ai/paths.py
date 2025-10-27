@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-_WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:[/\\]")
+from backend.core.paths import coerce_stage_path
 
 
 def _normalize_stage_override(
@@ -20,44 +20,9 @@ def _normalize_stage_override(
     run_base: Path,
     fallback: Path,
 ) -> Path:
-    """Return a normalized path for manifest or environment overrides.
+    """Return a normalized path for manifest or environment overrides."""
 
-    The helper coerces ``value`` to a path, replaces Windows path separators,
-    strips drive letters, and rebases the location underneath ``run_base``
-    whenever the value originates from a Windows absolute path.
-    """
-
-    try:
-        text = os.fspath(value)
-    except TypeError:
-        text = ""
-
-    sanitized = str(text).strip()
-    if not sanitized:
-        return fallback.resolve()
-
-    sanitized = sanitized.replace("\\", "/")
-    drive_match = _WINDOWS_DRIVE_PATTERN.match(sanitized)
-
-    if drive_match:
-        remainder = sanitized[drive_match.end() :]
-        parts = [segment for segment in remainder.split("/") if segment]
-        if not parts:
-            return fallback.resolve()
-
-        sid_lower = run_base.name.lower()
-        for idx, part in enumerate(parts):
-            if part.lower() == sid_lower:
-                relative_parts = parts[idx + 1 :]
-                return run_base.joinpath(*relative_parts).resolve()
-
-        return fallback.resolve()
-
-    candidate = Path(sanitized)
-    if candidate.is_absolute():
-        return candidate.resolve()
-
-    return (run_base / candidate).resolve()
+    return coerce_stage_path(run_base, value, fallback=fallback)
 
 from backend import config
 

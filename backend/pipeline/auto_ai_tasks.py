@@ -72,8 +72,10 @@ logger = logging.getLogger(__name__)
 def _maybe_autobuild_review(sid: str) -> None:
     """Kick off Frontend/Review packs build after validation has run."""
     if os.getenv("GENERATE_FRONTEND_ON_VALIDATION", "1") != "1":
+        logger.info("REVIEW_AUTO: skip enqueue sid=%s reason=env_disabled", sid)
         return
     generate_frontend_packs_task.delay(sid)
+    logger.info("REVIEW_AUTO: queued_generate_frontend_packs sid=%s", sid)
 
 
 _PAIR_TAG_BY_DECISION: dict[str, str] = {
@@ -1160,6 +1162,7 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
         metrics={"packs": int(payload.get("validation_packs", 0) or 0)},
     )
     _maybe_autobuild_review(sid)
+    logger.info("REVIEW_AUTO: post_validation_complete sid=%s", sid)
     return payload
 
 

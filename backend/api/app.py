@@ -65,7 +65,7 @@ from backend.frontend.packs.claim_schema import (
     resolve_issue_claims,
 )
 from backend.frontend.packs.config import load_frontend_stage_config
-from backend.frontend.review_writer import maybe_trigger_note_style_on_response_write
+from backend.frontend.review_writer import write_client_response
 from backend.core.runflow import runflow_barriers_refresh
 from backend.runflow.decider import (
     reconcile_umbrella_barriers,
@@ -113,8 +113,12 @@ def get_review_index_status(sid: str):
         "index.json",
     )
     min_bytes = int(os.getenv("NOTE_STYLE_INDEX_MIN_BYTES", "20"))
-    if os.path.exists(index_path) and os.path.getsize(index_path) >= min_bytes:
-        return jsonify({"ok": True, "path": "frontend/review/index.json"}), 200
+    if os.path.exists(index_path):
+        size = os.path.getsize(index_path)
+        if size >= min_bytes:
+            logger.info("REVIEW_API: index_ok sid=%s size=%s", sid, size)
+            return jsonify({"ok": True, "path": "frontend/review/index.json"}), 200
+    logger.info("REVIEW_API: index_missing sid=%s", sid)
     return jsonify({"ok": False, "error": "index_not_found"}), 404
 
 
@@ -2227,7 +2231,7 @@ def api_frontend_review_answer(sid: str, account_id: str):
     with resp_path.open("w", encoding="utf-8") as handle:
         json.dump(record, handle, ensure_ascii=False, indent=2)
 
-    maybe_trigger_note_style_on_response_write(sid)
+    write_client_response(sid, account_id, record)
 
     _review_stream_broker.publish(sid, "responses_written", {"account_id": account_id})
 

@@ -58,7 +58,7 @@ def _append_task_failure_log(
     append_note_style_warning(log_path, message)
 
 
-@celery.task(name="backend.ai.note_style.note_style_prepare_and_send_task")
+@celery.task(name="backend.ai.note_style.tasks.note_style_prepare_and_send_task")
 def note_style_prepare_and_send_task(
     sid: str, runs_root: str | Path | None = None
 ) -> Mapping[str, Any]:
@@ -105,7 +105,7 @@ def note_style_prepare_and_send_task(
     return result
 
 
-@celery.task(name="backend.ai.note_style.note_style_send_account_task")
+@celery.task(name="backend.ai.note_style.tasks.note_style_send_account_task")
 def note_style_send_account_task(
     sid: str, account_id: str, runs_root: str | Path | None = None
 ) -> Mapping[str, Any]:
@@ -177,7 +177,7 @@ def note_style_send_account_task(
     return {"sid": sid_text, "account_id": account_text, "processed": processed}
 
 
-@celery.task(name="backend.ai.note_style.note_style_send_sid_task")
+@celery.task(name="backend.ai.note_style.tasks.note_style_send_sid_task")
 def note_style_send_sid_task(
     sid: str, runs_root: str | Path | None = None
 ) -> Mapping[str, Any]:

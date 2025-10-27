@@ -9,7 +9,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from backend import config
 from backend.core.ai.paths import NoteStylePaths
@@ -94,7 +94,11 @@ def _canonical_note_style_stage_paths(run_dir: Path) -> dict[str, Path]:
 
 
 def _normalize_note_style_stage_path(
-    value: Any, *, run_dir: Path, fallback: Path
+    value: Any,
+    *,
+    run_dir: Path,
+    fallback: Path,
+    key: str | None = None,
 ) -> Path:
     if value is None:
         return fallback
@@ -113,15 +117,54 @@ def _normalize_note_style_stage_path(
     try:
         candidate = normalize_worker_path(run_dir, sanitized)
     except ValueError:
+        _log_manifest_path_fallback(run_dir, key=key, value=sanitized, reason="normalize")
         return fallback
 
     if not _is_within_directory(candidate, run_dir):
+        _log_manifest_path_fallback(
+            run_dir, key=key, value=sanitized, reason="outside_run_dir"
+        )
         return fallback
 
     try:
-        return candidate.resolve()
+        resolved = candidate.resolve()
     except OSError:
-        return candidate
+        resolved = candidate
+
+    if key is not None:
+        sanitized_lower = sanitized.lower()
+        fallback_lower = str(fallback).strip().replace("\\", "/").lower()
+        if resolved == fallback and sanitized_lower != fallback_lower:
+            _log_manifest_path_fallback(
+                run_dir, key=key, value=sanitized, reason="fallback"
+            )
+
+    return resolved
+
+
+def _log_manifest_path_fallback(
+    run_dir: Path, *, key: str | None, value: str, reason: str
+) -> None:
+    if key is None:
+        return
+    log.debug(
+        "NOTE_STYLE_MANIFEST_PATH_FALLBACK run_dir=%s key=%s value=%s reason=%s",
+        run_dir,
+        key,
+        value,
+        reason,
+    )
+
+
+def _extract_stage_value(stage_section: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = stage_section.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
 
 
 def _load_note_style_manifest_stage(run_dir: Path) -> dict[str, Any] | None:
@@ -185,9 +228,9 @@ def resolve_note_style_stage_paths(
     if config.NOTE_STYLE_USE_MANIFEST_PATHS:
         stage_section = _load_note_style_manifest_stage(run_dir)
         if stage_section is not None:
-            base_value = stage_section.get("base") or stage_section.get("dir")
+            base_value = _extract_stage_value(stage_section, "base", "dir")
             base_dir = _normalize_note_style_stage_path(
-                base_value, run_dir=run_dir, fallback=base_dir
+                base_value, run_dir=run_dir, fallback=base_dir, key="base"
             )
 
             if base_dir == canonical["base_dir"]:
@@ -201,24 +244,36 @@ def resolve_note_style_stage_paths(
                 index_fallback = (base_dir / "index.json").resolve()
                 log_fallback = (base_dir / "logs.txt").resolve()
 
-            packs_value = stage_section.get("packs_dir") or stage_section.get("packs")
-            results_value = stage_section.get("results_dir") or stage_section.get(
-                "results"
+            packs_value = _extract_stage_value(stage_section, "packs", "packs_dir")
+            results_value = _extract_stage_value(
+                stage_section, "results", "results_dir"
             )
-            index_value = stage_section.get("index")
-            logs_value = stage_section.get("logs")
+            index_value = _extract_stage_value(stage_section, "index")
+            logs_value = _extract_stage_value(stage_section, "logs")
 
             packs_dir = _normalize_note_style_stage_path(
-                packs_value, run_dir=run_dir, fallback=packs_fallback
+                packs_value,
+                run_dir=run_dir,
+                fallback=packs_fallback,
+                key="packs",
             )
             results_dir = _normalize_note_style_stage_path(
-                results_value, run_dir=run_dir, fallback=results_fallback
+                results_value,
+                run_dir=run_dir,
+                fallback=results_fallback,
+                key="results",
             )
             index_file = _normalize_note_style_stage_path(
-                index_value, run_dir=run_dir, fallback=index_fallback
+                index_value,
+                run_dir=run_dir,
+                fallback=index_fallback,
+                key="index",
             )
             log_file = _normalize_note_style_stage_path(
-                logs_value, run_dir=run_dir, fallback=log_fallback
+                logs_value,
+                run_dir=run_dir,
+                fallback=log_fallback,
+                key="logs",
             )
 
     results_raw_dir = (base_dir / "results_raw").resolve()

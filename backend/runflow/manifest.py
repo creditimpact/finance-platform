@@ -495,10 +495,60 @@ def update_manifest_ai_stage_result(
     return target_manifest
 
 
+def update_note_style_stage_status(
+    sid: str,
+    *,
+    manifest: Optional[RunManifest] = None,
+    runs_root: Optional[Path | str] = None,
+    built: Optional[bool] = None,
+    sent: Optional[bool] = None,
+    completed_at: Optional[str] = None,
+) -> RunManifest:
+    """Update the note_style stage status fields and persist the manifest."""
+
+    target_manifest = _resolve_manifest(
+        sid, manifest=manifest, runs_root=runs_root
+    )
+
+    status_payload = _ensure_stage_status_payload(target_manifest, "note_style")
+    stage_status = target_manifest.ensure_ai_stage_status("note_style")
+
+    sentinel = object()
+
+    def _assign(mapping: dict[str, Any], key: str, value: Any) -> bool:
+        current = mapping.get(key, sentinel)
+        if current is sentinel or current != value:
+            mapping[key] = value
+            return True
+        return False
+
+    changed = False
+    if built is not None:
+        built_value = bool(built)
+        changed |= _assign(status_payload, "built", built_value)
+        if isinstance(stage_status, dict):
+            changed |= _assign(stage_status, "built", built_value)
+    if sent is not None:
+        sent_value = bool(sent)
+        changed |= _assign(status_payload, "sent", sent_value)
+        if isinstance(stage_status, dict):
+            changed |= _assign(stage_status, "sent", sent_value)
+    if completed_at is not None:
+        changed |= _assign(status_payload, "completed_at", completed_at)
+        if isinstance(stage_status, dict):
+            changed |= _assign(stage_status, "completed_at", completed_at)
+
+    if changed:
+        persist_manifest(target_manifest)
+
+    return target_manifest
+
+
 __all__ = [
     "update_manifest_state",
     "update_manifest_frontend",
     "update_manifest_ai_stage_result",
+    "update_note_style_stage_status",
     "resolve_note_style_stage_paths",
 ]
 

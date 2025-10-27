@@ -364,7 +364,8 @@ def test_manifest_status_tracks_partial_and_complete_results(tmp_path: Path) -> 
     stage_status = manifest_data["ai"]["status"]["note_style"]
     assert stage_status["built"] is True
     assert stage_status["sent"] is True
-    assert stage_status["completed_at"] is None
+    assert stage_status["completed_at"] is not None
+    assert stage_status["completed_at"].endswith("Z")
 
     second_payload = {
         "sid": sid,

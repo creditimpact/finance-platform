@@ -125,11 +125,6 @@ def schedule_note_style_after_validation(
         )
         return
 
-    pack_count = _count_note_style_packs(paths.packs_dir)
-    if pack_count <= 0:
-        log.info("NOTE_STYLE_WAITING_FOR_PACKS sid=%s", sid_text)
-        return
-
     runs_root_arg = _normalize_runs_root_arg(runs_root_path)
 
     try:
@@ -139,6 +134,12 @@ def schedule_note_style_after_validation(
             "NOTE_STYLE_AUTOSEND_IMPORT_FAILED sid=%s", sid_text, exc_info=True
         )
         return
+
+    pack_count = _count_note_style_packs(paths.packs_dir)
+
+    log.info(
+        "NOTE_STYLE_AUTOSEND_READY sid=%s packs=%s", sid_text, pack_count
+    )
 
     try:
         if runs_root_arg is None:

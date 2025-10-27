@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from backend.core.ai.paths import ensure_note_style_paths, ensure_validation_paths
+from backend.core.paths import sanitize_stage_path_value
 from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest, persist_manifest
 
 
@@ -42,22 +43,15 @@ class StageManifestPaths:
 
 
 def _coerce_path(value: Any) -> Path | None:
-    if value is None:
+    sanitized = sanitize_stage_path_value(value)
+    if not sanitized:
         return None
 
+    candidate = Path(sanitized)
     try:
-        text = os.fspath(value)
-    except TypeError:
-        return None
-
-    stripped = str(text).strip()
-    if not stripped:
-        return None
-
-    try:
-        return Path(stripped).resolve()
+        return candidate.resolve()
     except OSError:
-        return Path(stripped)
+        return candidate
 
 
 def extract_stage_manifest_paths(

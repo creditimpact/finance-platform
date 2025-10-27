@@ -36,6 +36,7 @@ from backend.core.ai.paths import (
     validation_result_summary_filename_for_account,
     validation_write_json_enabled,
 )
+from backend.core.paths import normalize_stage_path, sanitize_stage_path_value
 from backend.core.ai import PROJECT_HEADER_NAME, auth_probe, build_openai_headers
 from backend.core.logic.validation_field_sets import (
     ALL_VALIDATION_FIELDS,
@@ -1137,19 +1138,98 @@ def _resolve_stage_paths(
     return _sanitize_stage_paths(raw_stage_paths, stage)
 
 
+def _infer_run_root_from_path(path: Path, stage: str | None) -> Path | None:
+    stage_lower = stage.strip().lower() if stage else None
+    parts = path.parts
+    lowered = [part.lower() for part in parts]
+
+    if "ai_packs" in lowered:
+        idx = lowered.index("ai_packs")
+        if idx > 0:
+            return Path(*parts[:idx])
+
+    if stage_lower and stage_lower in lowered:
+        idx = lowered.index(stage_lower)
+        if idx > 0:
+            return Path(*parts[:idx])
+
+    return None
+
+
+def _infer_run_root(stage_paths: StageManifestPaths, stage: str | None) -> Path | None:
+    candidates = (
+        stage_paths.base_dir,
+        stage_paths.packs_dir,
+        stage_paths.results_dir,
+        stage_paths.index_file,
+        stage_paths.log_file,
+    )
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        run_root = _infer_run_root_from_path(candidate, stage)
+        if run_root is not None:
+            return run_root.resolve()
+    return None
+
+
+def _normalize_manifest_stage_path(
+    path: Path | None, *, run_root: Path | None
+) -> Path | None:
+    if path is None:
+        return None
+
+    raw = sanitize_stage_path_value(path)
+    if not raw:
+        return None
+
+    if run_root is not None:
+        try:
+            return normalize_stage_path(run_root, raw)
+        except ValueError:
+            pass
+
+    candidate = Path(raw)
+    try:
+        return candidate.resolve()
+    except OSError:
+        return candidate
+
+
 def _sanitize_stage_paths(
     stage_paths: StageManifestPaths | None, stage: str | None
 ) -> StageManifestPaths | None:
     if stage_paths is None or not _is_validation_stage(stage):
-        return stage_paths
+        if stage_paths is None:
+            return None
+
+        run_root = _infer_run_root(stage_paths, stage)
+        return replace(
+            stage_paths,
+            base_dir=_normalize_manifest_stage_path(stage_paths.base_dir, run_root=run_root),
+            packs_dir=_normalize_manifest_stage_path(stage_paths.packs_dir, run_root=run_root),
+            results_dir=_normalize_manifest_stage_path(stage_paths.results_dir, run_root=run_root),
+            index_file=_normalize_manifest_stage_path(stage_paths.index_file, run_root=run_root),
+            log_file=_normalize_manifest_stage_path(stage_paths.log_file, run_root=run_root),
+        )
+
+    run_root = _infer_run_root(stage_paths, stage)
+    normalized = replace(
+        stage_paths,
+        base_dir=_normalize_manifest_stage_path(stage_paths.base_dir, run_root=run_root),
+        packs_dir=_normalize_manifest_stage_path(stage_paths.packs_dir, run_root=run_root),
+        results_dir=_normalize_manifest_stage_path(stage_paths.results_dir, run_root=run_root),
+        index_file=_normalize_manifest_stage_path(stage_paths.index_file, run_root=run_root),
+        log_file=_normalize_manifest_stage_path(stage_paths.log_file, run_root=run_root),
+    )
 
     sanitized = replace(
-        stage_paths,
-        base_dir=_stage_path_is_validation(stage_paths.base_dir),
-        packs_dir=_stage_path_is_validation(stage_paths.packs_dir),
-        results_dir=_stage_path_is_validation(stage_paths.results_dir),
-        index_file=_stage_path_is_validation(stage_paths.index_file),
-        log_file=_stage_path_is_validation(stage_paths.log_file),
+        normalized,
+        base_dir=_stage_path_is_validation(normalized.base_dir),
+        packs_dir=_stage_path_is_validation(normalized.packs_dir),
+        results_dir=_stage_path_is_validation(normalized.results_dir),
+        index_file=_stage_path_is_validation(normalized.index_file),
+        log_file=_stage_path_is_validation(normalized.log_file),
     )
     return sanitized
 

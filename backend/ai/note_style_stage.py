@@ -19,7 +19,6 @@ from backend.ai.manifest import (
     register_note_style_build,
     update_note_style_stage_status,
 )
-from backend.ai.note_style_paths import _normalize_path_for_worker
 from backend.core.ai.paths import (
     NoteStylePaths,
     ensure_note_style_account_paths,
@@ -27,6 +26,7 @@ from backend.core.ai.paths import (
     note_style_result_filename,
     normalize_note_style_account_id,
 )
+from backend.core.paths import normalize_stage_path
 from backend.runflow.manifest import resolve_note_style_stage_paths
 from backend.runflow.decider import record_stage
 
@@ -95,7 +95,7 @@ def _resolve_runs_root(runs_root: Path | str | None) -> Path:
         sanitized = text.replace("\\", "/")
         if len(sanitized) >= 2 and sanitized[1] == ":":
             try:
-                return _normalize_path_for_worker(Path("/"), sanitized)
+                return normalize_stage_path(Path("/"), sanitized)
             except ValueError:
                 return Path("runs").resolve()
 

@@ -5,7 +5,6 @@ from pathlib import Path
 import json
 import pytest
 
-from backend.ai.note_style_paths import _normalize_path_for_worker
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     ensure_note_style_account_paths,
@@ -14,6 +13,7 @@ from backend.core.ai.paths import (
     note_style_pack_filename,
     note_style_result_filename,
 )
+from backend.core.paths import normalize_stage_path
 
 
 def test_ensure_note_style_paths_creates_directories(tmp_path: Path) -> None:
@@ -186,7 +186,7 @@ def test_normalize_path_for_worker_windows_absolute(tmp_path: Path) -> None:
     packs_path.mkdir(parents=True, exist_ok=True)
 
     raw = f"C:\\agent\\runs\\{sid}\\ai_packs\\note_style\\packs\\acc_1.jsonl"
-    normalized = _normalize_path_for_worker(run_dir, raw)
+    normalized = normalize_stage_path(run_dir, raw)
 
     expected = (run_dir / "ai_packs" / "note_style" / "packs" / "acc_1.jsonl").resolve()
     assert normalized == expected
@@ -196,7 +196,7 @@ def test_normalize_path_for_worker_relative_to_stage(tmp_path: Path) -> None:
     stage_base = (tmp_path / "SID002" / "ai_packs" / "note_style").resolve()
     stage_base.mkdir(parents=True, exist_ok=True)
 
-    normalized = _normalize_path_for_worker(stage_base, "packs/acc_2.jsonl")
+    normalized = normalize_stage_path(stage_base, "packs/acc_2.jsonl")
 
     expected = stage_base / "packs" / "acc_2.jsonl"
     assert normalized == expected.resolve()

@@ -473,6 +473,7 @@ def generate_frontend_packs_task(
 ) -> dict:
     """Expose ``generate_frontend_packs_for_run`` as a Celery task."""
 
+    log.info("FRONTEND_TASK_RECEIVED sid=%s", sid)
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root, force=force)
 
     packs_count_value = 0

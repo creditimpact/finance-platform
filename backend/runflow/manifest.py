@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import glob
+import json
 import logging
 import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from backend import config
 from backend.ai.note_style_paths import _normalize_path_for_worker
+from backend.core.ai.paths import NoteStylePaths
 from backend.core.paths.frontend_review import ensure_frontend_review_dirs
 from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest, persist_manifest
 
@@ -65,6 +67,176 @@ def _normalize_manifest_path_value(
         sanitized = run_dir_text + suffix
 
     return sanitized
+
+
+def _is_within_directory(path: Path, base: Path) -> bool:
+    try:
+        path.resolve().relative_to(base.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _canonical_note_style_stage_paths(run_dir: Path) -> dict[str, Path]:
+    base_dir = (run_dir / config.NOTE_STYLE_STAGE_DIR).resolve()
+    packs_dir = (run_dir / config.NOTE_STYLE_PACKS_DIR).resolve()
+    results_dir = (run_dir / config.NOTE_STYLE_RESULTS_DIR).resolve()
+    index_file = (base_dir / "index.json").resolve()
+    log_file = (base_dir / "logs.txt").resolve()
+
+    return {
+        "base_dir": base_dir,
+        "packs_dir": packs_dir,
+        "results_dir": results_dir,
+        "index_file": index_file,
+        "log_file": log_file,
+    }
+
+
+def _normalize_note_style_stage_path(
+    value: Any, *, run_dir: Path, fallback: Path
+) -> Path:
+    if value is None:
+        return fallback
+
+    try:
+        text = os.fspath(value)
+    except TypeError:
+        text = str(value)
+
+    sanitized = str(text).strip()
+    if not sanitized:
+        return fallback
+
+    sanitized = sanitized.replace("\\", "/")
+
+    try:
+        candidate = _normalize_path_for_worker(run_dir, sanitized)
+    except ValueError:
+        return fallback
+
+    if not _is_within_directory(candidate, run_dir):
+        return fallback
+
+    try:
+        return candidate.resolve()
+    except OSError:
+        return candidate
+
+
+def _load_note_style_manifest_stage(run_dir: Path) -> dict[str, Any] | None:
+    manifest_path = run_dir / "manifest.json"
+
+    try:
+        raw = manifest_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.debug(
+            "NOTE_STYLE_MANIFEST_STAGE_READ_FAILED run_dir=%s path=%s",
+            run_dir,
+            manifest_path,
+            exc_info=True,
+        )
+        return None
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        log.debug(
+            "NOTE_STYLE_MANIFEST_STAGE_INVALID_JSON run_dir=%s path=%s",
+            run_dir,
+            manifest_path,
+            exc_info=True,
+        )
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    ai_section = payload.get("ai")
+    if not isinstance(ai_section, dict):
+        return None
+
+    packs_section = ai_section.get("packs")
+    if not isinstance(packs_section, dict):
+        return None
+
+    note_style_section = packs_section.get("note_style")
+    if not isinstance(note_style_section, dict):
+        return None
+
+    return note_style_section
+
+
+def resolve_note_style_stage_paths(
+    runs_root: Path | str, sid: str, *, create: bool = False
+) -> NoteStylePaths:
+    runs_root_path = Path(runs_root).resolve()
+    run_dir = (runs_root_path / sid).resolve()
+
+    canonical = _canonical_note_style_stage_paths(run_dir)
+    base_dir = canonical["base_dir"]
+    packs_dir = canonical["packs_dir"]
+    results_dir = canonical["results_dir"]
+    index_file = canonical["index_file"]
+    log_file = canonical["log_file"]
+
+    if config.NOTE_STYLE_USE_MANIFEST_PATHS:
+        stage_section = _load_note_style_manifest_stage(run_dir)
+        if stage_section is not None:
+            base_value = stage_section.get("base") or stage_section.get("dir")
+            base_dir = _normalize_note_style_stage_path(
+                base_value, run_dir=run_dir, fallback=base_dir
+            )
+
+            if base_dir == canonical["base_dir"]:
+                packs_fallback = packs_dir
+                results_fallback = results_dir
+                index_fallback = index_file
+                log_fallback = log_file
+            else:
+                packs_fallback = (base_dir / "packs").resolve()
+                results_fallback = (base_dir / "results").resolve()
+                index_fallback = (base_dir / "index.json").resolve()
+                log_fallback = (base_dir / "logs.txt").resolve()
+
+            packs_value = stage_section.get("packs_dir") or stage_section.get("packs")
+            results_value = stage_section.get("results_dir") or stage_section.get(
+                "results"
+            )
+            index_value = stage_section.get("index")
+            logs_value = stage_section.get("logs")
+
+            packs_dir = _normalize_note_style_stage_path(
+                packs_value, run_dir=run_dir, fallback=packs_fallback
+            )
+            results_dir = _normalize_note_style_stage_path(
+                results_value, run_dir=run_dir, fallback=results_fallback
+            )
+            index_file = _normalize_note_style_stage_path(
+                index_value, run_dir=run_dir, fallback=index_fallback
+            )
+            log_file = _normalize_note_style_stage_path(
+                logs_value, run_dir=run_dir, fallback=log_fallback
+            )
+
+    results_raw_dir = (base_dir / "results_raw").resolve()
+    debug_dir = (base_dir / "debug").resolve()
+
+    if create:
+        for directory in (base_dir, packs_dir, results_dir, results_raw_dir, debug_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+
+    return NoteStylePaths(
+        base=base_dir.resolve(),
+        packs_dir=packs_dir.resolve(),
+        results_dir=results_dir.resolve(),
+        results_raw_dir=results_raw_dir,
+        debug_dir=debug_dir,
+        index_file=index_file.resolve(strict=False),
+        log_file=log_file.resolve(strict=False),
+    )
 
 
 def _resolve_manifest(
@@ -327,5 +499,6 @@ __all__ = [
     "update_manifest_state",
     "update_manifest_frontend",
     "update_manifest_ai_stage_result",
+    "resolve_note_style_stage_paths",
 ]
 

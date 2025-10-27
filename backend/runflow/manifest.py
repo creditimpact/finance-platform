@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from backend import config
+from backend.ai.note_style_paths import _normalize_path_for_worker
 from backend.core.paths.frontend_review import ensure_frontend_review_dirs
 from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest, persist_manifest
 
@@ -76,7 +77,22 @@ def _resolve_manifest(
         return manifest
 
     if runs_root is not None:
-        base = Path(runs_root)
+        if isinstance(runs_root, Path):
+            base = runs_root.resolve()
+        else:
+            text = str(runs_root or "").strip()
+            sanitized = text.replace("\\", "/")
+            if len(sanitized) >= 2 and sanitized[1] == ":":
+                try:
+                    base = _normalize_path_for_worker(Path("/"), sanitized)
+                except ValueError:
+                    base = Path("runs").resolve()
+            else:
+                candidate = Path(sanitized)
+                if candidate.is_absolute():
+                    base = candidate.resolve()
+                else:
+                    base = (Path.cwd() / candidate).resolve()
         os.environ.setdefault(RUNS_ROOT_ENV, str(base))
         manifest_path = base / sid / "manifest.json"
         return RunManifest.load_or_create(manifest_path, sid=sid)

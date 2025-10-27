@@ -16,6 +16,7 @@ from backend import config
 from backend.ai.note_style_ingest import ingest_note_style_result
 from backend.ai.note_style_results import record_note_style_failure
 from backend.ai.note_style_logging import log_structured_event
+from backend.ai.note_style_paths import _normalize_path_for_worker
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -30,20 +31,44 @@ log = logging.getLogger(__name__)
 
 
 def _resolve_runs_root(runs_root: Path | str | None) -> Path:
+    def _coerce(value: Path | str) -> Path:
+        if isinstance(value, Path):
+            return value.resolve()
+
+        text = str(value or "").strip()
+        if not text:
+            return Path("runs").resolve()
+
+        sanitized = text.replace("\\", "/")
+        if len(sanitized) >= 2 and sanitized[1] == ":":
+            try:
+                return _normalize_path_for_worker(Path("/"), sanitized)
+            except ValueError:
+                return Path("runs").resolve()
+
+        candidate = Path(sanitized)
+        if candidate.is_absolute():
+            return candidate.resolve()
+
+        return (Path.cwd() / candidate).resolve()
+
     if runs_root is None:
         env_value = os.getenv("RUNS_ROOT")
-        return Path(env_value) if env_value else Path("runs")
-    return Path(runs_root)
+        if env_value:
+            return _coerce(env_value)
+        return Path("runs").resolve()
+
+    return _coerce(runs_root)
 
 
 def _resolve_packs_dir(paths: NoteStylePaths) -> Path:
     override = os.getenv("NOTE_STYLE_PACKS_DIR")
     if override:
-        candidate = Path(override)
-        if not candidate.is_absolute():
-            candidate = (paths.base / override).resolve()
-        else:
-            candidate = candidate.resolve()
+        run_dir = paths.base.parent.parent
+        try:
+            candidate = _normalize_path_for_worker(run_dir, override)
+        except ValueError:
+            candidate = paths.packs_dir
         return candidate
     return paths.packs_dir
 
@@ -243,38 +268,36 @@ def _normalize_manifest_entry_path(
         return None
 
     sanitized = sanitized.replace("\\", "/")
-    candidate_path = Path(sanitized)
     run_dir = paths.base.parent.parent
 
-    if candidate_path.is_absolute():
-        candidate = candidate_path.resolve()
-    else:
-        parts = list(candidate_path.parts)
-        if parts and parts[0].endswith(":"):
-            parts = parts[1:]
-        normalized_parts = [part for part in parts if part not in {"", "."}]
-        relative_parts = normalized_parts
-        sid_lower = run_dir.name.lower()
-        for idx, part in enumerate(normalized_parts):
-            if part.lower() == sid_lower:
-                relative_parts = normalized_parts[idx + 1 :]
-                break
-        if (
-            len(relative_parts) >= 2
-            and relative_parts[0].lower() == "ai_packs"
-            and relative_parts[1].lower() == "note_style"
-        ):
-            relative_parts = relative_parts[2:]
-
-        if not relative_parts:
-            candidate = default_dir.resolve()
-        else:
-            candidate = (paths.base / Path(*relative_parts)).resolve()
+    try:
+        candidate = _normalize_path_for_worker(run_dir, sanitized)
+    except ValueError:
+        return None
 
     if not _is_within_directory(candidate, run_dir):
         return None
 
-    return candidate
+    stage_base = paths.base.resolve()
+    stage_name = stage_base.name.lower()
+    sanitized_relative = sanitized.lstrip("./")
+    if stage_name and sanitized_relative.lower().startswith(f"{stage_name}/"):
+        sanitized_for_stage = sanitized_relative.split("/", 1)[1]
+    else:
+        sanitized_for_stage = sanitized
+
+    if not _is_within_directory(candidate, stage_base):
+        try:
+            candidate = _normalize_path_for_worker(
+                default_dir.parent, sanitized_for_stage
+            )
+        except ValueError:
+            candidate = default_dir / Path(sanitized_for_stage)
+
+        if not _is_within_directory(candidate, run_dir):
+            return None
+
+    return candidate.resolve()
 
 
 def _load_manifest_pack_entries(

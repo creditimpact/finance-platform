@@ -764,9 +764,11 @@ def build_note_style_pack_for_account(
         "note_text": note_text,
     }
 
+    user_content = json.dumps(context_payload, ensure_ascii=False)
+
     messages = [
         {"role": "system", "content": _NOTE_STYLE_SYSTEM_PROMPT},
-        {"role": "user", "content": dict(context_payload)},
+        {"role": "user", "content": user_content},
     ]
 
     pack_payload = {

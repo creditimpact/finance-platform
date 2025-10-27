@@ -58,6 +58,16 @@ _QUESTION_SET = [
 ]
 
 
+def _env_flag_enabled(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"", "0", "false", "no", "off"}:
+        return False
+    return True
+
+
 def _claim_field_links_payload() -> dict[str, list[str]]:
     return {key: list(values) for key, values in CLAIM_FIELD_LINK_MAP.items()}
 
@@ -1182,6 +1192,30 @@ def generate_frontend_packs_for_run(
         redirect_stub_path=redirect_stub_path,
     )
     packs_dir_str = str(stage_packs_dir.absolute())
+
+    frontend_autorun_enabled = _env_flag_enabled("FRONTEND_STAGE_AUTORUN", True)
+    review_autorun_enabled = _env_flag_enabled("REVIEW_STAGE_AUTORUN", True)
+    if not (frontend_autorun_enabled and review_autorun_enabled):
+        if not frontend_autorun_enabled and not review_autorun_enabled:
+            reason = "autorun_disabled"
+        elif not frontend_autorun_enabled:
+            reason = "frontend_stage_autorun_disabled"
+        else:
+            reason = "review_stage_autorun_disabled"
+        log.info(
+            "FRONTEND_AUTORUN_DISABLED sid=%s reason=%s",
+            sid,
+            reason,
+        )
+        return {
+            "status": reason,
+            "packs_count": 0,
+            "empty_ok": True,
+            "built": False,
+            "packs_dir": packs_dir_str,
+            "last_built_at": None,
+            "autorun_disabled": True,
+        }
 
     runflow_stage_start("frontend", sid=sid)
     current_account_id: str | None = None

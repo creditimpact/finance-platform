@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+import hashlib
 import re
 import time
 import uuid
@@ -1480,6 +1481,15 @@ def store_note_style_result(
         note_metrics=note_metrics_payload,
         pack_path=account_paths.pack_file,
     )
+
+    note_text_value = _load_pack_note_text(account_paths.pack_file)
+    if isinstance(note_text_value, str):
+        normalized_note = note_text_value.strip()
+        if normalized_note:
+            note_hash = hashlib.sha256(
+                normalized_note.encode("utf-8", "ignore")
+            ).hexdigest()
+            normalized_payload["note_hash"] = note_hash
 
     evaluated_at_value = normalized_payload.get("evaluated_at")
     if not isinstance(evaluated_at_value, str) or not evaluated_at_value.strip():

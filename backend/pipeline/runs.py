@@ -21,6 +21,20 @@ def _runs_root() -> Path:
 RUNS_ROOT = _runs_root()
 
 
+def _env_flag_enabled(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"", "0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def _new_sid_upload_only_enabled() -> bool:
+    return _env_flag_enabled("RUNFLOW_NEW_SID_ON_UPLOAD_ONLY", False)
+
+
 def get_runs_root() -> Path:
     """Return the configured runs/ root directory."""
 
@@ -50,10 +64,24 @@ class RunManifest:
 
     # -------- creation / loading ----------
     @staticmethod
-    def for_sid(sid: str) -> "RunManifest":
+    def for_sid(sid: str, *, allow_create: bool | None = None) -> "RunManifest":
         base = _runs_root() / sid
+        manifest_path = base / "manifest.json"
+
+        if allow_create is None:
+            allow_create = not _new_sid_upload_only_enabled()
+
+        if manifest_path.exists():
+            m = RunManifest(manifest_path)
+            return m._load_or_create(sid)
+
+        if not allow_create:
+            raise FileNotFoundError(
+                f"run manifest missing for {sid}; creation disabled by env"
+            )
+
         base.mkdir(parents=True, exist_ok=True)
-        m = RunManifest(base / "manifest.json")
+        m = RunManifest(manifest_path)
         return m._load_or_create(sid)
 
     @staticmethod
@@ -68,7 +96,9 @@ class RunManifest:
         return RunManifest(newest).load()
 
     @staticmethod
-    def load_or_create(path: Path, sid: str | None = None) -> "RunManifest":
+    def load_or_create(
+        path: Path, sid: str | None = None, *, allow_create: bool | None = None
+    ) -> "RunManifest":
         """Load an existing manifest at ``path`` or create a new one."""
 
         manifest = RunManifest(path)
@@ -78,6 +108,14 @@ class RunManifest:
         effective_sid = sid or path.parent.name
         if not effective_sid:
             raise ValueError("sid is required to create a new manifest")
+
+        if allow_create is None:
+            allow_create = not _new_sid_upload_only_enabled()
+
+        if not allow_create:
+            raise FileNotFoundError(
+                f"run manifest missing for {effective_sid}; creation disabled by env"
+            )
 
         manifest.path.parent.mkdir(parents=True, exist_ok=True)
         return manifest._load_or_create(effective_sid)

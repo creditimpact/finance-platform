@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -36,6 +37,16 @@ _INDEX_THIN_THRESHOLD_BYTES = 128
 _PATH_LOG_CACHE: set[str] = set()
 
 
+def _env_flag_enabled(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"", "0", "false", "no", "off"}:
+        return False
+    return True
+
+
 def _log_sender_paths(sid: str, paths: NoteStylePaths) -> None:
     signature = "|".join(
         [
@@ -62,6 +73,20 @@ def _log_sender_paths(sid: str, paths: NoteStylePaths) -> None:
         paths.log_file,
         config.NOTE_STYLE_USE_MANIFEST_PATHS,
     )
+
+
+def _extract_pack_note_text(pack_payload: Mapping[str, Any]) -> str | None:
+    candidate = pack_payload.get("note_text")
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+
+    context = pack_payload.get("context")
+    if isinstance(context, Mapping):
+        context_note = context.get("note_text")
+        if isinstance(context_note, str) and context_note.strip():
+            return context_note.strip()
+
+    return None
 
 
 def _resolve_runs_root(runs_root: Path | str | None) -> Path:
@@ -839,11 +864,19 @@ def _send_pack_payload(
         pack_path,
     )
 
+    skip_existing_results = config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS
+    idempotent_hash_enabled = _env_flag_enabled(
+        "NOTE_STYLE_IDEMPOTENT_BY_NOTE_HASH",
+        default=config.NOTE_STYLE_IDEMPOTENT_BY_NOTE_HASH,
+    )
+
+    existing_payload: Mapping[str, Any] | None = None
+    if skip_existing_results or idempotent_hash_enabled:
+        existing_payload = _load_result_payload(account_paths.result_file)
+
     skip_reason: str | None = None
-    if config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS:
-        skip_reason = _result_skip_reason(
-            _load_result_payload(account_paths.result_file)
-        )
+    if skip_existing_results:
+        skip_reason = _result_skip_reason(existing_payload)
 
     if skip_reason:
         result_relative = _relativize(account_paths.result_file, paths.base)
@@ -863,6 +896,39 @@ def _send_pack_payload(
             result_path=result_relative,
         )
         return False
+
+    if idempotent_hash_enabled:
+        note_text = _extract_pack_note_text(pack_payload)
+        if isinstance(note_text, str) and note_text:
+            candidate_hash = hashlib.sha256(
+                note_text.encode("utf-8", "ignore")
+            ).hexdigest()
+            existing_hash: str | None = None
+            if isinstance(existing_payload, Mapping):
+                stored_hash = existing_payload.get("note_hash")
+                if isinstance(stored_hash, str):
+                    trimmed = stored_hash.strip()
+                    if trimmed:
+                        existing_hash = trimmed
+            if existing_hash and existing_hash == candidate_hash:
+                result_relative = _relativize(account_paths.result_file, paths.base)
+                log.info(
+                    "STYLE_SEND_SKIP_NOTE_HASH sid=%s account_id=%s hash=%s result=%s",
+                    sid,
+                    account_id,
+                    candidate_hash,
+                    result_relative,
+                )
+                log_structured_event(
+                    "NOTE_STYLE_SEND_SKIPPED",
+                    logger=log,
+                    sid=sid,
+                    account_id=account_id,
+                    reason="note_hash_match",
+                    note_hash=candidate_hash,
+                    result_path=result_relative,
+                )
+                return False
 
     model = str(pack_payload.get("model") or "").strip()
     if not model:

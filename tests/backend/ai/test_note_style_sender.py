@@ -181,7 +181,10 @@ def test_note_style_sender_sends_built_pack(
 
     assert "account_context" not in stored_payload
     assert "bureaus_summary" not in stored_payload
-    assert pack_payload["messages"][1]["content"]["note_text"]
+    user_content = pack_payload["messages"][1]["content"]
+    if isinstance(user_content, str):
+        user_content = json.loads(user_content)
+    assert user_content["note_text"]
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]
@@ -215,7 +218,7 @@ def test_note_style_sender_sends_built_pack(
     )
 
     call_kwargs = client.calls[0]["kwargs"]
-    assert call_kwargs.get("response_format") == "json_object"
+    assert call_kwargs.get("response_format") == {"type": "json_object"}
 
 
 def test_note_style_sender_accepts_string_runs_root(

@@ -718,7 +718,7 @@ def _send_pack_payload(
             model=model or None,
             messages=list(messages),
             temperature=0,
-            response_format="json_object",
+            response_format={"type": "json_object"},
         )
         latency = time.perf_counter() - start
         log.info(

@@ -577,15 +577,9 @@ def _create_frontend_enqueue_marker(lock_path: Path, sid: str) -> bool:
     return True
 
 
-def _enqueue_frontend_after_cases(
-    sid: str,
-    cases_info: Mapping[str, object] | object,
-    *,
-    runs_root: Path | None,
-) -> None:
-    """Enqueue the frontend pack builder after cases are materialised."""
+def _enqueue_frontend_build(sid: str, *, run_dir: Path | None) -> bool:
+    """Enqueue the frontend pack builder for ``sid`` if not already queued."""
 
-    run_dir = _resolve_run_dir_for_frontend(sid, cases_info, runs_root=runs_root)
     marker_written = False
     marker_path: Path | None = None
 
@@ -593,14 +587,30 @@ def _enqueue_frontend_after_cases(
         marker_path = run_dir / ".locks" / _FRONTEND_ENQUEUE_LOCK_FILENAME
         marker_written = _create_frontend_enqueue_marker(marker_path, sid)
         if not marker_written and marker_path.exists():
-            logger.info("FRONTEND_ENQUEUE_AFTER_CASES_ALREADY sid=%s", sid)
-            return
+            logger.info("FRONTEND_ENQUEUE_ALREADY sid=%s", sid)
+            return False
 
     if not marker_written:
         if sid in _FRONTEND_ENQUEUED:
-            logger.info("FRONTEND_ENQUEUE_AFTER_CASES_ALREADY sid=%s", sid)
-            return
+            logger.info("FRONTEND_ENQUEUE_ALREADY sid=%s", sid)
+            return False
         _FRONTEND_ENQUEUED.add(sid)
+
+    def _cleanup_marker() -> None:
+        if not marker_written:
+            _FRONTEND_ENQUEUED.discard(sid)
+            return
+        if marker_path is None:
+            return
+        try:
+            marker_path.unlink()
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "FRONTEND_ENQUEUE_LOCK_CLEANUP_FAILED sid=%s path=%s",
+                sid,
+                marker_path,
+                exc_info=True,
+            )
 
     try:
         from pipeline.hooks import on_cases_built
@@ -610,20 +620,10 @@ def _enqueue_frontend_after_cases(
         try:
             generate_frontend_packs_task.apply_async(args=[sid], queue=queue_name)
         except Exception:  # pragma: no cover - defensive logging
-            log.error("FRONTEND_ENQUEUE_AFTER_CASES_FAILED sid=%s", sid, exc_info=True)
-            if not marker_written:
-                _FRONTEND_ENQUEUED.discard(sid)
-            elif marker_path is not None:
-                try:
-                    marker_path.unlink()
-                except Exception:  # pragma: no cover - defensive logging
-                    logger.warning(
-                        "FRONTEND_ENQUEUE_LOCK_CLEANUP_FAILED sid=%s path=%s",
-                        sid,
-                        marker_path,
-                        exc_info=True,
-                    )
-        return
+            log.error("FRONTEND_ENQUEUE_FAILED sid=%s", sid, exc_info=True)
+            _cleanup_marker()
+            return False
+        return True
 
     try:
         on_cases_built(sid)
@@ -633,22 +633,49 @@ def _enqueue_frontend_after_cases(
         try:
             generate_frontend_packs_task.apply_async(args=[sid], queue=queue_name)
         except Exception:  # pragma: no cover - defensive logging
-            log.error("FRONTEND_ENQUEUE_AFTER_CASES_FAILED sid=%s", sid, exc_info=True)
-            if not marker_written:
-                _FRONTEND_ENQUEUED.discard(sid)
-            elif marker_path is not None:
-                try:
-                    marker_path.unlink()
-                except Exception:  # pragma: no cover - defensive logging
-                    logger.warning(
-                        "FRONTEND_ENQUEUE_LOCK_CLEANUP_FAILED sid=%s path=%s",
-                        sid,
-                        marker_path,
-                        exc_info=True,
-                    )
-        return
+            log.error("FRONTEND_ENQUEUE_FAILED sid=%s", sid, exc_info=True)
+            _cleanup_marker()
+            return False
+        return True
 
-    log.info("FRONTEND_ENQUEUE_AFTER_CASES sid=%s", sid)
+    log.info("FRONTEND_ENQUEUE sid=%s", sid)
+    return True
+
+
+def _enqueue_frontend_after_cases(
+    sid: str,
+    cases_info: Mapping[str, object] | object,
+    *,
+    runs_root: Path | None,
+) -> None:
+    """Enqueue the frontend pack builder after cases are materialised."""
+
+    run_dir = _resolve_run_dir_for_frontend(sid, cases_info, runs_root=runs_root)
+    _enqueue_frontend_build(sid, run_dir=run_dir)
+
+
+def request_frontend_review_build(
+    sid: str,
+    *,
+    run_dir: Path | str | None = None,
+    runs_root: Path | str | None = None,
+) -> bool:
+    """Idempotently enqueue the frontend pack builder for ``sid``.
+
+    ``run_dir`` or ``runs_root`` can be provided to enable the on-disk lock that
+    prevents duplicate queue submissions.  When neither is supplied the
+    in-memory guard still prevents duplicate submissions within the current
+    process.
+    """
+
+    resolved_run_dir: Path | None = None
+
+    if run_dir is not None:
+        resolved_run_dir = Path(run_dir)
+    elif runs_root is not None:
+        resolved_run_dir = Path(runs_root) / sid
+
+    return _enqueue_frontend_build(sid, run_dir=resolved_run_dir)
 
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
 def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = None) -> dict:

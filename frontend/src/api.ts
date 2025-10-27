@@ -140,6 +140,19 @@ function joinFrontendPath(base: string, child: string): string {
   return [trimSlashes(base), trimSlashes(child)].filter(Boolean).join('/');
 }
 
+function stripStagePrefix(path: string | null | undefined, stageName: string): string {
+  const trimmed = trimSlashes(path);
+  const normalizedStage = trimSlashes(stageName) || 'review';
+  const stagePrefix = `frontend/${normalizedStage}/`;
+  if (trimmed.startsWith(stagePrefix)) {
+    return trimmed.slice(stagePrefix.length);
+  }
+  if (trimmed.startsWith('frontend/')) {
+    return trimmed.slice('frontend/'.length);
+  }
+  return trimmed;
+}
+
 export function isAbsUrl(s: string): boolean {
   return /^https?:\/\//i.test(s);
 }
@@ -210,7 +223,13 @@ export class FetchJsonError extends Error {
   }
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+interface FetchJsonResult<T> {
+  data: T;
+  response: Response;
+  rawBody: string | null;
+}
+
+async function fetchJsonWithStatus<T>(url: string, init?: RequestInit): Promise<FetchJsonResult<T>> {
   if (REVIEW_DEBUG_ENABLED) {
     reviewDebugLog('fetch:start', { url, init });
   }
@@ -297,7 +316,12 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     reviewDebugLog('fetch:success', { url, body: data });
   }
 
-  return data as T;
+  return { data: data as T, response, rawBody };
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const { data } = await fetchJsonWithStatus<T>(url, init);
+  return data;
 }
 
 export interface FrontendReviewManifestPack {
@@ -317,6 +341,11 @@ export interface FrontendReviewManifestPack {
   pack_path_rel?: string;
 }
 
+export interface FrontendReviewPackIndexEntry {
+  account: string;
+  file: string;
+}
+
 export interface FrontendReviewManifest {
   sid?: string;
   stage?: string;
@@ -324,12 +353,19 @@ export interface FrontendReviewManifest {
   counts?: { packs?: number; responses?: number };
   packs?: FrontendReviewManifestPack[];
   generated_at?: string;
+  built_at?: string;
   index_rel?: string;
   index_path?: string;
   packs_dir_rel?: string;
+  packs_dir?: string;
   packs_dir_path?: string;
   responses_dir_rel?: string;
+  responses_dir?: string;
   responses_dir_path?: string;
+  packs_index?: FrontendReviewPackIndexEntry[];
+  packs_count?: number;
+  status?: string;
+  queued?: boolean;
 }
 
 interface FrontendStageDescriptor {
@@ -346,9 +382,14 @@ interface FrontendStageDescriptor {
   packs?: FrontendReviewManifestPack[];
 }
 
-interface FrontendRootIndex {
-  sid?: string;
-  review?: FrontendStageDescriptor;
+interface FrontendReviewIndexApiResponse {
+  status?: string;
+  queued?: boolean;
+  frontend?: {
+    review?: FrontendStageDescriptor | FrontendReviewManifest | null;
+    [key: string]: unknown;
+  } | null;
+  [key: string]: unknown;
 }
 
 export interface RunFrontendManifestResponse {
@@ -399,73 +440,202 @@ export async function fetchRunFrontendManifest(
   };
 }
 
-export async function fetchFrontendReviewManifest(
-  sessionId: string,
-  init?: RequestInit
-): Promise<FrontendReviewManifest> {
-  const rootIndex = await fetchJson<FrontendRootIndex>(
-    buildRunAssetUrl(sessionId, 'frontend/index.json'),
-    init
-  );
+function normalizeFrontendReviewManifestPayload(
+  payload: FrontendReviewManifest | FrontendStageDescriptor | null | undefined
+): FrontendReviewManifest {
+  const base: FrontendReviewManifest =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? ({ ...payload } as FrontendReviewManifest)
+      : ({} as FrontendReviewManifest);
 
-  const stage = (rootIndex?.review ?? {}) as FrontendStageDescriptor;
+  const stageName =
+    typeof base.stage === 'string' && base.stage.trim() ? base.stage.trim() : 'review';
+
   const indexPath = ensureFrontendPath(
-    stage.index_rel ?? stage.index ?? 'review/index.json',
-    'review/index.json'
+    (base as { index_path?: string }).index_path ??
+      (base as { index?: string }).index ??
+      `${stageName}/index.json`,
+    `${stageName}/index.json`
   );
+
   const packsDirPath = ensureFrontendPath(
-    stage.packs_dir_rel ?? stage.packs_dir ?? 'review/packs',
-    'review/packs'
+    (base as { packs_dir?: string }).packs_dir ??
+      (base as { packs_dir_path?: string }).packs_dir_path ??
+      (base as { packs_dir_rel?: string }).packs_dir_rel ??
+      `${stageName}/packs`,
+    `${stageName}/packs`
   );
+
   const responsesDirPath = ensureFrontendPath(
-    stage.responses_dir_rel ?? stage.responses_dir ?? 'review/responses',
-    'review/responses'
+    (base as { responses_dir?: string }).responses_dir ??
+      (base as { responses_dir_path?: string }).responses_dir_path ??
+      (base as { responses_dir_rel?: string }).responses_dir_rel ??
+      `${stageName}/responses`,
+    `${stageName}/responses`
   );
 
-  let manifestPayload: FrontendStageDescriptor | FrontendReviewManifest | null = stage;
-  if (!manifestPayload || !Array.isArray(manifestPayload.packs)) {
-    manifestPayload = await fetchJson<FrontendReviewManifest>(
-      buildRunAssetUrl(sessionId, indexPath)
-    );
-  }
-
-  const packs = Array.isArray(manifestPayload?.packs)
-    ? manifestPayload.packs.map((entry) => {
+  const packs = Array.isArray(base.packs)
+    ? base.packs.map((entry) => {
         const pack: FrontendReviewManifestPack = { ...entry };
         const rawPath =
           typeof entry.pack_path === 'string'
             ? entry.pack_path
             : typeof entry.path === 'string'
             ? entry.path
+            : typeof (entry as { file?: string }).file === 'string'
+            ? (entry as { file?: string }).file
             : undefined;
-
         const defaultPath = joinFrontendPath(packsDirPath, `${entry.account_id}.json`);
         const normalizedPath =
-          normalizeStaticPackPath(rawPath) ?? normalizeStaticPackPath(defaultPath) ?? defaultPath;
+          normalizeStaticPackPath(rawPath) ??
+          normalizeStaticPackPath(defaultPath) ??
+          `/frontend/${stripFrontendPrefix(defaultPath)}`;
 
-        pack.pack_path = normalizedPath;
-        pack.pack_path_rel = stripFrontendPrefix(normalizedPath);
-        pack.path = normalizedPath;
+        const finalPath = normalizedPath || `/frontend/${stripFrontendPrefix(defaultPath)}`;
+        pack.pack_path = finalPath;
+        pack.pack_path_rel = stripFrontendPrefix(finalPath);
+        pack.path = finalPath;
         return pack;
       })
     : [];
 
-  return {
-    sid: manifestPayload?.sid ?? rootIndex?.sid,
-    stage: manifestPayload?.stage ?? stage.stage ?? 'review',
-    schema_version: manifestPayload?.schema_version ?? stage.schema_version,
-    counts: manifestPayload?.counts ?? stage.counts,
-    generated_at:
-      (manifestPayload as FrontendStageDescriptor | FrontendReviewManifest | undefined)?.generated_at ??
-      stage.generated_at,
-    packs,
-    index_rel: stripFrontendPrefix(indexPath),
+  const counts =
+    base.counts && typeof base.counts === 'object' && !Array.isArray(base.counts)
+      ? ({ ...base.counts } as { packs?: number; responses?: number })
+      : {};
+
+  const packCount =
+    typeof base.packs_count === 'number'
+      ? base.packs_count
+      : typeof counts.packs === 'number'
+      ? counts.packs
+      : packs.length;
+
+  const responsesCount =
+    typeof counts.responses === 'number' ? counts.responses : 0;
+
+  counts.packs = packCount;
+  counts.responses = responsesCount;
+
+  const packsIndexSource = Array.isArray((base as { packs_index?: unknown }).packs_index)
+    ? (((base as { packs_index?: FrontendReviewPackIndexEntry[] }).packs_index ?? []) as FrontendReviewPackIndexEntry[])
+    : null;
+
+  const fallbackIndex = packs.map((pack) => ({
+    account: pack.account_id,
+    file: stripStagePrefix(joinFrontendPath(packsDirPath, `${pack.account_id}.json`), stageName),
+  }));
+
+  const packsIndex = (packsIndexSource ?? fallbackIndex)
+    .map((entry) => {
+      if (!entry) {
+        return null;
+      }
+      const accountCandidate =
+        typeof (entry as { account?: unknown }).account === 'string'
+          ? (entry as { account?: string }).account
+          : typeof (entry as { account_id?: unknown }).account_id === 'string'
+          ? ((entry as unknown as { account_id?: string }).account_id as string)
+          : '';
+      const account = (accountCandidate || '').trim();
+      if (!account) {
+        return null;
+      }
+
+      const fileCandidate =
+        typeof entry.file === 'string' && entry.file
+          ? entry.file
+          : typeof (entry as { path?: string }).path === 'string'
+          ? ((entry as unknown as { path?: string }).path as string)
+          : joinFrontendPath(packsDirPath, `${account}.json`);
+
+      const normalizedStatic =
+        normalizeStaticPackPath(fileCandidate) ??
+        normalizeStaticPackPath(joinFrontendPath(packsDirPath, `${account}.json`)) ??
+        `/frontend/${stripFrontendPrefix(joinFrontendPath(packsDirPath, `${account}.json`))}`;
+
+      const file =
+        stripStagePrefix(normalizedStatic, stageName) ||
+        stripStagePrefix(joinFrontendPath(packsDirPath, `${account}.json`), stageName);
+
+      return { account, file };
+    })
+    .filter((entry): entry is FrontendReviewPackIndexEntry => Boolean(entry));
+
+  const builtAtCandidate =
+    typeof base.built_at === 'string'
+      ? base.built_at
+      : typeof base.generated_at === 'string'
+      ? base.generated_at
+      : undefined;
+
+  const manifest: FrontendReviewManifest = {
+    ...base,
+    stage: stageName,
     index_path: indexPath,
+    index_rel: stripFrontendPrefix(indexPath),
+    packs_dir: packsDirPath,
     packs_dir_rel: stripFrontendPrefix(packsDirPath),
-    packs_dir_path: packsDirPath,
+    responses_dir: responsesDirPath,
     responses_dir_rel: stripFrontendPrefix(responsesDirPath),
-    responses_dir_path: responsesDirPath,
+    packs,
+    counts,
+    packs_count: packCount,
+    packs_index: packsIndex,
   };
+
+  if (builtAtCandidate && !manifest.built_at) {
+    manifest.built_at = builtAtCandidate;
+  }
+  if (manifest.built_at && !manifest.generated_at) {
+    manifest.generated_at = manifest.built_at;
+  }
+
+  return manifest;
+}
+
+export async function fetchFrontendReviewManifest(
+  sessionId: string,
+  init?: RequestInit
+): Promise<FrontendReviewManifest> {
+  const indexUrl = buildRunApiUrl(sessionId, '/frontend/review/index');
+  const { data, response } = await fetchJsonWithStatus<FrontendReviewIndexApiResponse>(
+    indexUrl,
+    init
+  );
+
+  const frontendSection = data?.frontend;
+  const reviewCandidate =
+    (frontendSection && typeof frontendSection === 'object' && !Array.isArray(frontendSection)
+      ? (frontendSection as { review?: FrontendStageDescriptor | FrontendReviewManifest | null })
+          .review ?? null
+      : null) ?? null;
+
+  const manifestPayload =
+    (reviewCandidate && typeof reviewCandidate === 'object'
+      ? (reviewCandidate as FrontendReviewManifest | FrontendStageDescriptor)
+      : null) ?? (data as unknown as FrontendReviewManifest | FrontendStageDescriptor | null);
+
+  const manifest = normalizeFrontendReviewManifestPayload(manifestPayload);
+
+  if (response.status === 202) {
+    const statusValue =
+      typeof data?.status === 'string' && data.status.trim() ? data.status : 'building';
+    const queuedValue =
+      typeof data?.queued === 'boolean' ? (data.queued as boolean) : undefined;
+
+    return {
+      ...manifest,
+      status: statusValue,
+      queued: queuedValue,
+      counts: {
+        packs: manifest.packs_count ?? manifest.counts?.packs ?? manifest.packs?.length ?? 0,
+        responses: manifest.counts?.responses ?? 0,
+      },
+    };
+  }
+
+  return manifest;
 }
 
 export interface FrontendReviewPackListingItem {

@@ -291,6 +291,13 @@ def _relative_to_run_dir(path: Path, run_dir: Path) -> str:
         return path.as_posix()
 
 
+def _relative_to_stage_dir(path: Path, stage_dir: Path) -> str:
+    try:
+        return path.relative_to(stage_dir).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def _optional_str(value: Any) -> str | None:
     if isinstance(value, str):
         trimmed = value.strip()
@@ -1110,7 +1117,9 @@ def _build_stage_manifest(
     stage_index_path: Path,
     question_set: Sequence[Mapping[str, Any]] | None = None,
 ) -> Mapping[str, Any]:
+    stage_dir = stage_index_path.parent
     pack_entries: list[dict[str, Any]] = []
+    pack_index_entries: list[dict[str, Any]] = []
 
     if stage_packs_dir.is_dir():
         pack_paths = sorted(
@@ -1153,11 +1162,14 @@ def _build_stage_manifest(
                 if isinstance(raw_display, Mapping):
                     display_payload = raw_display
 
+            stage_relative_path = _relative_to_stage_dir(pack_path, stage_dir)
+            run_relative_path = _relative_to_run_dir(pack_path, run_dir)
+
             pack_entry: dict[str, Any] = {
                 "account_id": account_id,
                 "holder_name": holder_name,
                 "primary_issue": primary_issue,
-                "path": _relative_to_run_dir(pack_path, run_dir),
+                "path": run_relative_path,
                 "bytes": os.path.getsize(pack_path),
                 "has_questions": has_questions,
             }
@@ -1165,16 +1177,24 @@ def _build_stage_manifest(
             if display_payload is not None:
                 pack_entry["display"] = display_payload
 
-            pack_entry["pack_path"] = pack_entry["path"]
+            pack_entry["pack_path"] = run_relative_path
+            pack_entry["pack_path_rel"] = stage_relative_path
+            pack_entry["file"] = run_relative_path
 
             sha1_digest = _safe_sha1(pack_path)
             if sha1_digest:
                 pack_entry["sha1"] = sha1_digest
 
             pack_entries.append(pack_entry)
+            pack_index_entries.append({"account": account_id, "file": stage_relative_path})
 
     responses_count = _count_frontend_responses(stage_responses_dir)
     responses_dir_value = _relative_to_run_dir(stage_responses_dir, run_dir)
+    responses_dir_rel = _relative_to_stage_dir(stage_responses_dir, stage_dir)
+    packs_dir_value = _relative_to_run_dir(stage_packs_dir, run_dir)
+    packs_dir_rel = _relative_to_stage_dir(stage_packs_dir, stage_dir)
+    index_path_value = _relative_to_run_dir(stage_index_path, run_dir)
+    index_rel_value = _relative_to_stage_dir(stage_index_path, stage_dir)
 
     questions_payload = list(question_set) if question_set is not None else list(_QUESTION_SET)
 
@@ -1188,19 +1208,33 @@ def _build_stage_manifest(
         },
         "packs": pack_entries,
         "responses_dir": responses_dir_value,
+        "responses_dir_rel": responses_dir_rel,
+        "packs_dir": packs_dir_value,
+        "packs_dir_rel": packs_dir_rel,
+        "index_path": index_path_value,
+        "index_rel": index_rel_value,
         "packs_count": len(pack_entries),
         "questions": questions_payload,
+        "packs_index": pack_index_entries,
     }
 
     generated_at = _now_iso()
+    built_at = generated_at
     existing_manifest = _load_json_payload(stage_index_path)
     if isinstance(existing_manifest, Mapping):
         previous_core = dict(existing_manifest)
         previous_generated = previous_core.pop("generated_at", None)
-        if previous_core == manifest_core and isinstance(previous_generated, str):
-            generated_at = previous_generated
+        previous_built = previous_core.pop("built_at", None)
+        if previous_core == manifest_core:
+            if isinstance(previous_generated, str):
+                generated_at = previous_generated
+            if isinstance(previous_built, str):
+                built_at = previous_built
 
-    manifest_payload = {**manifest_core, "generated_at": generated_at}
+    if not built_at:
+        built_at = generated_at
+
+    manifest_payload = {**manifest_core, "generated_at": generated_at, "built_at": built_at}
     _write_json_if_changed(stage_index_path, manifest_payload)
 
     return manifest_payload

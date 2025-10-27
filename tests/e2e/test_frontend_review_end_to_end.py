@@ -264,6 +264,7 @@ def test_frontend_review_pipeline_end_to_end(
             responses_dir.mkdir(parents=True, exist_ok=True)
 
             manifest_entries = []
+            manifest_index_entries = []
             for spec in account_specs:
                 account_id = spec["account_id"]
                 holder_name = spec["holder_name"]
@@ -283,7 +284,11 @@ def test_frontend_review_pipeline_end_to_end(
                         "file": relative_path,
                         "path": relative_path,
                         "pack_path": relative_path,
+                        "pack_path_rel": f"packs/{account_id}.json",
                     }
+                )
+                manifest_index_entries.append(
+                    {"account": account_id, "file": f"packs/{account_id}.json"}
                 )
 
             generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -293,10 +298,16 @@ def test_frontend_review_pipeline_end_to_end(
                 "schema_version": "1.0",
                 "packs_count": len(manifest_entries),
                 "packs_dir": "frontend/review/packs",
+                "packs_dir_rel": "review/packs",
                 "responses_dir": "frontend/review/responses",
+                "responses_dir_rel": "review/responses",
+                "index_path": "frontend/review/index.json",
+                "index_rel": "review/index.json",
                 "packs": manifest_entries,
                 "generated_at": generated_at,
+                "built_at": generated_at,
                 "questions": ["explanation"],
+                "packs_index": manifest_index_entries,
             }
             _write_json(run_dir / "frontend" / "review" / "index.json", manifest_payload)
 

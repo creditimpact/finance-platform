@@ -51,7 +51,7 @@ from backend.api.session_manager import (
     update_session,
 )
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
-from backend.api.tasks import app as celery_app, smoke_task
+from backend.api.tasks import app as celery_app, request_frontend_review_build, smoke_task
 from backend.pipeline.runs import RunManifest, get_runs_root, persist_manifest
 from backend.core.paths.frontend_review import get_frontend_review_paths
 from backend.frontend.packs.claim_schema import (
@@ -1642,7 +1642,26 @@ def api_frontend_index(sid: str):
 
     manifest = _load_frontend_stage_manifest(run_dir)
     if manifest is None:
-        return jsonify({"error": "index_not_found"}), 404
+        queued = request_frontend_review_build(sid, run_dir=run_dir)
+        baseline = _normalize_frontend_review_index_payload(
+            run_dir,
+            {"sid": sid, "packs": [], "counts": {"packs": 0, "responses": 0}},
+            sid=sid,
+        )
+        baseline.setdefault("sid", sid)
+        baseline.setdefault("packs", [])
+        baseline.setdefault("packs_index", [])
+        baseline.setdefault("counts", {"packs": 0, "responses": 0})
+        response_payload = {
+            "status": "building",
+            "queued": bool(queued),
+            "frontend": {"review": baseline},
+        }
+        response = jsonify(response_payload)
+        response.status_code = 202
+        response.headers["X-Index-Shape"] = "building"
+        response.headers["Retry-After"] = "2"
+        return response
 
     _, payload = manifest
     normalized = _normalize_frontend_review_index_payload(run_dir, payload, sid=sid)
@@ -1795,6 +1814,35 @@ def _normalize_frontend_review_index_payload(
     else:
         result = {}
 
+    try:
+        stage_config = load_frontend_stage_config(run_dir)
+    except Exception:  # pragma: no cover - defensive fallback
+        stage_config = None
+
+    stage_prefix = None
+    if stage_config is not None:
+        stage_name_component = stage_config.stage_dir.name or "review"
+        stage_prefix = f"frontend/{stage_name_component.strip('/')}/"
+
+    def _stage_relative_path(value: str | None) -> str:
+        normalized = (value or "").replace("\\", "/")
+        if not normalized:
+            return normalized
+        if stage_config is None:
+            return normalized.lstrip("/") or normalized
+        try:
+            candidate = _safe_relative_path(run_dir, normalized)
+        except ValueError:
+            candidate = Path(normalized)
+        try:
+            relative = candidate.relative_to(stage_config.stage_dir)
+        except ValueError:
+            try:
+                relative = candidate.relative_to(stage_config.stage_dir.parent)
+            except ValueError:
+                return candidate.as_posix()
+        return relative.as_posix()
+
     items = _collect_review_pack_listing(run_dir, result) if isinstance(payload, Mapping) else []
     result["items"] = items
 
@@ -1803,6 +1851,52 @@ def _normalize_frontend_review_index_payload(
         packs_count = len(items)
 
     result["packs_count"] = packs_count
+
+    packs_index_payload = result.get("packs_index")
+    normalized_index: list[dict[str, Any]] = []
+    if isinstance(packs_index_payload, list):
+        for entry in packs_index_payload:
+            if not isinstance(entry, Mapping):
+                continue
+            account_value = entry.get("account") or entry.get("account_id")
+            if not isinstance(account_value, str) or not account_value:
+                continue
+            file_value = entry.get("file") or entry.get("path")
+            file_str = file_value if isinstance(file_value, str) else None
+            if file_str and stage_prefix and not file_str.replace("\\", "/").startswith("/"):
+                normalized_candidate = file_str.replace("\\", "/")
+                if not normalized_candidate.startswith("frontend/"):
+                    file_str = f"{stage_prefix}{normalized_candidate.lstrip('/')}"
+            stage_relative = _stage_relative_path(file_str)
+            if not stage_relative and stage_config is not None:
+                fallback_path = stage_config.packs_dir / f"{account_value}.json"
+                stage_relative = _stage_relative_path(fallback_path.as_posix())
+            if not stage_relative:
+                continue
+            normalized_index.append({"account": account_value, "file": stage_relative})
+
+    if not normalized_index and items:
+        for entry in items:
+            if not isinstance(entry, Mapping):
+                continue
+            account_id = entry.get("account_id")
+            file_value = entry.get("file")
+            if not isinstance(account_id, str) or not account_id:
+                continue
+            file_str = file_value if isinstance(file_value, str) else None
+            if file_str and stage_prefix and not file_str.replace("\\", "/").startswith("/"):
+                normalized_candidate = file_str.replace("\\", "/")
+                if not normalized_candidate.startswith("frontend/"):
+                    file_str = f"{stage_prefix}{normalized_candidate.lstrip('/')}"
+            stage_relative = _stage_relative_path(file_str)
+            if not stage_relative and stage_config is not None:
+                fallback_path = stage_config.packs_dir / f"{account_id}.json"
+                stage_relative = _stage_relative_path(fallback_path.as_posix())
+            if not stage_relative:
+                continue
+            normalized_index.append({"account": account_id, "file": stage_relative})
+
+    result["packs_index"] = normalized_index
 
     responses_count = _extract_responses_count(result)
     if responses_count <= 0:
@@ -1822,10 +1916,6 @@ def _normalize_frontend_review_index_payload(
     result["counts"] = counts
 
     attachments_overview: dict[str, Any] = {}
-    try:
-        stage_config = load_frontend_stage_config(run_dir)
-    except Exception:  # pragma: no cover - defensive fallback
-        stage_config = None
 
     if stage_config is not None:
         for item in items:

@@ -66,9 +66,12 @@ def test_schedule_logs_when_no_packs(tmp_path, monkeypatch, caplog):
 
     import backend.ai.note_style.tasks as note_style_tasks
 
-    assert note_style_tasks.note_style_prepare_and_send_task.calls == []
+    assert note_style_tasks.note_style_prepare_and_send_task.calls == [
+        ((sid,), {"runs_root": str(tmp_path)})
+    ]
     assert any(
-        "NOTE_STYLE_WAITING_FOR_PACKS" in record.getMessage() for record in caplog.records
+        "NOTE_STYLE_AUTOSEND_READY" in record.getMessage()
+        for record in caplog.records
     )
 
 

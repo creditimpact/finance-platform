@@ -70,8 +70,8 @@ from backend.runflow.decider import (
     reconcile_umbrella_barriers,
     refresh_frontend_stage_from_responses,
 )
-from backend.ai.note_style import schedule_prepare_and_send
 from backend.ai.note_style_stage import build_note_style_pack_for_account
+from backend.ai.note_style.tasks import note_style_prepare_and_send_task
 from backend.domain.claims import (
     CLAIM_FIELD_LINK_MAP,
     DOC_KEY_ALIAS_TO_CANONICAL,
@@ -406,9 +406,25 @@ def _schedule_note_style_send_after_delay(
         int(delay_seconds * 1000),
     )
 
+    if runs_root is None:
+        runs_root_arg: str | None = None
+    else:
+        try:
+            runs_root_arg = os.fspath(runs_root)
+        except TypeError:
+            runs_root_arg = str(runs_root)
+
     def _invoke() -> None:
         try:
-            schedule_prepare_and_send(sid, runs_root=runs_root)
+            if runs_root_arg is None:
+                note_style_prepare_and_send_task.delay(sid)
+            else:
+                note_style_prepare_and_send_task.delay(
+                    sid, runs_root=runs_root_arg
+                )
+            logger.info(
+                "NOTE_STYLE_SEND_TASK_ENQUEUED sid=%s account_id=%s", sid, account_id
+            )
         except Exception:  # pragma: no cover - defensive logging
             logger.warning(
                 "NOTE_STYLE_SEND_SCHEDULE_FAILED sid=%s account_id=%s",

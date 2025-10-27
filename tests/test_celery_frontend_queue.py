@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 
@@ -35,3 +37,30 @@ def test_frontend_queue_registered(monkeypatch):
     assert validation_route is not None
     assert validation_route.get("queue") == "validation"
     assert validation_route.get("routing_key") == "validation"
+
+
+def test_generate_frontend_task_logs_receipt(monkeypatch, caplog):
+    monkeypatch.setenv("CELERY_FRONTEND_QUEUE", "frontend")
+
+    import backend.api.tasks as tasks_module
+
+    # Ensure configuration uses the updated frontend queue value.
+    tasks_module._ensure_frontend_queue_configuration()
+
+    recorded: dict[str, object] = {}
+
+    def _fake_generate(*args, **kwargs):
+        recorded["called"] = True
+        return {"packs_count": 0, "built": False}
+
+    monkeypatch.setattr(
+        tasks_module, "generate_frontend_packs_for_run", _fake_generate
+    )
+
+    with caplog.at_level(logging.INFO):
+        tasks_module.generate_frontend_packs_task.run("SID-123")
+
+    assert recorded.get("called") is True
+    assert any(
+        "FRONTEND_TASK_RECEIVED sid=SID-123" in message for message in caplog.messages
+    )

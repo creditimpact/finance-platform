@@ -105,21 +105,7 @@ review_bp = Blueprint("review", __name__, url_prefix="/api")
 
 @review_bp.get("/runs/<sid>/frontend/index")
 def get_review_index_status(sid: str):
-    index_path = os.path.join(
-        os.getenv("RUNS_ROOT", "runs"),
-        sid,
-        "frontend",
-        "review",
-        "index.json",
-    )
-    min_bytes = int(os.getenv("NOTE_STYLE_INDEX_MIN_BYTES", "20"))
-    if os.path.exists(index_path):
-        size = os.path.getsize(index_path)
-        if size >= min_bytes:
-            logger.info("REVIEW_API: index_ok sid=%s size=%s", sid, size)
-            return jsonify({"ok": True, "path": "frontend/review/index.json"}), 200
-    logger.info("REVIEW_API: index_missing sid=%s", sid)
-    return jsonify({"ok": False, "error": "index_not_found"}), 404
+    return api_frontend_index(sid)
 
 
 SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
@@ -245,6 +231,29 @@ def _run_has_inputs(runs_root: Path, sid: str) -> bool:
             return True
     except OSError:
         return False
+
+    return False
+
+
+def _run_has_cases(run_dir: Path) -> bool:
+    """Return ``True`` when the run has materialised frontend cases."""
+
+    accounts_dir = run_dir / "cases" / "accounts"
+    try:
+        for entry in accounts_dir.iterdir():
+            if entry.is_dir():
+                return True
+    except FileNotFoundError:
+        pass
+    except OSError:
+        logger.warning("FRONTEND_CASES_DISCOVERY_FAILED path=%s", accounts_dir, exc_info=True)
+
+    index_path = run_dir / "cases" / "index.json"
+    try:
+        if index_path.is_file():
+            return True
+    except OSError:
+        logger.warning("FRONTEND_CASES_INDEX_STAT_FAILED path=%s", index_path, exc_info=True)
 
     return False
 
@@ -1640,9 +1649,13 @@ def api_frontend_index(sid: str):
     except ValueError:
         return jsonify({"error": "invalid_sid"}), 400
 
+    if not run_dir.exists():
+        return jsonify({"error": "run_not_found"}), 404
+
     manifest = _load_frontend_stage_manifest(run_dir)
     if manifest is None:
-        queued = request_frontend_review_build(sid, run_dir=run_dir)
+        has_cases = _run_has_cases(run_dir)
+        queued = request_frontend_review_build(sid, run_dir=run_dir) if has_cases else False
         baseline = _normalize_frontend_review_index_payload(
             run_dir,
             {"sid": sid, "packs": [], "counts": {"packs": 0, "responses": 0}},
@@ -1655,6 +1668,7 @@ def api_frontend_index(sid: str):
         response_payload = {
             "status": "building",
             "queued": bool(queued),
+            "has_cases": has_cases,
             "frontend": {"review": baseline},
         }
         response = jsonify(response_payload)

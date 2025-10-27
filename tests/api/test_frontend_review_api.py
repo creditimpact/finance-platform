@@ -203,6 +203,66 @@ def test_frontend_index_returns_payload(api_client):
     assert review["counts"]["responses"] == 0
 
 
+def test_frontend_index_missing_run_returns_404(api_client):
+    client, _ = api_client
+    response = client.get("/api/runs/UNKNOWN/frontend/index")
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "run_not_found"}
+
+
+def test_frontend_index_missing_index_with_cases_triggers_build(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S910"
+    run_dir = runs_root / sid
+    (run_dir / "cases" / "accounts" / "1").mkdir(parents=True, exist_ok=True)
+
+    calls: list[tuple[str, Path | None, Path | None]] = []
+
+    def _fake_request_frontend_review_build(
+        sid_arg: str, *, run_dir: Path | None = None, runs_root=None
+    ) -> bool:
+        calls.append((sid_arg, run_dir, runs_root))
+        return True
+
+    monkeypatch.setattr(
+        "backend.api.app.request_frontend_review_build",
+        _fake_request_frontend_review_build,
+    )
+
+    response = client.get(f"/api/runs/{sid}/frontend/index")
+    assert response.status_code == 202
+    assert response.headers.get("X-Index-Shape") == "building"
+
+    payload = response.get_json()
+    assert payload["status"] == "building"
+    assert payload["queued"] is True
+    assert payload["has_cases"] is True
+    assert payload["frontend"]["review"]["sid"] == sid
+
+    assert calls == [(sid, run_dir, None)]
+
+
+def test_frontend_index_without_cases_does_not_queue(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S911"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    def _fail_request(*args, **kwargs):  # pragma: no cover - defensive
+        raise AssertionError("request_frontend_review_build should not be called")
+
+    monkeypatch.setattr("backend.api.app.request_frontend_review_build", _fail_request)
+
+    response = client.get(f"/api/runs/{sid}/frontend/index")
+    assert response.status_code == 202
+    assert response.headers.get("X-Index-Shape") == "building"
+
+    payload = response.get_json()
+    assert payload["status"] == "building"
+    assert payload["queued"] is False
+    assert payload["has_cases"] is False
+
+
 def test_frontend_index_normalizes_counts(api_client):
     client, runs_root = api_client
     sid = "S224"

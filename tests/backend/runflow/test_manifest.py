@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from backend.runflow.manifest import (
@@ -41,7 +42,7 @@ def test_update_manifest_state_sets_status_and_run_state(tmp_path, monkeypatch):
     assert calls == [(sid, runs_root)]
 
 
-def test_update_manifest_frontend_persists_section(tmp_path):
+def test_update_manifest_frontend_persists_section(tmp_path, caplog):
     runs_root = tmp_path / "runs"
     sid = "S2000"
 
@@ -52,6 +53,7 @@ def test_update_manifest_frontend_persists_section(tmp_path):
     )
 
     packs_dir = runs_root / sid / "frontend"
+    caplog.set_level(logging.INFO, logger="backend.runflow.manifest")
     result = update_manifest_frontend(
         sid,
         packs_dir=packs_dir,
@@ -72,16 +74,30 @@ def test_update_manifest_frontend_persists_section(tmp_path):
     assert frontend_section["last_built_at"] == "2024-01-01T00:00:00Z"
     assert frontend_section["last_responses_at"]
 
-    assert frontend_section["base"].endswith("frontend")
-    assert frontend_section["dir"].endswith("frontend/review")
-    assert frontend_section["packs"].endswith("frontend/review/packs")
-    assert frontend_section["packs_dir"].endswith("frontend/review/packs")
-    assert frontend_section["results"].endswith("frontend/review/responses")
-    assert frontend_section["results_dir"].endswith("frontend/review/responses")
-    assert frontend_section["index"].endswith("frontend/review/index.json")
-    assert frontend_section["legacy_index"].endswith("frontend/index.json")
+    run_dir = (runs_root / sid).resolve()
+    expected_frontend_base = str((run_dir / "frontend").resolve())
+    expected_review_dir = str((run_dir / "frontend" / "review").resolve())
+    expected_packs_dir = str((run_dir / "frontend" / "review" / "packs").resolve())
+    expected_results_dir = str((run_dir / "frontend" / "review" / "responses").resolve())
+    expected_index = str((run_dir / "frontend" / "review" / "index.json").resolve())
+    expected_legacy_index = str((run_dir / "frontend" / "index.json").resolve())
+
+    assert frontend_section["base"] == expected_frontend_base
+    assert frontend_section["dir"] == expected_review_dir
+    assert frontend_section["packs"] == expected_packs_dir
+    assert frontend_section["packs_dir"] == expected_packs_dir
+    assert frontend_section["results"] == expected_results_dir
+    assert frontend_section["results_dir"] == expected_results_dir
+    assert frontend_section["index"] == expected_index
+    assert frontend_section["legacy_index"] == expected_legacy_index
 
     assert result.data["frontend"] == frontend_section
+
+    assert any(
+        record.message
+        == f"FRONTEND_BUILT sid={sid} packs=3 index={expected_index}"
+        for record in caplog.records
+    )
 
 
 def test_update_manifest_ai_stage_result_sets_sent_and_completed(tmp_path):

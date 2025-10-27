@@ -19,6 +19,7 @@ from backend.pipeline.runs import (
     MANIFEST_ENV,
     write_breadcrumb,
 )
+
 from backend.runflow.manifest import update_manifest_frontend
 
 
@@ -97,8 +98,9 @@ def test_frontend_review_structure(tmp_path, monkeypatch):
     runs_root = tmp_path / "runs"
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
 
-    manifest = RunManifest.for_sid("sid-review")
-    run_dir = runs_root / "sid-review"
+    sid = "sid-review"
+    manifest = RunManifest.for_sid(sid)
+    run_dir = (runs_root / sid).resolve()
 
     canonical = ensure_frontend_review_dirs(str(run_dir))
     packs_dir = Path(canonical["packs_dir"])
@@ -123,8 +125,18 @@ def test_frontend_review_structure(tmp_path, monkeypatch):
     assert responses_dir.exists()
 
     frontend_block = updated_manifest.data["frontend"]
-    for key in ("dir", "packs", "results", "index"):
-        assert frontend_block[key]
-    assert frontend_block["packs_count"] > 0
+    expected_frontend_base = str((run_dir / "frontend").resolve())
+    expected_review_dir = str((run_dir / "frontend" / "review").resolve())
+    expected_packs_dir = str((run_dir / "frontend" / "review" / "packs").resolve())
+    expected_results_dir = str((run_dir / "frontend" / "review" / "responses").resolve())
+    expected_index = str((run_dir / "frontend" / "review" / "index.json").resolve())
+
+    assert frontend_block["dir"] == expected_review_dir
+    assert frontend_block["packs"] == expected_packs_dir
+    assert frontend_block["results"] == expected_results_dir
+    assert frontend_block["index"] == expected_index
+    assert frontend_block["base"] == expected_frontend_base
+    assert frontend_block["packs_count"] == 2
+    assert frontend_block["counts"]["packs"] == 2
 
     assert not (run_dir / "frontend" / "accounts").exists()

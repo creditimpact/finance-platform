@@ -473,7 +473,27 @@ def generate_frontend_packs_task(
 ) -> dict:
     """Expose ``generate_frontend_packs_for_run`` as a Celery task."""
 
-    return generate_frontend_packs_for_run(sid, runs_root=runs_root, force=force)
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root, force=force)
+
+    packs_count_value = 0
+    try:
+        packs_count_value = int(result.get("packs_count", 0) or 0)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning("FRONTEND_PACKS_COUNT_PARSE_FAILED sid=%s", sid, exc_info=True)
+
+    try:
+        update_manifest_frontend(
+            sid,
+            packs_dir=result.get("packs_dir"),
+            packs_count=packs_count_value,
+            built=bool(result.get("built", False)),
+            last_built_at=result.get("last_built_at"),
+            runs_root=runs_root,
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning("FRONTEND_MANIFEST_UPDATE_FAILED sid=%s", sid, exc_info=True)
+
+    return result
 
 
 def _resolve_run_dir_for_frontend(

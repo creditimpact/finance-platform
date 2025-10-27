@@ -8,7 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
-from backend.ai.note_style_results import store_note_style_result
+from backend.ai.note_style_results import (
+    complete_note_style_result,
+    store_note_style_result,
+)
 from backend.core.ai.paths import NoteStyleAccountPaths
 from backend.note_style.validator import coerce_text, validate_analysis_payload
 from backend.runflow.manifest import update_note_style_stage_status
@@ -129,29 +132,51 @@ def ingest_note_style_result(
 
     log.info("NOTE_STYLE_PARSED sid=%s account_id=%s", sid, account_id)
 
+    completed_at = _now_iso()
     result_path = store_note_style_result(
         sid,
         account_id,
         result_payload,
         runs_root=runs_root,
-        completed_at=_now_iso(),
+        completed_at=completed_at,
+        update_index=False,
     )
 
-    try:
-        update_note_style_stage_status(
-            sid,
-            runs_root=runs_root,
-            sent=True,
-            completed_at=_now_iso(),
-        )
-    except Exception:  # pragma: no cover - defensive logging
-        log.warning(
-            "NOTE_STYLE_MANIFEST_STAGE_STATUS_UPDATE_FAILED sid=%s account_id=%s path=%s",
-            sid,
-            account_id,
-            str(result_path),
-            exc_info=True,
-        )
+    _, totals, _, analysis_valid = complete_note_style_result(
+        sid,
+        account_id,
+        runs_root=runs_root,
+        account_paths=account_paths,
+        completed_at=completed_at,
+    )
+
+    results_completed = int(totals.get("completed", 0)) if totals else 0
+    results_failed = int(totals.get("failed", 0)) if totals else 0
+    results_count = results_completed + results_failed
+
+    if analysis_valid and results_count > 0:
+        try:
+            update_note_style_stage_status(
+                sid,
+                runs_root=runs_root,
+                sent=True,
+                completed_at=completed_at,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "NOTE_STYLE_MANIFEST_STAGE_STATUS_UPDATE_FAILED sid=%s account_id=%s path=%s",
+                sid,
+                account_id,
+                str(result_path),
+                exc_info=True,
+            )
+        else:
+            log.info(
+                "NOTE_STYLE_MANIFEST_STAGE_STATUS_UPDATED sid=%s account_id=%s results=%d",
+                sid,
+                account_id,
+                results_count,
+            )
 
     return result_path
 

@@ -1240,6 +1240,7 @@ def _refresh_after_index_update(
     updated_entry: Mapping[str, Any] | None,
     totals: Mapping[str, Any],
     skipped_count: int,
+    completed_at_override: str | None = None,
 ) -> None:
     packs_total = int(totals.get("total", 0))
     packs_completed = int(totals.get("completed", 0))
@@ -1355,12 +1356,16 @@ def _refresh_after_index_update(
 
     any_results = (packs_completed + packs_failed) > 0
     completed_timestamp: str | None
-    if packs_total == 0 or any_results:
+    if completed_at_override is not None:
+        completed_timestamp = completed_at_override
+    elif packs_total == 0 or any_results:
         completed_timestamp = _now_iso()
     else:
         completed_timestamp = None
 
     sent_flag = packs_total == 0 or any_results
+    if completed_at_override:
+        sent_flag = True
 
     try:
         update_note_style_stage_status(
@@ -1395,6 +1400,57 @@ def _refresh_after_index_update(
         )
 
 
+def complete_note_style_result(
+    sid: str,
+    account_id: str,
+    *,
+    runs_root: Path | str | None = None,
+    paths: NoteStylePaths | None = None,
+    account_paths: NoteStyleAccountPaths | None = None,
+    completed_at: str | None = None,
+    update_stage: bool = True,
+) -> tuple[Mapping[str, Any] | None, dict[str, int], int, bool]:
+    """Mark ``account_id`` as completed and refresh note_style stage data."""
+
+    runs_root_path = _resolve_runs_root(runs_root)
+    ensure_note_style_section(sid, runs_root=runs_root_path)
+
+    resolved_paths = paths or ensure_note_style_paths(runs_root_path, sid, create=True)
+    resolved_account_paths = account_paths or ensure_note_style_account_paths(
+        resolved_paths, account_id, create=True
+    )
+
+    writer = NoteStyleIndexWriter(sid=sid, paths=resolved_paths)
+    updated_entry, totals, skipped_count, analysis_valid = writer.mark_completed(
+        account_id,
+        pack_path=resolved_account_paths.pack_file,
+        result_path=resolved_account_paths.result_file,
+        completed_at=completed_at,
+    )
+
+    if update_stage:
+        if analysis_valid:
+            _refresh_after_index_update(
+                sid=sid,
+                account_id=account_id,
+                runs_root_path=runs_root_path,
+                paths=resolved_paths,
+                updated_entry=updated_entry,
+                totals=totals,
+                skipped_count=skipped_count,
+                completed_at_override=completed_at,
+            )
+        else:
+            log.warning(
+                "NOTE_STYLE_REFRESH_DEFERRED sid=%s account_id=%s reason=%s",
+                sid,
+                account_id,
+                "analysis_missing",
+            )
+
+    return updated_entry, totals, skipped_count, analysis_valid
+
+
 def store_note_style_result(
     sid: str,
     account_id: str,
@@ -1402,6 +1458,7 @@ def store_note_style_result(
     *,
     runs_root: Path | str | None = None,
     completed_at: str | None = None,
+    update_index: bool = True,
 ) -> Path:
     """Persist the model ``payload`` for ``account_id`` and update the index."""
 
@@ -1481,29 +1538,14 @@ def store_note_style_result(
         risk_flags=risk_flags_payload,
     )
 
-    writer = NoteStyleIndexWriter(sid=sid, paths=paths)
-    updated_entry, totals, skipped_count, analysis_valid = writer.mark_completed(
-        account_id,
-        pack_path=account_paths.pack_file,
-        result_path=account_paths.result_file,
-        completed_at=completed_at,
-    )
-    if analysis_valid:
-        _refresh_after_index_update(
-            sid=sid,
-            account_id=account_id,
-            runs_root_path=runs_root_path,
-            paths=paths,
-            updated_entry=updated_entry,
-            totals=totals,
-            skipped_count=skipped_count,
-        )
-    else:
-        log.warning(
-            "NOTE_STYLE_REFRESH_DEFERRED sid=%s account_id=%s reason=%s",
+    if update_index:
+        complete_note_style_result(
             sid,
             account_id,
-            "analysis_missing",
+            runs_root=runs_root_path,
+            paths=paths,
+            account_paths=account_paths,
+            completed_at=completed_at,
         )
 
     return account_paths.result_file
@@ -1559,6 +1601,7 @@ def record_note_style_failure(
 
 __all__ = [
     "NoteStyleIndexWriter",
+    "complete_note_style_result",
     "record_note_style_failure",
     "store_note_style_result",
 ]

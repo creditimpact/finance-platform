@@ -589,9 +589,12 @@ def update_note_style_stage_status(
         if isinstance(stage_status, dict):
             changed |= _assign(stage_status, "sent", sent_value)
     if completed_at is not None:
-        changed |= _assign(status_payload, "completed_at", completed_at)
+        completed_value = str(completed_at).strip() if completed_at is not None else ""
+        if not completed_value:
+            completed_value = _now_iso()
+        changed |= _assign(status_payload, "completed_at", completed_value)
         if isinstance(stage_status, dict):
-            changed |= _assign(stage_status, "completed_at", completed_at)
+            changed |= _assign(stage_status, "completed_at", completed_value)
 
     if changed:
         persist_manifest(target_manifest)

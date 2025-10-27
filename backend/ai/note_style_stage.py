@@ -67,6 +67,36 @@ _ZERO_WIDTH_TRANSLATION = {
 _MANIFEST_WAIT_ATTEMPTS = 20
 _MANIFEST_WAIT_DELAY_SECONDS = 0.1
 
+
+_LOGGED_PATH_STATES: set[str] = set()
+
+
+def _log_resolved_paths(sid: str, paths: NoteStylePaths) -> None:
+    signature = "|".join(
+        [
+            sid,
+            paths.base.as_posix(),
+            paths.packs_dir.as_posix(),
+            paths.results_dir.as_posix(),
+            paths.index_file.as_posix(),
+            paths.log_file.as_posix(),
+        ]
+    )
+    if signature in _LOGGED_PATH_STATES:
+        return
+
+    _LOGGED_PATH_STATES.add(signature)
+    log.info(
+        "NOTE_STYLE_STAGE_PATHS sid=%s base=%s packs=%s results=%s index=%s logs=%s manifest_paths=%s",
+        sid,
+        paths.base,
+        paths.packs_dir,
+        paths.results_dir,
+        paths.index_file,
+        paths.log_file,
+        config.NOTE_STYLE_USE_MANIFEST_PATHS,
+    )
+
 @dataclass(frozen=True)
 class NoteStyleResponseAccount:
     """Details about a frontend response discovered for the stage."""
@@ -681,6 +711,7 @@ def build_note_style_pack_for_account(
     runs_root_path = _resolve_runs_root(runs_root)
     ensure_note_style_section(sid, runs_root=runs_root_path)
     paths = resolve_note_style_stage_paths(runs_root_path, sid, create=True)
+    _log_resolved_paths(sid, paths)
 
     response_path = _resolve_response_path(sid, account_id, runs_root_path)
     payload = _load_json_data(response_path)

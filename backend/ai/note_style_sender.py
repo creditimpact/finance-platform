@@ -33,6 +33,37 @@ log = logging.getLogger(__name__)
 _INDEX_THIN_THRESHOLD_BYTES = 128
 
 
+_PATH_LOG_CACHE: set[str] = set()
+
+
+def _log_sender_paths(sid: str, paths: NoteStylePaths) -> None:
+    signature = "|".join(
+        [
+            sid,
+            paths.base.as_posix(),
+            paths.packs_dir.as_posix(),
+            paths.results_dir.as_posix(),
+            paths.index_file.as_posix(),
+            paths.log_file.as_posix(),
+        ]
+    )
+
+    if signature in _PATH_LOG_CACHE:
+        return
+
+    _PATH_LOG_CACHE.add(signature)
+    log.info(
+        "NOTE_STYLE_SEND_PATHS sid=%s base=%s packs=%s results=%s index=%s logs=%s manifest_paths=%s",
+        sid,
+        paths.base,
+        paths.packs_dir,
+        paths.results_dir,
+        paths.index_file,
+        paths.log_file,
+        config.NOTE_STYLE_USE_MANIFEST_PATHS,
+    )
+
+
 def _resolve_runs_root(runs_root: Path | str | None) -> Path:
     def _coerce(value: Path | str) -> Path:
         if isinstance(value, Path):
@@ -810,6 +841,7 @@ def send_note_style_packs_for_sid(
 
     runs_root_path = _resolve_runs_root(runs_root)
     paths = resolve_note_style_stage_paths(runs_root_path, sid, create=False)
+    _log_sender_paths(sid, paths)
     _warn_if_index_thin(paths, sid=sid)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
@@ -1019,6 +1051,7 @@ def send_note_style_pack_for_account(
 ) -> bool:
     runs_root_path = _resolve_runs_root(runs_root)
     paths = resolve_note_style_stage_paths(runs_root_path, sid, create=False)
+    _log_sender_paths(sid, paths)
     _warn_if_index_thin(paths, sid=sid)
     candidate: _PackCandidate | None = None
     if config.NOTE_STYLE_USE_MANIFEST_PATHS:

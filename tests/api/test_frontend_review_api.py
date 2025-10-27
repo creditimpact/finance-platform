@@ -485,8 +485,10 @@ def test_frontend_review_submit_builds_note_style_pack(api_client, monkeypatch):
         or {"status": "completed"},
     )
     monkeypatch.setattr(
-        "backend.api.app.schedule_prepare_and_send",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not run")),
+        "backend.api.app._schedule_note_style_send_after_delay",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("should not run")
+        ),
     )
     monkeypatch.setattr(
         "backend.api.app.config.NOTE_STYLE_SEND_ON_RESPONSE_WRITE", False
@@ -521,7 +523,7 @@ def test_frontend_review_submit_schedules_note_style_send_when_enabled(
     )
     prepare_calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        "backend.api.app.schedule_prepare_and_send",
+        "backend.api.app._schedule_note_style_send_after_delay",
         lambda *args, **kwargs: prepare_calls.append((args, kwargs)),
     )
     monkeypatch.setattr(
@@ -539,7 +541,7 @@ def test_frontend_review_submit_schedules_note_style_send_when_enabled(
     assert build_calls == [(sid, account_id, runs_root)]
     assert len(prepare_calls) == 1
     call_args, call_kwargs = prepare_calls[0]
-    assert call_args == (sid,)
+    assert call_args == (sid, account_id)
     assert call_kwargs == {"runs_root": runs_root}
 def test_frontend_review_submit_honors_stage_responses_override(api_client, monkeypatch):
     client, runs_root = api_client

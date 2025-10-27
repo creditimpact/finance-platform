@@ -110,6 +110,8 @@ _CLAIMS_SCHEMA_DATA = load_claims_schema()
 _ALL_CLAIM_KEYS = all_claim_keys()
 _AUTO_ATTACH_BASE = tuple(auto_attach_base())
 
+_NOTE_STYLE_SEND_DELAY_MS = 300
+
 _CANONICAL_DOC_KEY_TO_ALIASES: dict[str, tuple[str, ...]] = {}
 if DOC_KEY_ALIAS_TO_CANONICAL:
     alias_map: dict[str, set[str]] = {}
@@ -386,6 +388,42 @@ def _response_filename_for_account(account_id: str) -> str:
 
     sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", trimmed) or "account"
     return f"{sanitized}.result.json"
+
+
+def _schedule_note_style_send_after_delay(
+    sid: str,
+    account_id: str,
+    *,
+    runs_root: Path,
+    delay_ms: int = _NOTE_STYLE_SEND_DELAY_MS,
+) -> None:
+    delay_seconds = max(delay_ms, 0) / 1000.0
+
+    logger.info(
+        "NOTE_STYLE_SEND_SCHEDULED sid=%s account_id=%s delay_ms=%s",
+        sid,
+        account_id,
+        int(delay_seconds * 1000),
+    )
+
+    def _invoke() -> None:
+        try:
+            schedule_prepare_and_send(sid, runs_root=runs_root)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "NOTE_STYLE_SEND_SCHEDULE_FAILED sid=%s account_id=%s",
+                sid,
+                account_id,
+                exc_info=True,
+            )
+
+    if delay_seconds <= 0:
+        _invoke()
+        return
+
+    timer = threading.Timer(delay_seconds, _invoke)
+    timer.daemon = True
+    timer.start()
 
 
 def _sanitize_upload_component(value: str, default: str = "item") -> str:
@@ -2121,15 +2159,11 @@ def api_frontend_review_answer(sid: str, account_id: str):
         ):
             status_text = str(build_result.get("status") or "").strip().lower()
             if status_text == "completed":
-                try:
-                    schedule_prepare_and_send(sid, runs_root=run_dir.parent)
-                except Exception:  # pragma: no cover - defensive logging
-                    logger.warning(
-                        "NOTE_STYLE_SEND_SCHEDULE_FAILED sid=%s account_id=%s",
-                        sid,
-                        account_id,
-                        exc_info=True,
-                    )
+                _schedule_note_style_send_after_delay(
+                    sid,
+                    account_id,
+                    runs_root=run_dir.parent,
+                )
 
     try:
         reconcile_umbrella_barriers(sid, runs_root=run_dir.parent)

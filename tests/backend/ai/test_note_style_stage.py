@@ -277,7 +277,9 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     user_message = pack_payload["messages"][1]
     assert user_message["role"] == "user"
     user_content = user_message["content"]
-    assert user_content == {
+    assert isinstance(user_content, str)
+    parsed_user_content = json.loads(user_content)
+    assert parsed_user_content == {
         "meta_name": "Capital One",
         "primary_issue_tag": "late_payment",
         "bureau_data": bureau_data,
@@ -419,7 +421,10 @@ def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:
     bureau_data = pack_payload["bureau_data"]
     assert bureau_data["account_type"] == "Credit Card"
     assert pack_payload["primary_issue_tag"] == "balance_dispute"
-    assert pack_payload["messages"][1]["content"] == {
+    user_content = pack_payload["messages"][1]["content"]
+    assert isinstance(user_content, str)
+    parsed_content = json.loads(user_content)
+    assert parsed_content == {
         "meta_name": "Sample Creditor",
         "primary_issue_tag": "balance_dispute",
         "bureau_data": bureau_data,
@@ -490,7 +495,10 @@ def test_note_style_stage_resolves_relative_manifest_paths(tmp_path: Path) -> No
     bureau_data = pack_payload["bureau_data"]
     assert bureau_data["account_status"] == "Open"
     assert pack_payload["primary_issue_tag"] == "relative_path"
-    assert pack_payload["messages"][1]["content"] == {
+    user_content = pack_payload["messages"][1]["content"]
+    assert isinstance(user_content, str)
+    parsed_content = json.loads(user_content)
+    assert parsed_content == {
         "meta_name": "Relative Creditor",
         "primary_issue_tag": "relative_path",
         "bureau_data": bureau_data,
@@ -558,7 +566,9 @@ def test_note_style_stage_handles_missing_context(
     assert "NOTE_STYLE_WARN: missing context for account idx-002 (meta/tags/bureaus)" in caplog.text
 
     user_context = pack_payload["messages"][1]["content"]
-    assert user_context == {
+    assert isinstance(user_context, str)
+    parsed_user_context = json.loads(user_context)
+    assert parsed_user_context == {
         "meta_name": account_id,
         "primary_issue_tag": None,
         "bureau_data": bureau_data,

@@ -12,6 +12,7 @@ import shutil
 import tempfile
 from collections import Counter
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -646,78 +647,47 @@ def _looks_like_holder_heading(text: str) -> bool:
     return True
 
 
-def _derive_holder_name(meta: Mapping[str, Any] | None, raw_lines_path: Path) -> str | None:
-    meta_heading = None
-    if isinstance(meta, Mapping):
-        meta_heading = _extract_text(meta.get("heading_guess"))
-        if meta_heading:
-            return meta_heading
+def _derive_holder_name_from_summary(
+    summary: Mapping[str, Any] | None,
+    fields_flat: Mapping[str, Any] | None,
+) -> str | None:
+    candidates: list[Any] = []
 
-    raw_payload = _load_json_payload(raw_lines_path)
-    ordered_lines: list[str] = []
-    if isinstance(raw_payload, Sequence) and not isinstance(raw_payload, (str, bytes, bytearray)):
-        page_start = None
-        line_start = None
+    if isinstance(summary, Mapping):
+        candidates.extend(
+            [
+                summary.get("holder_name"),
+                summary.get("consumer_name"),
+                summary.get("consumer"),
+            ]
+        )
+
+        labels = summary.get("labels")
+        if isinstance(labels, Mapping):
+            candidates.append(labels.get("holder_name"))
+            candidates.append(labels.get("consumer_name"))
+
+        normalized = summary.get("normalized")
+        if isinstance(normalized, Mapping):
+            candidates.append(normalized.get("holder_name"))
+
+        meta = summary.get("meta")
         if isinstance(meta, Mapping):
-            page_value = meta.get("page_start")
-            if isinstance(page_value, int):
-                page_start = page_value
-            line_value = meta.get("line_start")
-            if isinstance(line_value, int):
-                line_start = line_value
+            candidates.append(meta.get("holder_name"))
+            candidates.append(meta.get("heading_guess"))
 
-        entries: list[tuple[int, str, int | None, int | None]] = []
-        for index, entry in enumerate(raw_payload):
-            text_value: str | None = None
-            page_value: int | None = None
-            line_value: int | None = None
-            if isinstance(entry, Mapping):
-                raw_text = entry.get("text")
-                if isinstance(raw_text, str):
-                    text_value = raw_text.strip()
-                raw_page = entry.get("page")
-                if isinstance(raw_page, int):
-                    page_value = raw_page
-                raw_line = entry.get("line")
-                if isinstance(raw_line, int):
-                    line_value = raw_line
-            elif isinstance(entry, str):
-                text_value = entry.strip()
+    if isinstance(fields_flat, Mapping):
+        for key in ("holder_name", "consumer_name"):
+            value = fields_flat.get(key)
+            if value:
+                candidates.append(value)
 
-            if not text_value:
-                continue
-            entries.append((index, text_value, page_value, line_value))
+    for candidate in candidates:
+        text = _extract_text(candidate)
+        if text:
+            return text
 
-        if entries:
-            def sort_key(item: tuple[int, str, int | None, int | None]) -> tuple[int, int]:
-                index, _text, page_value, line_value = item
-                if page_start is None and line_start is None:
-                    return (0, index)
-
-                penalty = 0
-                if page_start is not None:
-                    if page_value is None:
-                        penalty += 500
-                    else:
-                        penalty += abs(page_value - page_start) * 100
-                if line_start is not None:
-                    if line_value is None:
-                        penalty += 25
-                    else:
-                        penalty += abs(line_value - line_start)
-                return (penalty, index)
-
-            entries.sort(key=sort_key)
-            ordered_lines = [item[1] for item in entries]
-
-    if not ordered_lines:
-        ordered_lines = [
-            candidate.strip()
-            for candidate in _load_raw_lines(raw_lines_path)
-            if isinstance(candidate, str) and candidate.strip()
-        ]
-
-    return holder_name_from_raw_lines(ordered_lines)
+    return None
 
 
 def _extract_issue_tags(tags_path: Path) -> tuple[str | None, list[str]]:
@@ -762,35 +732,182 @@ def _summarize_balance(balance_payload: Mapping[str, Any] | None) -> str | None:
     return None
 
 
-def _prepare_bureau_payload(bureaus: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    badges = [dict(_BUREAU_BADGES[bureau]) for bureau in bureaus if bureau in _BUREAU_BADGES]
-
-    displays = [
-        str(payload.get("account_number_display") or "")
-        for payload in bureaus.values()
-        if isinstance(payload, Mapping)
+def _prepare_bureau_payload_from_flat(
+    *,
+    account_number_values: Mapping[str, str],
+    balance_values: Mapping[str, str],
+    date_opened_values: Mapping[str, str],
+    closed_date_values: Mapping[str, str],
+    date_reported_values: Mapping[str, str],
+    reported_bureaus: Iterable[str],
+) -> dict[str, Any]:
+    badges = [
+        dict(_BUREAU_BADGES[bureau])
+        for bureau in reported_bureaus
+        if bureau in _BUREAU_BADGES
     ]
+
+    if not badges:
+        badges = [dict(_BUREAU_BADGES[bureau]) for bureau in _BUREAU_ORDER]
+
+    displays = [value for value in account_number_values.values() if isinstance(value, str)]
     last4_info = _extract_last4(displays)
 
-    balance_per_bureau, balance_consensus = _collect_field_per_bureau(bureaus, "balance_owed")
-
-    date_opened_per_bureau, _ = _collect_field_per_bureau(bureaus, "date_opened")
-    closed_date_per_bureau, _ = _collect_field_per_bureau(bureaus, "closed_date")
-    date_reported_per_bureau, _ = _collect_field_per_bureau(bureaus, "date_reported")
+    balance_consensus = _resolve_majority_consensus(balance_values)
 
     return {
         "last4": last4_info,
         "balance_owed": {
-            "per_bureau": balance_per_bureau,
+            "per_bureau": dict(balance_values),
             **({"consensus": balance_consensus} if balance_consensus else {}),
         },
         "dates": {
-            "date_opened": date_opened_per_bureau,
-            "closed_date": closed_date_per_bureau,
-            "date_reported": date_reported_per_bureau,
+            "date_opened": dict(date_opened_values),
+            "closed_date": dict(closed_date_values),
+            "date_reported": dict(date_reported_values),
         },
         "bureau_badges": badges,
     }
+
+
+def _stringify_flat_value(value: Any) -> str | None:
+    if isinstance(value, (int, float, Decimal)):
+        return str(value)
+
+    if isinstance(value, Mapping):
+        for key in (
+            "display",
+            "text",
+            "label",
+            "normalized",
+            "value",
+            "amount",
+            "raw",
+            "name",
+        ):
+            candidate = value.get(key)
+            text = _stringify_flat_value(candidate)
+            if text:
+                return text
+        return None
+
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+
+    return None
+
+
+def _flat_lookup(
+    flat_payload: Mapping[str, Any] | None, field: str, bureau: str | None = None
+) -> Any:
+    if not isinstance(flat_payload, Mapping):
+        return None
+
+    if bureau is not None:
+        per_bureau = flat_payload.get("per_bureau")
+        if isinstance(per_bureau, Mapping):
+            candidate = per_bureau.get(bureau)
+            if isinstance(candidate, Mapping):
+                inner = candidate.get(field)
+                if inner is not None:
+                    return inner
+            elif candidate is not None:
+                return candidate
+
+        bureau_payload = flat_payload.get(bureau)
+        if isinstance(bureau_payload, Mapping):
+            direct = bureau_payload.get(field)
+            if direct is not None:
+                return direct
+            nested = bureau_payload.get("fields")
+            if isinstance(nested, Mapping):
+                candidate = nested.get(field)
+                if candidate is not None:
+                    return candidate
+
+        for key in (
+            f"{bureau}_{field}",
+            f"{field}_{bureau}",
+            f"{bureau}.{field}",
+            f"{field}.{bureau}",
+        ):
+            if key in flat_payload:
+                return flat_payload[key]
+
+    field_payload = flat_payload.get(field)
+    if isinstance(field_payload, Mapping):
+        if bureau is not None:
+            candidate = field_payload.get(bureau)
+            if candidate is not None:
+                return candidate
+        per_bureau = field_payload.get("per_bureau")
+        if isinstance(per_bureau, Mapping) and bureau is not None:
+            candidate = per_bureau.get(bureau)
+            if candidate is not None:
+                return candidate
+        value = field_payload.get("value")
+        if value is not None and bureau is None:
+            return value
+
+    return None
+
+
+def _collect_flat_field_per_bureau(
+    flat_payload: Mapping[str, Any] | None, field: str
+) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for bureau in _BUREAU_ORDER:
+        raw_value = _flat_lookup(flat_payload, field, bureau)
+        text = _stringify_flat_value(raw_value)
+        if text:
+            values[bureau] = text
+    return values
+
+
+def _collect_flat_consensus(flat_payload: Mapping[str, Any] | None, field: str) -> str | None:
+    values: set[str] = set()
+    if not isinstance(flat_payload, Mapping):
+        return None
+
+    value = _stringify_flat_value(flat_payload.get(field))
+    if value:
+        values.add(value)
+
+    for bureau in _BUREAU_ORDER:
+        bureau_value = _stringify_flat_value(_flat_lookup(flat_payload, field, bureau))
+        if bureau_value:
+            values.add(bureau_value)
+
+    if len(values) == 1:
+        return next(iter(values))
+    return None
+
+
+def _determine_reported_bureaus(
+    summary: Mapping[str, Any] | None,
+    flat_payload: Mapping[str, Any] | None,
+) -> list[str]:
+    reported: list[str] = []
+
+    if isinstance(summary, Mapping):
+        bureaus = summary.get("bureaus")
+        if isinstance(bureaus, Sequence):
+            for entry in bureaus:
+                if isinstance(entry, str):
+                    normalized = entry.strip().lower()
+                    if normalized in _BUREAU_BADGES and normalized not in reported:
+                        reported.append(normalized)
+
+    if isinstance(flat_payload, Mapping):
+        for bureau in _BUREAU_ORDER:
+            if bureau in reported:
+                continue
+            candidate = _flat_lookup(flat_payload, "account_number_display", bureau)
+            if _stringify_flat_value(candidate):
+                reported.append(bureau)
+
+    return reported
 
 
 def _normalize_per_bureau(source: Mapping[str, Any] | None) -> dict[str, str]:
@@ -1468,84 +1585,131 @@ def generate_frontend_packs_for_run(
         built_docs = 0
         unchanged_docs = 0
         skipped_missing = 0
-        skip_reasons = {"missing_inputs": 0, "no_bureaus": 0}
+        skip_reasons = {"missing_summary": 0}
         write_errors: list[tuple[str, Exception]] = []
         pack_count = 0
 
         for account_dir in account_dirs:
-            summary = _load_json(account_dir / "summary.json")
-            bureaus_payload = _load_json(account_dir / "bureaus.json")
-            if not summary or not bureaus_payload:
+            summary_path = account_dir / "summary.json"
+            summary = _load_json(summary_path)
+            if not summary:
                 skipped_missing += 1
-                skip_reasons["missing_inputs"] += 1
-                continue
-
-            bureaus: dict[str, Mapping[str, Any]] = {
-                bureau: payload
-                for bureau, payload in bureaus_payload.items()
-                if isinstance(payload, Mapping)
-            }
-            if not bureaus:
-                skipped_missing += 1
-                skip_reasons["no_bureaus"] += 1
+                skip_reasons["missing_summary"] = skip_reasons.get("missing_summary", 0) + 1
+                log.warning(
+                    "FRONTEND_PACK_MISSING_SUMMARY sid=%s path=%s",
+                    sid,
+                    summary_path,
+                )
                 continue
 
             account_id = str(summary.get("account_id") or account_dir.name)
             current_account_id = account_id
-            labels = _extract_summary_labels(summary)
-            bureau_summary = _prepare_bureau_payload(bureaus)
-            first_bureau = next(iter(bureaus.values()), {})
-            meta_payload = _load_json(account_dir / "meta.json")
-            raw_path = account_dir / "raw_lines.json"
+
+            flat_path = account_dir / "fields_flat.json"
+            fields_flat_payload = _load_json(flat_path)
+            if fields_flat_payload is None:
+                log.warning(
+                    "FRONTEND_PACK_MISSING_FLAT sid=%s account=%s path=%s",
+                    sid,
+                    account_id,
+                    flat_path,
+                )
+
             tags_path = account_dir / "tags.json"
-            holder_name = _derive_holder_name(meta_payload, raw_path)
+            if not tags_path.exists():
+                log.warning(
+                    "FRONTEND_PACK_MISSING_TAGS sid=%s account=%s path=%s",
+                    sid,
+                    account_id,
+                    tags_path,
+                )
+
+            labels = _extract_summary_labels(summary)
+            holder_name = _derive_holder_name_from_summary(summary, fields_flat_payload)
             primary_issue, issues = _extract_issue_tags(tags_path)
             if not primary_issue:
                 primary_issue = "unknown"
 
-            display_holder_name = _coerce_display_text(holder_name)
-            display_primary_issue = _coerce_display_text(primary_issue)
-            
-            creditor_name_value = labels.get("creditor_name") or _extract_text(
-                first_bureau.get("creditor_name")
+            display_holder_name = _coerce_display_text(
+                holder_name or labels.get("creditor_name") or ""
             )
-            account_type_value = labels.get("account_type") or _extract_text(
-                first_bureau.get("account_type")
-            )
-            status_value = labels.get("status") or _extract_text(
-                first_bureau.get("account_status")
-            )
+            if not display_holder_name:
+                display_holder_name = "Unknown"
+            display_primary_issue = _coerce_display_text(primary_issue or "unknown")
 
-            balance_payload = bureau_summary.get("balance_owed")
-            per_bureau_balance_source = None
-            if isinstance(balance_payload, Mapping):
-                per_bureau_balance_source = balance_payload.get("per_bureau")
-            balance_per_bureau = _normalize_per_bureau(per_bureau_balance_source)
-
-            account_number_values = _collect_field_text_values(
-                bureaus, "account_number_display"
+            account_number_values_raw = _collect_flat_field_per_bureau(
+                fields_flat_payload, "account_number_display"
             )
-            account_number_per_bureau = _normalize_per_bureau(account_number_values)
+            account_number_per_bureau = _normalize_per_bureau(account_number_values_raw)
             account_number_consensus = _resolve_account_number_consensus(
                 account_number_per_bureau
             )
 
-            account_type_values = _collect_field_text_values(bureaus, "account_type")
-            account_type_per_bureau = _normalize_per_bureau(account_type_values)
+            account_type_values_raw = _collect_flat_field_per_bureau(
+                fields_flat_payload, "account_type"
+            )
+            account_type_per_bureau = _normalize_per_bureau(account_type_values_raw)
             account_type_consensus = _resolve_majority_consensus(account_type_per_bureau)
+            if account_type_consensus == "--":
+                fallback_account_type = labels.get("account_type") or _collect_flat_consensus(
+                    fields_flat_payload, "account_type"
+                )
+                if fallback_account_type:
+                    account_type_consensus = fallback_account_type
 
-            status_values = _collect_field_text_values(bureaus, "account_status")
-            status_per_bureau = _normalize_per_bureau(status_values)
+            status_values_raw = _collect_flat_field_per_bureau(
+                fields_flat_payload, "account_status"
+            )
+            status_per_bureau = _normalize_per_bureau(status_values_raw)
             status_consensus = _resolve_majority_consensus(status_per_bureau)
+            if status_consensus == "--":
+                fallback_status = labels.get("status") or _collect_flat_consensus(
+                    fields_flat_payload, "account_status"
+                )
+                if fallback_status:
+                    status_consensus = fallback_status
 
-            dates_payload = bureau_summary.get("dates")
-            date_opened_source = None
-            closed_date_source = None
-            if isinstance(dates_payload, Mapping):
-                date_opened_source = dates_payload.get("date_opened")
-                closed_date_source = dates_payload.get("closed_date")
-            date_opened_per_bureau = _normalize_per_bureau(date_opened_source)
-            closed_date_per_bureau = _normalize_per_bureau(closed_date_source)
+            balance_values_raw = _collect_flat_field_per_bureau(
+                fields_flat_payload, "balance_owed"
+            )
+            balance_per_bureau = _normalize_per_bureau(balance_values_raw)
+
+            date_opened_values_raw = _collect_flat_field_per_bureau(
+                fields_flat_payload, "date_opened"
+            )
+            date_opened_per_bureau = _normalize_per_bureau(date_opened_values_raw)
+
+            closed_date_values_raw = _collect_flat_field_per_bureau(
+                fields_flat_payload, "closed_date"
+            )
+            closed_date_per_bureau = _normalize_per_bureau(closed_date_values_raw)
+
+            date_reported_values_raw = _collect_flat_field_per_bureau(
+                fields_flat_payload, "date_reported"
+            )
+            date_reported_per_bureau = _normalize_per_bureau(date_reported_values_raw)
+
+            reported_bureaus = _determine_reported_bureaus(summary, fields_flat_payload)
+            bureau_summary = _prepare_bureau_payload_from_flat(
+                account_number_values=account_number_per_bureau,
+                balance_values=balance_per_bureau,
+                date_opened_values=date_opened_per_bureau,
+                closed_date_values=closed_date_per_bureau,
+                date_reported_values=date_reported_per_bureau,
+                reported_bureaus=reported_bureaus,
+            )
+
+            creditor_name_value = labels.get("creditor_name") or _stringify_flat_value(
+                _flat_lookup(fields_flat_payload, "creditor_name")
+            ) or _extract_text(summary.get("creditor_name"))
+            account_type_value = (
+                account_type_consensus
+                if account_type_consensus != "--"
+                else labels.get("account_type")
+            )
+            status_value = (
+                status_consensus if status_consensus != "--" else labels.get("status")
+            )
 
             display_payload = build_display_payload(
                 holder_name=display_holder_name,
@@ -1567,12 +1731,9 @@ def generate_frontend_packs_for_run(
                 relative_account_dir = account_dir.as_posix()
 
             pointers = {
-                "meta": f"{relative_account_dir}/meta.json",
-                "tags": f"{relative_account_dir}/tags.json",
-                "raw": f"{relative_account_dir}/raw_lines.json",
-                "bureaus": f"{relative_account_dir}/bureaus.json",
-                "flat": f"{relative_account_dir}/fields_flat.json",
                 "summary": f"{relative_account_dir}/summary.json",
+                "tags": f"{relative_account_dir}/tags.json",
+                "flat": f"{relative_account_dir}/fields_flat.json",
             }
 
             full_pack_payload: dict[str, Any] | None = None

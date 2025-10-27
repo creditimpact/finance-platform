@@ -19,6 +19,7 @@ from backend.ai.manifest import (
     register_note_style_build,
     update_note_style_stage_status,
 )
+from backend.ai.note_style_paths import _normalize_path_for_worker
 from backend.core.ai.paths import (
     NoteStylePaths,
     ensure_note_style_account_paths,
@@ -83,10 +84,34 @@ def _now_iso() -> str:
 
 
 def _resolve_runs_root(runs_root: Path | str | None) -> Path:
+    def _coerce(value: Path | str) -> Path:
+        if isinstance(value, Path):
+            return value.resolve()
+
+        text = str(value or "").strip()
+        if not text:
+            return Path("runs").resolve()
+
+        sanitized = text.replace("\\", "/")
+        if len(sanitized) >= 2 and sanitized[1] == ":":
+            try:
+                return _normalize_path_for_worker(Path("/"), sanitized)
+            except ValueError:
+                return Path("runs").resolve()
+
+        candidate = Path(sanitized)
+        if candidate.is_absolute():
+            return candidate.resolve()
+
+        return (Path.cwd() / candidate).resolve()
+
     if runs_root is None:
         env_root = os.getenv("RUNS_ROOT")
-        return Path(env_root) if env_root else Path("runs")
-    return Path(runs_root)
+        if env_root:
+            return _coerce(env_root)
+        return Path("runs").resolve()
+
+    return _coerce(runs_root)
 
 
 def _load_json_data(path: Path) -> Any:

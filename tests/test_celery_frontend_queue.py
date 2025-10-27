@@ -21,9 +21,9 @@ def test_frontend_queue_registered(monkeypatch):
     assert frontend_route.get("routing_key") == "frontend"
 
     note_style_tasks = {
-        "backend.ai.note_style.note_style_prepare_and_send_task",
-        "backend.ai.note_style.note_style_send_account_task",
-        "backend.ai.note_style.note_style_send_sid_task",
+        "backend.ai.note_style.tasks.note_style_prepare_and_send_task",
+        "backend.ai.note_style.tasks.note_style_send_account_task",
+        "backend.ai.note_style.tasks.note_style_send_sid_task",
     }
     for task_name in note_style_tasks:
         route = routes.get(task_name)

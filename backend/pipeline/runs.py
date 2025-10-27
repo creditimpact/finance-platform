@@ -362,6 +362,7 @@ class RunManifest:
         defaults: dict[str, object] = {
             "built": False,
             "sent": False,
+            "failed": False,
             "completed_at": None,
         }
         return defaults
@@ -440,11 +441,17 @@ class RunManifest:
                 note_style_section.setdefault(key, None)
         status_payload = note_style_section.get("status")
         if not isinstance(status_payload, dict):
-            status_payload = {"built": False, "sent": False, "completed_at": None}
+            status_payload = {
+                "built": False,
+                "sent": False,
+                "failed": False,
+                "completed_at": None,
+            }
             note_style_section["status"] = status_payload
         else:
             status_payload.setdefault("built", False)
             status_payload.setdefault("sent", False)
+            status_payload.setdefault("failed", False)
             status_payload.setdefault("completed_at", None)
         ai.setdefault(
             "validation",
@@ -514,7 +521,7 @@ class RunManifest:
             return fallback
         payload: dict[str, object] = {}
         for key in stage_defaults:
-            if key in {"built", "sent"}:
+            if key in {"built", "sent", "failed"}:
                 payload[key] = bool(stage_status.get(key))
             else:
                 payload[key] = stage_status.get(key)

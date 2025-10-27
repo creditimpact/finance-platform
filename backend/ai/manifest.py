@@ -402,6 +402,7 @@ class Manifest:
         runs_root: Path | str | None = None,
         built: bool | None = None,
         sent: bool | None = None,
+        failed: bool | None = None,
         completed_at: str | None | object = _MISSING,
     ) -> dict[str, Any]:
         """Update note_style stage status fields inside ``manifest.json``."""
@@ -458,6 +459,9 @@ class Manifest:
         if sent is not None:
             changed |= _assign(status_payload, "sent", bool(sent))
             changed |= _assign(stage_status, "sent", bool(sent))
+        if failed is not None:
+            changed |= _assign(status_payload, "failed", bool(failed))
+            changed |= _assign(stage_status, "failed", bool(failed))
         if completed_at is not _MISSING:
             changed |= _assign(status_payload, "completed_at", completed_at)
             changed |= _assign(stage_status, "completed_at", completed_at)
@@ -495,6 +499,7 @@ def update_note_style_stage_status(
     runs_root: Path | str | None = None,
     built: bool | None = None,
     sent: bool | None = None,
+    failed: bool | None = None,
     completed_at: str | None | object = _MISSING,
 ) -> dict[str, Any]:
     """Proxy for :meth:`Manifest.update_note_style_stage_status`."""
@@ -504,6 +509,7 @@ def update_note_style_stage_status(
         runs_root=runs_root,
         built=built,
         sent=sent,
+        failed=failed,
         completed_at=completed_at,
     )
 

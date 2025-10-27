@@ -17,6 +17,9 @@ def _stage_completed(status: Mapping[str, object] | None) -> bool:
     if not isinstance(status, Mapping):
         return False
 
+    if bool(status.get("failed")):
+        return True
+
     if bool(status.get("sent")):
         return True
 
@@ -30,6 +33,9 @@ def _stage_completed(status: Mapping[str, object] | None) -> bool:
 def _note_style_already_sent(status: Mapping[str, object] | None) -> bool:
     if not isinstance(status, Mapping):
         return False
+
+    if bool(status.get("failed")):
+        return True
 
     if bool(status.get("sent")):
         return True

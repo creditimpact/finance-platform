@@ -637,6 +637,55 @@ def _write_invalid_result_marker(
     return result_path
 
 
+def _extract_error_payload(exc: Exception) -> dict[str, Any]:
+    error_type = exc.__class__.__name__ or "Exception"
+    message = str(exc).strip()
+    code_value: Any | None = None
+    for attr in ("status_code", "http_status", "code"):
+        candidate = getattr(exc, attr, None)
+        if candidate is None:
+            continue
+        if isinstance(candidate, (int, str)):
+            code_value = candidate
+            break
+        try:
+            code_value = int(candidate)  # type: ignore[arg-type]
+            break
+        except (TypeError, ValueError):
+            code_value = str(candidate)
+            break
+
+    error_payload: dict[str, Any] = {"type": error_type}
+    if message:
+        error_payload["message"] = message
+    if code_value is not None:
+        error_payload["code"] = code_value
+    return error_payload
+
+
+def _write_failure_result(
+    *,
+    sid: str,
+    account_paths: NoteStyleAccountPaths,
+    paths: NoteStylePaths,
+    error_payload: Mapping[str, Any],
+) -> Path:
+    filename = f"acc_{account_paths.account_id}.result.json"
+    failure_path = paths.results_dir / filename
+    failure_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": "failed",
+        "account": account_paths.account_id,
+        "sid": sid,
+        "error": dict(error_payload),
+        "completed_at": _now_iso(),
+    }
+    with failure_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+        handle.write("\n")
+    return failure_path
+
+
 def _handle_invalid_response(
     *,
     sid: str,
@@ -728,7 +777,7 @@ def _send_pack_payload(
             model or "",
             latency,
         )
-    except Exception:
+    except Exception as exc:
         latency = time.perf_counter() - start
         log.exception(
             "STYLE_SEND_MODEL_CALL sid=%s account_id=%s model=%s status=error latency=%.3fs",
@@ -737,7 +786,34 @@ def _send_pack_payload(
             model or "",
             latency,
         )
-        raise
+        error_payload = _extract_error_payload(exc)
+        failure_path = _write_failure_result(
+            sid=sid,
+            account_paths=account_paths,
+            paths=paths,
+            error_payload=error_payload,
+        )
+        log.warning(
+            "NOTE_STYLE_RESULT_FAILED_ARTIFACT sid=%s account_id=%s path=%s",
+            sid,
+            account_id,
+            _relativize(failure_path, paths.base),
+        )
+        try:
+            record_note_style_failure(
+                sid,
+                account_id,
+                runs_root=runs_root_path,
+                error=str(error_payload.get("message") or error_payload.get("type")),
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "NOTE_STYLE_FAILURE_RECORD_FAILED sid=%s account_id=%s",
+                sid,
+                account_id,
+                exc_info=True,
+            )
+        return False
 
     try:
         _ensure_valid_json_response(response)

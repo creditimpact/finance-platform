@@ -24,6 +24,7 @@ from backend.runflow.counters import (
     frontend_answers_counters as _frontend_answers_counters,
     stage_counts as _stage_counts_from_disk,
 )
+from backend.runflow.umbrella import schedule_note_style_after_validation
 from backend.validation.index_schema import load_validation_index
 
 from backend.frontend.packs.config import load_frontend_stage_config
@@ -2585,6 +2586,13 @@ def reconcile_umbrella_barriers(
     data["updated_at"] = timestamp
 
     _atomic_write_json(runflow_path, data)
+
+    try:
+        schedule_note_style_after_validation(sid, run_dir=run_dir)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "NOTE_STYLE_AUTOSEND_AFTER_VALIDATION_FAILED sid=%s", sid, exc_info=True
+        )
 
     if _barrier_event_logging_enabled():
         events_path = run_dir / "runflow_events.jsonl"

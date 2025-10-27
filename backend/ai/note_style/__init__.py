@@ -23,7 +23,7 @@ from backend.runflow.decider import record_stage, reconcile_umbrella_barriers
 log = logging.getLogger(__name__)
 
 _DEBOUNCE_MS_ENV = "NOTE_STYLE_DEBOUNCE_MS"
-_DEFAULT_DEBOUNCE_MS = 750
+_DEFAULT_DEBOUNCE_MS = 500
 
 
 def _resolve_runs_root(runs_root: Path | str | None) -> Path:

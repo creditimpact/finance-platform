@@ -171,6 +171,13 @@ _DISALLOWED_MESSAGE_KEY_SUBSTRINGS: tuple[str, ...] = (
 )
 
 
+_STRICT_SYSTEM_MESSAGE_CONTENT = (
+    "You are a formatter. Return ONLY one JSON object with keys: "
+    "note (string), tone (string), confidence (number 0..1). "
+    "No extra text, no code fences, no explanations."
+)
+
+
 def _normalize_message_content(value: Any) -> str | Sequence[Any]:
     """Return content compatible with the chat API."""
 
@@ -256,8 +263,13 @@ def _coerce_messages(payload: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
     for entry in messages:
         if not isinstance(entry, Mapping):
             raise ValueError("Pack messages must be mapping objects")
-        normalized.append(_sanitize_message_entry(entry))
-    return normalized
+        sanitized = _sanitize_message_entry(entry)
+        if str(sanitized.get("role", "")).lower() == "system":
+            continue
+        normalized.append(sanitized)
+
+    system_msg = {"role": "system", "content": _STRICT_SYSTEM_MESSAGE_CONTENT}
+    return [system_msg, *normalized]
 
 
 def _relativize(path: Path, base: Path) -> str:

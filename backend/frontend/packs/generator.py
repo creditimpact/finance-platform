@@ -745,6 +745,7 @@ def _extract_text(value: Any) -> str | None:
             "text",
             "label",
             "display",
+            "display_name",
             "value",
             "normalized",
             "name",
@@ -936,8 +937,12 @@ def _resolve_meta_holder_name(
         for key in (
             "heading_guess",
             "furnisher_name",
+            "furnisher_display_name",
+            "furnisher_display",
             "furnisher",
             "creditor_name",
+            "creditor_display_name",
+            "creditor_display",
             "creditor",
             "name",
         ):
@@ -1012,10 +1017,41 @@ def build_display_from_bureaus(
         _collect_bureau_field_map(bureaus_branches, "creditor_remarks")
     )
 
+    holder_values: dict[str, str] = {}
+    for key in (
+        "creditor_name",
+        "creditor",
+        "furnisher_name",
+        "furnisher",
+        "name",
+    ):
+        values = _collect_bureau_field_map(bureaus_branches, key)
+        if not values:
+            continue
+        for bureau, value in values.items():
+            holder_values.setdefault(bureau, value)
+
+    holder_per_bureau = _normalize_per_bureau(holder_values)
+    holder_consensus = _resolve_majority_consensus(holder_per_bureau)
+
     holder_candidate, _holder_resolver = _resolve_meta_holder_name(meta)
     display_holder_name = _coerce_display_text(holder_candidate)
-    if not display_holder_name:
-        display_holder_name = "Unknown"
+    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+        fallback_holder = None
+        if _has_meaningful_text(holder_consensus, treat_unknown=True):
+            fallback_holder = holder_consensus
+        else:
+            for bureau in _BUREAU_ORDER:
+                candidate = holder_per_bureau.get(bureau)
+                if _has_meaningful_text(candidate, treat_unknown=True):
+                    fallback_holder = candidate
+                    break
+            if not fallback_holder:
+                for candidate in holder_values.values():
+                    if _has_meaningful_text(candidate, treat_unknown=True):
+                        fallback_holder = candidate
+                        break
+        display_holder_name = fallback_holder or "Unknown"
 
     issues = _collect_issue_types(tags)
     primary_issue_value = issues[0] if issues else None

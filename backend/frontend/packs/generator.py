@@ -54,7 +54,12 @@ _DISPLAY_SCHEMA_VERSION = "1.2"
 
 _STAGE_PAYLOAD_MODE_MINIMAL = "minimal"
 _STAGE_PAYLOAD_MODE_FULL = "full"
-_STAGE_PAYLOAD_MODES: set[str] = {_STAGE_PAYLOAD_MODE_MINIMAL, _STAGE_PAYLOAD_MODE_FULL}
+_STAGE_PAYLOAD_MODE_LEGACY = "legacy"
+_STAGE_PAYLOAD_MODES: set[str] = {
+    _STAGE_PAYLOAD_MODE_MINIMAL,
+    _STAGE_PAYLOAD_MODE_FULL,
+    _STAGE_PAYLOAD_MODE_LEGACY,
+}
 
 
 _QUESTION_SET = [
@@ -109,6 +114,42 @@ def _resolve_stage_pack_questions(
     return _coerce_question_list(question_set)
 
 
+def _normalize_claim_field_links(payload: Any) -> dict[str, list[str]]:
+    if not isinstance(payload, Mapping):
+        return {}
+
+    normalized: dict[str, list[str]] = {}
+    for key, values in payload.items():
+        if not isinstance(key, str):
+            continue
+        collected: list[str] = []
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+            for value in values:
+                if not isinstance(value, str):
+                    continue
+                trimmed = value.strip()
+                if not trimmed or trimmed in collected:
+                    continue
+                collected.append(trimmed)
+        if collected:
+            normalized[key] = collected
+    return normalized
+
+
+def _merge_claim_field_links(
+    *sources: Mapping[str, Any] | None,
+) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for source in sources:
+        normalized = _normalize_claim_field_links(source)
+        for key, values in normalized.items():
+            bucket = merged.setdefault(key, [])
+            for value in values:
+                if value not in bucket:
+                    bucket.append(value)
+    return merged
+
+
 _POINTER_KEYS: tuple[str, ...] = (
     "meta",
     "tags",
@@ -155,6 +196,8 @@ def _resolve_stage_payload_mode() -> str:
         return _STAGE_PAYLOAD_MODE_MINIMAL
 
     normalized = value.strip().lower()
+    if normalized == _STAGE_PAYLOAD_MODE_LEGACY:
+        return _STAGE_PAYLOAD_MODE_FULL
     if normalized not in _STAGE_PAYLOAD_MODES:
         log.warning(
             "FRONTEND_STAGE_PAYLOAD_INVALID value=%s", value,
@@ -2599,6 +2642,17 @@ def generate_frontend_packs_for_run(
                     existing_pack=existing_stage_pack,
                     question_set=_QUESTION_SET,
                 )
+
+                merged_claim_links = _merge_claim_field_links(
+                    stage_pack_payload.get("claim_field_links"),
+                    existing_stage_pack.get("claim_field_links")
+                    if isinstance(existing_stage_pack, Mapping)
+                    else None,
+                )
+                if merged_claim_links:
+                    stage_pack_payload["claim_field_links"] = merged_claim_links
+                elif "claim_field_links" in stage_pack_payload:
+                    stage_pack_payload.pop("claim_field_links", None)
 
                 existing_has_meaningful_data = _stage_payload_has_meaningful_data(
                     existing_stage_pack

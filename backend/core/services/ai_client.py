@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -7,7 +8,7 @@ from typing import Any, Dict, List
 from openai import OpenAI
 
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,7 +29,7 @@ class AIClient:
     def __init__(self, config: AIConfig):
         api_key = (config.api_key or "").strip()
         if not api_key:
-            log.error(
+            logger.error(
                 "AI_CLIENT_CREDENTIAL_ERROR model=%s base_url=%s detail=missing_api_key",
                 config.chat_model,
                 (config.base_url or "https://api.openai.com/v1"),
@@ -39,7 +40,7 @@ class AIClient:
 
         base_url = (config.base_url or "").strip() or "https://api.openai.com/v1"
 
-        log.info(
+        logger.info(
             "AI_CLIENT_READY model=%s response_model=%s base_url=%s key_present=yes",
             config.chat_model,
             config.response_model,
@@ -93,7 +94,9 @@ class AIClient:
         presence_penalty = 0
         top_p_value = top_p
 
-        return self._client.chat.completions.create(
+        kwargs.setdefault("response_format", {"type": "json_object"})
+
+        resp = self._client.chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
@@ -102,6 +105,19 @@ class AIClient:
             presence_penalty=presence_penalty,
             **kwargs,
         )
+
+        content = resp.choices[0].message.content
+        try:
+            parsed = json.loads(content)
+        except Exception:
+            from backend.util.json_tools import try_fix_to_json
+
+            fixed = try_fix_to_json(content)
+            parsed = json.loads(fixed)
+            content = fixed
+            logger.warning("NOTE_STYLE_JSON_FIXED len=%d", len(content))
+
+        return {"raw": content, "json": parsed, "openai": resp}
 
     def response_json(
         self,
@@ -167,7 +183,5 @@ def get_ai_client() -> AIClient | _StubAIClient:
         cfg = get_ai_config()
         return build_ai_client(cfg)
     except Exception as exc:  # pragma: no cover - best effort fallback
-        logging.getLogger(__name__).warning(
-            "Using stub AI client due to configuration error: %s", exc
-        )
+        logger.warning("Using stub AI client due to configuration error: %s", exc)
         return _StubAIClient()

@@ -32,7 +32,7 @@ from backend.runflow.manifest import (
     update_manifest_frontend,
     update_manifest_state,
 )
-from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.pipeline.runs import RunManifest, get_runs_root, persist_manifest
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
 from backend.core.logic.report_analysis.text_provider import (
@@ -463,6 +463,73 @@ def extract_problematic_accounts(self, sid: str) -> dict:
     return result
 
 
+def _frontend_builder_selection() -> str:
+    raw = os.getenv("FRONTEND_BUILDER_IMPL")
+    if not raw:
+        return "legacy"
+
+    value = raw.strip().lower()
+    if value in {"legacy", "manifest"}:
+        return value
+
+    log.warning("FRONTEND_BUILDER_IMPL_INVALID value=%s", raw)
+    return "legacy"
+
+
+def _manifest_path_for_run(sid: str, runs_root: str | Path | None) -> Path:
+    base: Path
+    if runs_root is not None:
+        base = Path(runs_root)
+    else:
+        base = get_runs_root()
+    return (base / sid / "manifest.json").resolve()
+
+
+def _build_frontend_packs(
+    sid: str, *, runs_root: str | Path | None, force: bool = False
+) -> dict:
+    selection = _frontend_builder_selection()
+
+    if selection == "manifest":
+        manifest_path = _manifest_path_for_run(sid, runs_root)
+        try:
+            from backend.frontend.review_pack_builder import build_review_packs
+        except Exception:  # pragma: no cover - defensive logging
+            log.error(
+                "FRONTEND_BUILDER_MANIFEST_IMPORT_FAILED sid=%s path=%s",
+                sid,
+                manifest_path,
+                exc_info=True,
+            )
+        else:
+            log.info(
+                "FRONTEND_BUILDER_SELECTED sid=%s impl=manifest manifest=%s",
+                sid,
+                manifest_path,
+            )
+            manifest_hint = {"path": str(manifest_path)}
+            try:
+                result = build_review_packs(sid, manifest_hint)
+            except Exception:  # pragma: no cover - defensive logging
+                log.error(
+                    "FRONTEND_BUILDER_MANIFEST_FAILED sid=%s path=%s",
+                    sid,
+                    manifest_path,
+                    exc_info=True,
+                )
+            else:
+                return result
+
+    if selection != "legacy":
+        log.info(
+            "FRONTEND_BUILDER_SELECTED sid=%s impl=legacy fallback_from=%s",
+            sid,
+            selection,
+        )
+
+    return generate_frontend_packs_for_run(sid, runs_root=runs_root, force=force)
+
+
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
 def generate_frontend_packs_task(
     self,
@@ -474,7 +541,7 @@ def generate_frontend_packs_task(
     """Expose ``generate_frontend_packs_for_run`` as a Celery task."""
 
     log.info("FRONTEND_TASK_RECEIVED sid=%s", sid)
-    result = generate_frontend_packs_for_run(sid, runs_root=runs_root, force=force)
+    result = _build_frontend_packs(sid, runs_root=runs_root, force=force)
 
     packs_count_value = 0
     try:
@@ -837,7 +904,7 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
     runs_root = _ensure_manifest_root()
 
     try:
-        fe_result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+        fe_result = _build_frontend_packs(sid, runs_root=runs_root)
     except Exception:  # pragma: no cover - defensive logging
         log.error("FRONTEND_PACKS_TASK_FAILED sid=%s", sid, exc_info=True)
         record_stage(

@@ -3,7 +3,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Mapping
-import json, os, glob, shutil, time, uuid, logging
+import json, os, glob, shutil, logging
+import tempfile
 
 from backend.core.ai.paths import (
     MergePaths,
@@ -48,67 +49,21 @@ def _utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def safe_replace(src: str | Path, dst: str | Path, retries: int = 5, delay: float = 0.1) -> None:
-    src_path = Path(src)
-    dst_path = Path(dst)
-
-    dst_parent = dst_path.parent
-    if dst_parent and not dst_parent.exists():
-        dst_parent.mkdir(parents=True, exist_ok=True)
-
-    def _handle_missing_source(context: str) -> bool:
-        if src_path.exists():
-            return False
-        if os.name == "nt":
-            logger.warning(
-                "MANIFEST_TMP_MISSING src=%s dst=%s context=%s",
-                src_path,
-                dst_path,
-                context,
-            )
-            return True
-        message = (
-            f"safe_replace: source {src_path} missing while {context} {dst_path}; "
-            "skipping replace"
-        )
-        raise FileNotFoundError(message)
-
-    if _handle_missing_source("preparing to replace"):
-        return
-
-    src_str = str(src_path)
-    dst_str = str(dst_path)
-
+def safe_replace(dst_path: str, data: str) -> None:
+    dst_dir = os.path.dirname(dst_path) or "."
+    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=dst_dir)
     try:
-        with src_path.open("rb") as handle:
-            handle.flush()
-            os.fsync(handle.fileno())
-    except FileNotFoundError:
-        if _handle_missing_source("fsync"):
-            return
-        raise
-    except OSError:  # pragma: no cover - defensive logging
-        logger.warning(
-            "MANIFEST_TMP_FSYNC_FAILED src=%s dst=%s",
-            src_path,
-            dst_path,
-            exc_info=True,
-        )
-
-    for i in range(retries):
-        if _handle_missing_source("pre-retry check"):
-            return
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())  # fsync while handle is open
+        os.replace(tmp_path, dst_path)  # atomic on Windows & POSIX
+    except Exception:
         try:
-            os.replace(src_str, dst_str)
-            return
-        except FileNotFoundError:
-            if _handle_missing_source("attempting to replace"):
-                return
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        finally:
             raise
-        except PermissionError:
-            if i == retries - 1:
-                raise
-            time.sleep(delay)
 
 @dataclass
 class RunManifest:
@@ -286,21 +241,10 @@ class RunManifest:
 
     def save(self) -> "RunManifest":
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(f"{self.path.name}.tmp.{uuid.uuid4().hex}")
         self._upgrade_ai_packs_structure()
         self._mirror_ai_to_legacy_artifacts()
-        try:
-            with tmp.open("w", encoding="utf-8") as fh:
-                json.dump(self.data, fh, ensure_ascii=False, indent=2)
-                fh.flush()
-                os.fsync(fh.fileno())
-            safe_replace(tmp, self.path)
-        finally:
-            try:
-                if tmp.exists():
-                    tmp.unlink()
-            except FileNotFoundError:
-                pass
+        data = json.dumps(self.data, ensure_ascii=False, indent=2)
+        safe_replace(str(self.path), data)
         return self
 
     def _upgrade_ai_packs_structure(self) -> None:

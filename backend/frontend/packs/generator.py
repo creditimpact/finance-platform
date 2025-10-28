@@ -2164,12 +2164,16 @@ def generate_frontend_packs_for_run(
                     question_set=_QUESTION_SET,
                 )
 
-                if (
-                    existing_stage_pack is not None
-                    and not _stage_payload_has_meaningful_data(stage_pack_payload)
-                ):
+                existing_has_meaningful_data = _stage_payload_has_meaningful_data(
+                    existing_stage_pack
+                )
+                new_has_meaningful_data = _stage_payload_has_meaningful_data(
+                    stage_pack_payload
+                )
+
+                if existing_has_meaningful_data and not new_has_meaningful_data:
                     log.info(
-                        "FRONTEND_STAGE_SKIP_PLACEHOLDER sid=%s account=%s",
+                        "PACKGEN_SKIP_EMPTY_OVERWRITE sid=%s account=%s",
                         sid,
                         account_id,
                     )

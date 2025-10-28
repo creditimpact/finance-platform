@@ -180,6 +180,10 @@ def schedule_send_for_sid(
         log.info("NOTE_STYLE_DISABLED sid=%s", sid_text)
         return
 
+    if not config.NOTE_STYLE_AUTOSEND:
+        log.info("NOTE_STYLE_AUTOSEND_DISABLED sid=%s", sid_text)
+        return
+
     if runs_root is None:
         runs_root_arg: str | None = None
     else:
@@ -251,6 +255,10 @@ def schedule_send_for_account(
         )
         return
 
+    if not config.NOTE_STYLE_AUTOSEND:
+        log.info("NOTE_STYLE_AUTOSEND_DISABLED sid=%s", sid_text)
+        return
+
     if runs_root is None:
         runs_root_arg: str | None = None
     else:
@@ -282,6 +290,10 @@ def schedule_prepare_and_send(
 
     if not config.NOTE_STYLE_ENABLED:
         log.info("NOTE_STYLE_DISABLED sid=%s", sid_text)
+        return
+
+    if not config.NOTE_STYLE_AUTOSEND:
+        log.info("NOTE_STYLE_AUTOSEND_DISABLED sid=%s", sid_text)
         return
 
     delay = max(_debounce_delay_seconds(), 0.0)

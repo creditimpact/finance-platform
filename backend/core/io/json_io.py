@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import tempfile
 import time
 import uuid
 from contextlib import contextmanager
@@ -92,21 +93,39 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
     last_error: OSError | None = None
     while attempts < _WRITE_ATTEMPTS:
         attempts += 1
-        tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
+        fd: int | None = None
         try:
             with _json_file_lock(path):
                 payload_to_write = _merge_existing_umbrella_barriers(path, payload)
-                tmp_path.write_text(
-                    json.dumps(payload_to_write, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
+                fd, tmp_raw_path = tempfile.mkstemp(
+                    prefix=f"{path.name}.", dir=path.parent, text=True
                 )
-                tmp_path.replace(path)
+                tmp_path = Path(tmp_raw_path)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        json.dump(
+                            payload_to_write,
+                            handle,
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                    os.replace(tmp_path, path)
+                finally:
+                    # ``os.replace`` moves the temporary path into place, so the
+                    # clean-up guard must tolerate a missing file when the move
+                    # succeeds.
+                    try:
+                        if tmp_path.exists():
+                            tmp_path.unlink()
+                    except FileNotFoundError:
+                        pass
         except OSError as exc:
             last_error = exc
-            try:
-                tmp_path.unlink()
-            except FileNotFoundError:
-                pass
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
             if attempts >= _WRITE_ATTEMPTS:
                 break
             time.sleep(_WRITE_RETRY_DELAY)

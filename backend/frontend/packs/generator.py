@@ -425,7 +425,17 @@ def _write_json_if_changed(path: Path, payload: Any) -> bool:
     if current == payload:
         return False
 
-    _atomic_write_json(path, payload)
+    try:
+        _atomic_write_json(path, payload)
+    except FileNotFoundError as exc:
+        log.warning(
+            "FRONTEND_STAGE_ATOMIC_WRITE_FALLBACK path=%s error=%s",
+            path,
+            exc,
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
     return True
 
 
@@ -1247,42 +1257,6 @@ def build_lean_pack_doc(
     }
 
 
-def _build_stage_display_payload(
-    *,
-    holder_name: str | None,
-    primary_issue: str | None,
-    account_number_per_bureau: Mapping[str, str],
-    account_number_consensus: str | None,
-    account_type_per_bureau: Mapping[str, str],
-    account_type_consensus: str | None,
-    status_per_bureau: Mapping[str, str],
-    status_consensus: str | None,
-    balance_per_bureau: Mapping[str, str],
-    date_opened_per_bureau: Mapping[str, str],
-    closed_date_per_bureau: Mapping[str, str],
-) -> dict[str, Any]:
-    return {
-        "display_version": _DISPLAY_SCHEMA_VERSION,
-        "holder_name": holder_name,
-        "primary_issue": primary_issue,
-        "account_number": {
-            "per_bureau": dict(account_number_per_bureau),
-            "consensus": _normalize_consensus_text(account_number_consensus),
-        },
-        "account_type": {
-            "per_bureau": dict(account_type_per_bureau),
-            "consensus": _normalize_consensus_text(account_type_consensus),
-        },
-        "status": {
-            "per_bureau": dict(status_per_bureau),
-            "consensus": _normalize_consensus_text(status_consensus),
-        },
-        "balance_owed": {"per_bureau": dict(balance_per_bureau)},
-        "date_opened": dict(date_opened_per_bureau),
-        "closed_date": dict(closed_date_per_bureau),
-    }
-
-
 def build_stage_pack_doc(
     *,
     account_id: str,
@@ -1291,29 +1265,13 @@ def build_stage_pack_doc(
     creditor_name: str | None,
     account_type: str | None,
     status: str | None,
-    account_number_per_bureau: Mapping[str, str],
-    account_number_consensus: str | None,
-    account_type_per_bureau: Mapping[str, str],
-    account_type_consensus: str | None,
-    status_per_bureau: Mapping[str, str],
-    status_consensus: str | None,
-    balance_per_bureau: Mapping[str, str],
-    date_opened_per_bureau: Mapping[str, str],
-    closed_date_per_bureau: Mapping[str, str],
+    display_payload: Mapping[str, Any],
     bureau_summary: Mapping[str, Any],
 ) -> dict[str, Any]:
-    display = _build_stage_display_payload(
+    display = _build_compact_display(
         holder_name=holder_name,
         primary_issue=primary_issue,
-        account_number_per_bureau=account_number_per_bureau,
-        account_number_consensus=account_number_consensus,
-        account_type_per_bureau=account_type_per_bureau,
-        account_type_consensus=account_type_consensus,
-        status_per_bureau=status_per_bureau,
-        status_consensus=status_consensus,
-        balance_per_bureau=balance_per_bureau,
-        date_opened_per_bureau=date_opened_per_bureau,
-        closed_date_per_bureau=closed_date_per_bureau,
+        display_payload=display_payload,
     )
 
     payload: dict[str, Any] = {
@@ -2235,15 +2193,7 @@ def generate_frontend_packs_for_run(
                         creditor_name=creditor_name_value,
                         account_type=account_type_value,
                         status=status_value,
-                        account_number_per_bureau=account_number_per_bureau,
-                        account_number_consensus=account_number_consensus,
-                        account_type_per_bureau=account_type_per_bureau,
-                        account_type_consensus=account_type_consensus,
-                        status_per_bureau=status_per_bureau,
-                        status_consensus=status_consensus,
-                        balance_per_bureau=balance_per_bureau,
-                        date_opened_per_bureau=date_opened_per_bureau,
-                        closed_date_per_bureau=closed_date_per_bureau,
+                        display_payload=display_payload,
                         bureau_summary=bureau_summary,
                     )
 

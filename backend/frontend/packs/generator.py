@@ -264,6 +264,55 @@ def _release_frontend_build_lock(lock_path: Path, sid: str) -> None:
         )
 
 
+def _resolve_idempotent_lock_path(run_dir: Path) -> Path | None:
+    value = os.getenv("FRONTEND_IDEMPOTENT_LOCK_REL")
+    if value:
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = run_dir / candidate
+        return candidate
+
+    return _frontend_build_lock_path(run_dir)
+
+
+def _lock_mtime(lock_path: Path | None) -> float | None:
+    if lock_path is None:
+        return None
+    try:
+        return lock_path.stat().st_mtime
+    except FileNotFoundError:
+        return None
+    except OSError:  # pragma: no cover - defensive logging
+        log.warning("FRONTEND_LOCK_STAT_FAILED path=%s", lock_path, exc_info=True)
+        return None
+
+
+def _should_skip_pack_due_to_lock(
+    *,
+    stage_pack_path: Path,
+    lock_path: Path | None,
+    lock_mtime: float | None,
+) -> bool:
+    if lock_path is None or lock_mtime is None:
+        return False
+
+    if not stage_pack_path.exists():
+        return False
+
+    try:
+        pack_mtime = stage_pack_path.stat().st_mtime
+    except OSError:  # pragma: no cover - defensive logging
+        log.warning(
+            "FRONTEND_PACK_STAT_FAILED path=%s lock=%s",
+            stage_pack_path,
+            lock_path,
+            exc_info=True,
+        )
+        return False
+
+    return pack_mtime > lock_mtime
+
+
 def _log_build_summary(
     sid: str,
     *,
@@ -347,15 +396,18 @@ def _is_frontend_review_index(path: Path) -> bool:
 def _atomic_write_frontend_review_index(path: Path, payload: Any) -> None:
     directory = path.parent
     os.makedirs(directory, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix="index.", dir=directory, text=True)
+    fd, tmp_raw_path = tempfile.mkstemp(
+        prefix=f"{path.name}.", dir=directory, text=True
+    )
+    tmp_path = Path(tmp_raw_path)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
-        shutil.move(tmp_path, os.fspath(path))
+        os.replace(tmp_path, path)
     finally:
         try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            if tmp_path.exists():
+                tmp_path.unlink()
         except Exception:
             pass
 
@@ -1236,6 +1288,9 @@ def build_stage_pack_doc(
     account_id: str,
     holder_name: str | None,
     primary_issue: str | None,
+    creditor_name: str | None,
+    account_type: str | None,
+    status: str | None,
     account_number_per_bureau: Mapping[str, str],
     account_number_consensus: str | None,
     account_type_per_bureau: Mapping[str, str],
@@ -1245,6 +1300,7 @@ def build_stage_pack_doc(
     balance_per_bureau: Mapping[str, str],
     date_opened_per_bureau: Mapping[str, str],
     closed_date_per_bureau: Mapping[str, str],
+    bureau_summary: Mapping[str, Any],
 ) -> dict[str, Any]:
     display = _build_stage_display_payload(
         holder_name=holder_name,
@@ -1260,13 +1316,47 @@ def build_stage_pack_doc(
         closed_date_per_bureau=closed_date_per_bureau,
     )
 
-    return {
+    payload: dict[str, Any] = {
         "account_id": account_id,
         "holder_name": holder_name,
         "primary_issue": primary_issue,
+        "creditor_name": creditor_name,
+        "account_type": account_type,
+        "status": status,
         "display": display,
         "claim_field_links": _claim_field_links_payload(),
     }
+
+    last4_payload = bureau_summary.get("last4") if isinstance(bureau_summary, Mapping) else None
+    if isinstance(last4_payload, Mapping):
+        payload["last4"] = dict(last4_payload)
+    elif last4_payload is not None:
+        payload["last4"] = last4_payload
+
+    balance_payload = (
+        bureau_summary.get("balance_owed") if isinstance(bureau_summary, Mapping) else None
+    )
+    if isinstance(balance_payload, Mapping):
+        payload["balance_owed"] = dict(balance_payload)
+
+    dates_payload = (
+        bureau_summary.get("dates") if isinstance(bureau_summary, Mapping) else None
+    )
+    if isinstance(dates_payload, Mapping):
+        payload["dates"] = dict(dates_payload)
+
+    badges_payload = (
+        bureau_summary.get("bureau_badges") if isinstance(bureau_summary, Mapping) else None
+    )
+    if isinstance(badges_payload, Sequence):
+        payload["bureau_badges"] = [
+            dict(badge)
+            if isinstance(badge, Mapping)
+            else badge
+            for badge in badges_payload
+        ]
+
+    return payload
 
 
 def _has_meaningful_text(value: Any, *, treat_unknown: bool = False) -> bool:
@@ -1626,9 +1716,12 @@ def generate_frontend_packs_for_run(
         debug_packs_dir = stage_dir / "debug"
     
         canonical_paths = ensure_frontend_review_dirs(str(run_dir))
-    
+
         _log_stage_paths(sid, config, canonical_paths)
-    
+
+        idempotent_lock_path = _resolve_idempotent_lock_path(run_dir)
+        idempotent_lock_mtime = _lock_mtime(idempotent_lock_path)
+
         legacy_accounts_dir = run_dir / "frontend" / "accounts"
         if legacy_accounts_dir.is_dir():
             log.warning(
@@ -2139,6 +2232,9 @@ def generate_frontend_packs_for_run(
                         account_id=account_id,
                         holder_name=display_holder_name,
                         primary_issue=display_primary_issue,
+                        creditor_name=creditor_name_value,
+                        account_type=account_type_value,
+                        status=status_value,
                         account_number_per_bureau=account_number_per_bureau,
                         account_number_consensus=account_number_consensus,
                         account_type_per_bureau=account_type_per_bureau,
@@ -2148,6 +2244,7 @@ def generate_frontend_packs_for_run(
                         balance_per_bureau=balance_per_bureau,
                         date_opened_per_bureau=date_opened_per_bureau,
                         closed_date_per_bureau=closed_date_per_bureau,
+                        bureau_summary=bureau_summary,
                     )
 
                 account_filename = _safe_account_dirname(account_id, account_dir.name)
@@ -2177,6 +2274,23 @@ def generate_frontend_packs_for_run(
                         sid,
                         account_id,
                     )
+                    unchanged_docs += 1
+                    pack_count += 1
+                    continue
+
+                if _should_skip_pack_due_to_lock(
+                    stage_pack_path=stage_pack_path,
+                    lock_path=idempotent_lock_path,
+                    lock_mtime=idempotent_lock_mtime,
+                ):
+                    log.info(
+                        "PACKGEN_SKIP_LOCKED sid=%s account=%s pack=%s lock=%s",
+                        sid,
+                        account_id,
+                        stage_pack_path,
+                        idempotent_lock_path,
+                    )
+                    skip_reasons["locked"] = skip_reasons.get("locked", 0) + 1
                     unchanged_docs += 1
                     pack_count += 1
                     continue

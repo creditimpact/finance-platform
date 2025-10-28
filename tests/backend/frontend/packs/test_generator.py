@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import os
 from pathlib import Path
 
 import pytest
@@ -190,22 +191,26 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path: Path) -> None:
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
     stage_pack_path, stage_pack_payload = _read_stage_pack(runs_root, sid, "acct-1")
-    assert list(stage_pack_payload.keys()) == [
-        "account_id",
-        "holder_name",
-        "primary_issue",
-        "display",
-        "claim_field_links",
-        "questions",
-    ]
     assert stage_pack_payload["account_id"] == "acct-1"
-    assert stage_pack_payload["holder_name"] == "John Doe"
+    assert stage_pack_payload["holder_name"] == "Sample Creditor"
     assert stage_pack_payload["primary_issue"] == "wrong_account"
+    assert stage_pack_payload["creditor_name"] == "Sample Creditor"
+    assert stage_pack_payload["account_type"] == "Credit Card"
+    assert stage_pack_payload["status"] == "Closed"
     assert stage_pack_payload["questions"] == list(generator_module._QUESTION_SET)
     assert stage_pack_payload["claim_field_links"] == CLAIM_FIELD_LINK_MAP
-
+    last4_payload = stage_pack_payload["last4"]
+    assert last4_payload["display"] == "****1234"
+    assert last4_payload["last4"] == "1234"
+    balance_block = stage_pack_payload["balance_owed"]
+    assert balance_block["per_bureau"]["transunion"] == "$100"
+    dates_block = stage_pack_payload["dates"]
+    assert dates_block["date_opened"]["transunion"] == "2023-01-01"
+    assert dates_block["closed_date"]["transunion"] == "2023-02-01"
+    badges = stage_pack_payload["bureau_badges"]
+    assert any(badge["id"] == "transunion" for badge in badges)
     display_block = stage_pack_payload["display"]
-    assert display_block["holder_name"] == "John Doe"
+    assert display_block["holder_name"] == "Sample Creditor"
     assert display_block["primary_issue"] == "wrong_account"
     assert display_block["account_number"]["per_bureau"] == {
         "transunion": "****1234",
@@ -233,7 +238,7 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path: Path) -> None:
     assert result_path.exists()
 
     manifest_entry = json.loads(result_path.read_text(encoding="utf-8"))["packs"][0]
-    assert manifest_entry["display"]["holder_name"] == "John Doe"
+    assert manifest_entry["display"]["holder_name"] == "Sample Creditor"
     assert manifest_entry["display"]["primary_issue"] == "wrong_account"
 
     assert result["status"] == "success"
@@ -328,6 +333,53 @@ def test_generate_frontend_packs_preserves_existing_when_placeholder_payload(
     assert result["packs_count"] == 1
     messages = [record.getMessage() for record in caplog.records]
     assert any("PACKGEN_SKIP_EMPTY_OVERWRITE" in message for message in messages)
+
+
+def test_generate_frontend_packs_respects_idempotent_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SLOCK"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    summary_payload = {"account_id": "acct-1", "holder_name": "Locked Holder"}
+    flat_payload = _build_fields_flat(account_number_display={"transunion": "****9999"})
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "fields_flat.json", flat_payload)
+    _write_json(account_dir / "tags.json", [])
+
+    stage_pack_path = (
+        runs_root / sid / "frontend" / "review" / "packs" / "acct-1.json"
+    )
+    original_payload = {
+        "account_id": "acct-1",
+        "holder_name": "Locked Holder",
+        "display": {"holder_name": "Locked Holder"},
+    }
+    _write_json(stage_pack_path, original_payload)
+
+    lock_rel = Path("frontend/.locks/idempotent.lock")
+    lock_path = runs_root / sid / lock_rel
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("lock", encoding="utf-8")
+
+    # Ensure the pack is newer than the lock so the writer skips rewriting.
+    os.utime(lock_path, (1_000_000, 1_000_000))
+    os.utime(stage_pack_path, (1_000_100, 1_000_100))
+
+    monkeypatch.setenv("FRONTEND_IDEMPOTENT_LOCK_REL", lock_rel.as_posix())
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="backend.frontend.packs.generator"):
+        result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    payload_after = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+    assert payload_after == original_payload
+    assert result["packs_count"] == 1
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("PACKGEN_SKIP_LOCKED" in message for message in messages)
 def test_generate_frontend_packs_logs_when_flat_missing(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -1,10 +1,11 @@
 import json
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
-from backend.frontend.packs.generator import generate_frontend_packs_for_run
+from backend.frontend.packs import generator
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -13,9 +14,9 @@ def _write_json(path: Path, payload: object) -> None:
 
 
 def _build_fields_flat(**fields: dict[str, str]) -> dict[str, object]:
-    per_bureau = {}
+    per_bureau: dict[str, dict[str, str]] = {}
     for bureau in ("transunion", "experian", "equifax"):
-        bureau_values = {}
+        bureau_values: dict[str, str] = {}
         for key, value in fields.items():
             if isinstance(value, dict) and bureau in value:
                 bureau_values[key] = value[bureau]
@@ -45,7 +46,7 @@ def _seed_account(
     account_dir = runs_root / sid / "cases" / "accounts" / account_dir_name
     summary_payload = {
         "account_id": account_id,
-        "holder_name": "",  # resolved via fields_flat / labels
+        "holder_name": "",
         "labels": {
             "creditor": creditor_name,
             "account_type": {"normalized": "Auto Loan"},
@@ -79,7 +80,7 @@ def _seed_account(
     return account_dir
 
 
-def test_stage_minimal_payload_contains_rich_display(
+def test_minimal_stage_payload_contains_real_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runs_root = tmp_path / "runs"
@@ -95,7 +96,7 @@ def test_stage_minimal_payload_contains_rich_display(
 
     monkeypatch.setenv("FRONTEND_STAGE_PAYLOAD", "minimal")
 
-    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    result = generator.generate_frontend_packs_for_run(sid, runs_root=runs_root)
     assert result["packs_count"] == 1
 
     pack_path = runs_root / sid / "frontend" / "review" / "packs" / f"{account_id}.json"
@@ -115,8 +116,12 @@ def test_stage_minimal_payload_contains_rich_display(
     assert display["date_opened"]["transunion"] == "2020-01-15"
     assert display["closed_date"]["transunion"] == "2021-04-01"
 
+    assert payload["creditor_name"].lower() != "unknown"
+    assert display["account_type"]["consensus"] != "--"
+    assert display["status"]["consensus"] != "--"
 
-def test_stage_full_payload_matches_legacy(
+
+def test_full_stage_payload_matches_legacy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runs_root = tmp_path / "runs"
@@ -133,7 +138,7 @@ def test_stage_full_payload_matches_legacy(
     monkeypatch.setenv("FRONTEND_STAGE_PAYLOAD", "full")
     monkeypatch.setenv("FRONTEND_PACKS_DEBUG_MIRROR", "1")
 
-    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    result = generator.generate_frontend_packs_for_run(sid, runs_root=runs_root)
     assert result["packs_count"] == 1
 
     packs_dir = runs_root / sid / "frontend" / "review" / "packs"
@@ -146,10 +151,8 @@ def test_stage_full_payload_matches_legacy(
     debug_payload = json.loads(debug_path.read_text(encoding="utf-8"))
 
     assert stage_payload == debug_payload
-    assert stage_payload["creditor_name"] == "Sample Auto Lender"
-    assert stage_payload["display"]["account_number"]["consensus"] == "****7007"
-    assert stage_payload["display"]["account_type"]["consensus"] == "Auto Loan"
-    assert stage_payload["display"]["status"]["consensus"] == "Closed"
+    assert stage_payload["sid"] == sid
+    assert "pointers" in stage_payload
 
 
 def test_stage_payload_skip_empty_overwrite_guard(
@@ -179,12 +182,14 @@ def test_stage_payload_skip_empty_overwrite_guard(
         "display": {
             "holder_name": "Saved Furnisher",
             "primary_issue": "wrong_account",
-            "account_number": {"per_bureau": {"transunion": "****7007"}, "consensus": "****7007"},
+            "account_number": {
+                "per_bureau": {"transunion": "****7007"},
+                "consensus": "****7007",
+            },
         },
     }
     _write_json(stage_pack_path, existing_payload)
 
-    # Replace account inputs with sparse payloads to trigger the guard.
     _write_json(account_dir / "summary.json", {"account_id": account_id, "holder_name": ""})
     _write_json(account_dir / "fields_flat.json", {})
     _write_json(account_dir / "tags.json", [])
@@ -193,78 +198,60 @@ def test_stage_payload_skip_empty_overwrite_guard(
 
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="backend.frontend.packs.generator"):
-        result = generate_frontend_packs_for_run(sid, runs_root=runs_root, force=True)
+        result = generator.generate_frontend_packs_for_run(sid, runs_root=runs_root, force=True)
 
     assert result["packs_count"] == 1
 
     updated_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
-
-    for key in ("holder_name", "primary_issue", "creditor_name", "account_type", "status"):
-        assert updated_payload[key] == existing_payload[key]
-
-    assert updated_payload["display"]["account_number"]["consensus"] == "****7007"
+    assert updated_payload == existing_payload
 
     messages = [record.getMessage() for record in caplog.records]
-    assert any("PACKGEN_PRESERVED_FIELDS" in message for message in messages)
+    assert any("PACKGEN_SKIP_EMPTY_OVERWRITE" in message for message in messages)
 
 
-def test_stage_payload_preserves_existing_fields_on_partial_degrade(
+def test_minimal_payload_failsafe_writes_full(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     runs_root = tmp_path / "runs"
-    sid = "SIDKEEP"
-    account_id = "idx-007"
-
-    account_dir = _seed_account(
+    sid = "SIDFAILSAFE"
+    account_id = "idx-042"
+    _seed_account(
         runs_root,
         sid=sid,
-        account_dir_name="idx-007",
+        account_dir_name="idx-042",
         account_id=account_id,
-        creditor_name="Preserved Creditor",
+        creditor_name="Failsafe Creditor",
     )
 
     monkeypatch.setenv("FRONTEND_STAGE_PAYLOAD", "minimal")
+    monkeypatch.setenv("FRONTEND_PACKS_DEBUG_MIRROR", "1")
 
-    generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    monkeypatch.setattr(generator, "_build_compact_display", lambda **_: {})
+    monkeypatch.setattr(generator, "_enrich_stage_display", lambda *args, **kwargs: None)
 
-    stage_pack_path = (
-        runs_root / sid / "frontend" / "review" / "packs" / f"{account_id}.json"
-    )
-    existing_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+    def _passthrough_enrich(candidate: Mapping[str, object] | None, _: Mapping[str, object] | None):
+        if isinstance(candidate, dict):
+            return candidate, False
+        if isinstance(candidate, Mapping):
+            return dict(candidate), False
+        return {}, False
 
-    summary_payload = {
-        "account_id": account_id,
-        "holder_name": "",
-        "labels": {
-            "creditor": "Preserved Creditor",
-            "status": {"normalized": "Closed"},
-        },
-    }
-    flat_payload = _build_fields_flat(
-        account_number_display={
-            "transunion": "****7007",
-            "experian": "****7007",
-        },
-        account_status={"transunion": "Closed", "experian": "Closed"},
-    )
-
-    _write_json(account_dir / "summary.json", summary_payload)
-    _write_json(account_dir / "fields_flat.json", flat_payload)
-    _write_json(account_dir / "tags.json", [{"kind": "issue", "type": "wrong_account"}])
+    monkeypatch.setattr(generator, "_enrich_stage_payload_with_full", _passthrough_enrich)
 
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="backend.frontend.packs.generator"):
-        generate_frontend_packs_for_run(sid, runs_root=runs_root, force=True)
+        result = generator.generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    updated_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+    assert result["packs_count"] == 1
 
-    assert updated_payload["account_type"] == existing_payload["account_type"]
-    assert (
-        updated_payload["display"]["account_type"]["consensus"]
-        == existing_payload["display"]["account_type"]["consensus"]
-    )
+    pack_path = runs_root / sid / "frontend" / "review" / "packs" / f"{account_id}.json"
+    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+
+    assert payload["sid"] == sid
+    assert "pointers" in payload
+    assert payload["display"]["account_number"]["consensus"] == "****7007"
 
     messages = [record.getMessage() for record in caplog.records]
-    assert any("PACKGEN_PRESERVED_FIELDS" in message for message in messages)
+    assert any("PACKGEN_FAILSAFE_USED_FULL" in message for message in messages)

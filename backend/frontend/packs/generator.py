@@ -2875,6 +2875,34 @@ def generate_frontend_packs_for_run(
                     if isinstance(existing_payload, Mapping):
                         existing_stage_pack = existing_payload
 
+                existing_has_meaningful_data = _stage_payload_has_meaningful_data(
+                    existing_stage_pack
+                )
+                candidate_has_meaningful_data = _stage_payload_has_meaningful_data(
+                    stage_pack_payload
+                )
+
+                if existing_has_meaningful_data and not candidate_has_meaningful_data:
+                    if stage_payload_full:
+                        stage_write_mode = "full"
+                    stage_write_reason = "skip_empty_overwrite"
+                    log.info(
+                        "PACKGEN_SKIP_EMPTY_OVERWRITE sid=%s account=%s",
+                        sid,
+                        account_id,
+                    )
+                    skip_reasons["placeholder"] = skip_reasons.get("placeholder", 0) + 1
+                    unchanged_docs += 1
+                    pack_count += 1
+                    log.info(
+                        "PACK_WRITE_DECISION sid=%s account=%s mode=%s guarded=skipped reason=%s",
+                        sid,
+                        account_id,
+                        stage_write_mode,
+                        stage_write_reason,
+                    )
+                    continue
+
                 stage_pack_payload, preserved_fields = _preserve_stage_pack_payload(
                     existing_stage_pack, stage_pack_payload
                 )
@@ -2901,34 +2929,6 @@ def generate_frontend_packs_for_run(
                     stage_pack_payload["claim_field_links"] = merged_claim_links
                 elif "claim_field_links" in stage_pack_payload:
                     stage_pack_payload.pop("claim_field_links", None)
-
-                existing_has_meaningful_data = _stage_payload_has_meaningful_data(
-                    existing_stage_pack
-                )
-                new_has_meaningful_data = _stage_payload_has_meaningful_data(
-                    stage_pack_payload
-                )
-
-                if existing_has_meaningful_data and not new_has_meaningful_data:
-                    if stage_payload_full:
-                        stage_write_mode = "full"
-                    stage_write_reason = "skip_empty_overwrite"
-                    log.info(
-                        "PACKGEN_SKIP_EMPTY_OVERWRITE sid=%s account=%s",
-                        sid,
-                        account_id,
-                    )
-                    skip_reasons["placeholder"] = skip_reasons.get("placeholder", 0) + 1
-                    unchanged_docs += 1
-                    pack_count += 1
-                    log.info(
-                        "PACK_WRITE_DECISION sid=%s account=%s mode=%s guarded=skipped reason=%s",
-                        sid,
-                        account_id,
-                        stage_write_mode,
-                        stage_write_reason,
-                    )
-                    continue
 
                 if _should_skip_pack_due_to_lock(
                     stage_pack_path=stage_pack_path,

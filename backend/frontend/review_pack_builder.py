@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
 
@@ -39,12 +40,11 @@ def build_review_packs(sid: str, manifest: Any) -> dict[str, Any]:
     """Delegate manifest-driven builds to the legacy frontend pack generator."""
 
     manifest_path = getattr(manifest, "path", None)
+    if manifest_path is None and isinstance(manifest, Mapping):
+        manifest_path = manifest.get("path")
+
     if manifest_path is None:
         raise ValueError("manifest path is required to resolve run directory")
-
-    manifest_data = getattr(manifest, "data", None)
-    if manifest_data is None:
-        raise ValueError("manifest data is required")
 
     run_dir = Path(manifest_path).resolve().parent
     runs_root = run_dir.parent

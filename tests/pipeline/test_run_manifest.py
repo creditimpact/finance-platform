@@ -1,4 +1,6 @@
 import io
+import os
+from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
@@ -46,6 +48,39 @@ def test_persist_manifest_writes_to_disk(runs_root):
         reloaded.data["artifacts"]["uploads"]["documents"]["credit_report"]
     )
     assert stored == str(artifact_path.resolve())
+
+
+def test_persist_manifest_twice_on_windows_handles_missing_temp(
+    runs_root, monkeypatch
+):
+    from backend.pipeline import runs as runs_module
+
+    manifest = RunManifest.for_sid("sid_win")
+    persist_manifest(manifest)
+
+    original_safe_replace = runs_module.safe_replace
+
+    class WindowsOsProxy:
+        name = "nt"
+
+        def __getattr__(self, attr):
+            return getattr(os, attr)
+
+    def remove_temp_then_replace(src, dst, *args, **kwargs):
+        src_path = Path(src)
+        if src_path.exists():
+            try:
+                src_path.unlink()
+            except FileNotFoundError:
+                pass
+        return original_safe_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(runs_module, "os", WindowsOsProxy())
+    monkeypatch.setattr(runs_module, "safe_replace", remove_temp_then_replace)
+
+    persist_manifest(manifest)
+
+    assert manifest.path.exists()
 
 
 def test_api_upload_updates_manifest(tmp_path, monkeypatch, runs_root):

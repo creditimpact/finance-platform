@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Mapping
-import json, os, glob, shutil, time, uuid
+import json, os, glob, shutil, time, uuid, logging
 
 from backend.core.ai.paths import (
     MergePaths,
@@ -13,6 +13,9 @@ from backend.core.ai.paths import (
 
 RUNS_ROOT_ENV = "RUNS_ROOT"                 # optional override
 MANIFEST_ENV  = "REPORT_MANIFEST_PATH"      # explicit manifest path
+
+
+logger = logging.getLogger(__name__)
 
 def _runs_root() -> Path:
     rr = os.getenv(RUNS_ROOT_ENV)
@@ -46,12 +49,41 @@ def _utc_now():
 
 
 def safe_replace(src: str | Path, dst: str | Path, retries: int = 5, delay: float = 0.1) -> None:
-    src_path = str(src)
-    dst_path = str(dst)
+    src_path = Path(src)
+    dst_path = Path(dst)
+
+    dst_parent = dst_path.parent
+    if dst_parent and not dst_parent.exists():
+        dst_parent.mkdir(parents=True, exist_ok=True)
+
+    def _handle_missing_source(context: str) -> bool:
+        if src_path.exists():
+            return False
+        message = (
+            f"safe_replace: source {src_path} missing while {context} {dst_path}; "
+            "skipping replace"
+        )
+        if os.name == "nt":
+            logger.warning(message)
+            return True
+        raise FileNotFoundError(message)
+
+    if _handle_missing_source("preparing to replace"):
+        return
+
+    src_str = str(src_path)
+    dst_str = str(dst_path)
+
     for i in range(retries):
-        try:
-            os.replace(src_path, dst_path)
+        if _handle_missing_source("pre-retry check"):
             return
+        try:
+            os.replace(src_str, dst_str)
+            return
+        except FileNotFoundError:
+            if _handle_missing_source("attempting to replace"):
+                return
+            raise
         except PermissionError:
             if i == retries - 1:
                 raise
@@ -239,6 +271,8 @@ class RunManifest:
         try:
             with tmp.open("w", encoding="utf-8") as fh:
                 json.dump(self.data, fh, ensure_ascii=False, indent=2)
+                fh.flush()
+                os.fsync(fh.fileno())
             safe_replace(tmp, self.path)
         finally:
             try:

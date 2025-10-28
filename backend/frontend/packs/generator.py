@@ -433,6 +433,31 @@ def _load_json_payload(path: Path) -> Any:
         return None
 
 
+def load_bureaus_meta_tags(
+    account_dir: Path,
+) -> tuple[Mapping[str, Any], Mapping[str, Any] | None, Any, dict[str, str]]:
+    """Load bureau, meta, and tag artifacts for ``account_dir``."""
+
+    bureaus_path = account_dir / "bureaus.json"
+    bureaus_payload = _load_json(bureaus_path)
+    if not isinstance(bureaus_payload, Mapping):
+        raise FileNotFoundError(bureaus_path)
+
+    meta_path = account_dir / "meta.json"
+    meta_payload = _load_json(meta_path)
+
+    tags_path = account_dir / "tags.json"
+    tags_payload = _load_json_payload(tags_path)
+
+    pointers = {
+        "bureaus": bureaus_path.as_posix(),
+        "meta": meta_path.as_posix(),
+        "tags": tags_path.as_posix(),
+    }
+
+    return bureaus_payload, meta_payload, tags_payload, pointers
+
+
 def _is_frontend_review_index(path: Path) -> bool:
     normalized = path.as_posix()
     return normalized.endswith("frontend/review/index.json")
@@ -1052,8 +1077,11 @@ def _derive_holder_name_from_meta(
     return fallback, "account_id"
 
 
-def _extract_issue_tags(tags_path: Path) -> tuple[str | None, list[str]]:
-    payload = _load_json_payload(tags_path)
+def _extract_issue_tags(
+    tags_path: Path, payload: Any | None = None
+) -> tuple[str | None, list[str]]:
+    if payload is None:
+        payload = _load_json_payload(tags_path)
     issues: list[str] = []
     seen: set[str] = set()
     if isinstance(payload, Sequence):
@@ -1591,20 +1619,14 @@ def _enrich_stage_display(
                     continue
                 per_bureau_section[bureau] = text_value
 
-        if consensus is not None:
-            if _has_meaningful_text(consensus, treat_unknown=True):
-                consensus_text = _coerce_display_text(consensus)
-                section["consensus"] = consensus_text
-                if fill_missing_from_consensus:
-                    for bureau in _BUREAU_ORDER:
-                        existing = per_bureau_section.get(bureau)
-                        if _has_meaningful_text(existing, treat_unknown=True):
-                            continue
-                        per_bureau_section[bureau] = consensus_text
-            elif section.get("consensus") is not None and not _has_meaningful_text(
-                section.get("consensus"), treat_unknown=True
-            ):
-                section.pop("consensus", None)
+        consensus_text = _normalize_consensus_text(consensus)
+        section["consensus"] = consensus_text
+        if fill_missing_from_consensus:
+            for bureau in _BUREAU_ORDER:
+                existing = per_bureau_section.get(bureau)
+                if _has_meaningful_text(existing, treat_unknown=True):
+                    continue
+                per_bureau_section[bureau] = consensus_text
 
     def _apply_date_mapping(key: str, values: Mapping[str, Any] | None) -> None:
         section = _ensure_section(key)
@@ -2548,26 +2570,54 @@ def generate_frontend_packs_for_run(
 
             for account_dir in account_dirs:
                 summary_path = account_dir / "summary.json"
-                summary = _load_json(summary_path)
-                if not summary:
-                    if use_bureaus_only:
-                        summary = {}
-                        account_id = account_dir.name
-                    else:
+                if use_bureaus_only:
+                    summary = {}
+                    account_id = account_dir.name
+                else:
+                    summary = _load_json(summary_path)
+                    if not summary:
                         skipped_missing += 1
-                        skip_reasons["missing_summary"] = skip_reasons.get("missing_summary", 0) + 1
+                        skip_reasons["missing_summary"] = (
+                            skip_reasons.get("missing_summary", 0) + 1
+                        )
                         log.warning(
                             "FRONTEND_PACK_MISSING_SUMMARY sid=%s path=%s",
                             sid,
                             summary_path,
                         )
                         continue
-                else:
                     account_id = str(summary.get("account_id") or account_dir.name)
 
                 current_account_id = account_id
 
                 tags_path = account_dir / "tags.json"
+                tags_payload_override: Any | None = None
+                meta_payload: Mapping[str, Any] | None = None
+                bureaus_payload: Mapping[str, Any] | None = None
+                loader_pointers: dict[str, str] | None = None
+
+                if use_bureaus_only:
+                    try:
+                        (
+                            bureaus_payload,
+                            meta_payload,
+                            tags_payload_override,
+                            loader_pointers,
+                        ) = load_bureaus_meta_tags(account_dir)
+                    except FileNotFoundError:
+                        bureaus_path = account_dir / "bureaus.json"
+                        log.warning(
+                            "FRONTEND_PACK_MISSING_BUREAUS sid=%s account=%s path=%s",
+                            sid,
+                            account_id,
+                            bureaus_path,
+                        )
+                        skip_reasons["missing_bureaus"] = (
+                            skip_reasons.get("missing_bureaus", 0) + 1
+                        )
+                        skipped_missing += 1
+                        continue
+
                 if not tags_path.exists():
                     log.warning(
                         "FRONTEND_PACK_MISSING_TAGS sid=%s account=%s path=%s",
@@ -2576,29 +2626,15 @@ def generate_frontend_packs_for_run(
                         tags_path,
                     )
 
-                primary_issue, issues = _extract_issue_tags(tags_path)
+                primary_issue, issues = _extract_issue_tags(
+                    tags_path, payload=tags_payload_override
+                )
                 if not primary_issue:
                     primary_issue = "unknown"
 
                 display_primary_issue = _coerce_display_text(primary_issue or "unknown")
 
                 if use_bureaus_only:
-                    bureaus_path = account_dir / "bureaus.json"
-                    bureaus_payload = _load_json(bureaus_path)
-                    if not isinstance(bureaus_payload, Mapping):
-                        log.warning(
-                            "FRONTEND_PACK_MISSING_BUREAUS sid=%s account=%s path=%s",
-                            sid,
-                            account_id,
-                            bureaus_path,
-                        )
-                        skip_reasons["missing_bureaus"] = skip_reasons.get("missing_bureaus", 0) + 1
-                        skipped_missing += 1
-                        continue
-
-                    meta_path = account_dir / "meta.json"
-                    meta_payload = _load_json(meta_path)
-
                     bureaus_branches: dict[str, Mapping[str, Any]] = {
                         bureau: payload
                         for bureau, payload in bureaus_payload.items()
@@ -2710,8 +2746,8 @@ def generate_frontend_packs_for_run(
                                 else "bureaus.reported_creditor"
                             )
                     if not _has_meaningful_text(display_holder_name, treat_unknown=True):
-                        display_holder_name = account_id
-                        display_holder_name_resolver = "account_id"
+                        display_holder_name = "Unknown"
+                        display_holder_name_resolver = "default"
 
                     holder_name = display_holder_name or None
 
@@ -2887,8 +2923,8 @@ def generate_frontend_packs_for_run(
                                 "holder_name", "holder"
                             )
                     if not _has_meaningful_text(display_holder_name, treat_unknown=True):
-                        display_holder_name = account_id
-                        display_holder_name_resolver = "account_id"
+                        display_holder_name = "Unknown"
+                        display_holder_name_resolver = "default"
 
                     holder_name = holder_name or display_holder_name
                     if not _has_meaningful_text(holder_name, treat_unknown=True):
@@ -3054,14 +3090,31 @@ def generate_frontend_packs_for_run(
                     relative_account_dir = account_dir.as_posix()
 
                 if use_bureaus_only:
-                    pointers = {
-                        key: f"{relative_account_dir}/{value}"
-                        for key, value in {
-                            "bureaus": "bureaus.json",
-                            "meta": "meta.json",
-                            "tags": "tags.json",
-                        }.items()
-                    }
+                    pointers: dict[str, str] = {}
+                    if loader_pointers:
+                        for key, pointer_path in loader_pointers.items():
+                            path_obj = Path(pointer_path)
+                            try:
+                                account_relative = path_obj.relative_to(account_dir).as_posix()
+                            except ValueError:
+                                try:
+                                    run_relative = path_obj.relative_to(run_dir).as_posix()
+                                except ValueError:
+                                    relative_value = path_obj.as_posix()
+                                else:
+                                    relative_value = run_relative
+                            else:
+                                relative_value = f"{relative_account_dir}/{account_relative}"
+
+                            pointers[key] = relative_value
+                    else:
+                        for key, filename in (
+                            ("bureaus", "bureaus.json"),
+                            ("meta", "meta.json"),
+                            ("tags", "tags.json"),
+                        ):
+                            pointers[key] = f"{relative_account_dir}/{filename}"
+
                     if summary_path.exists():
                         pointers["summary"] = f"{relative_account_dir}/summary.json"
                 else:

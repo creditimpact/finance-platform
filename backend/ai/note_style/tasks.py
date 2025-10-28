@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,9 +22,33 @@ from backend.ai.note_style_sender import (
     send_note_style_packs_for_sid,
 )
 from backend.core.ai.paths import ensure_note_style_paths
+from backend.core.redis_client import redis
+from backend.pipeline import runs
 
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+log = logger
+
+
+@contextmanager
+def redis_lock(key: str, ttl: int = 120):
+    try:
+        acquired = redis.set(key, "1", nx=True, ex=ttl)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning("NOTE_STYLE_LOCK_ACQUIRE_FAILED key=%s", key, exc_info=True)
+        acquired = False
+    try:
+        yield bool(acquired)
+    finally:
+        if acquired:
+            try:
+                redis.delete(key)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.warning("NOTE_STYLE_LOCK_RELEASE_FAILED key=%s", key, exc_info=True)
+
+
+def is_terminal_status(status: str) -> bool:
+    return status in {"success", "completed", "error", "failed"}
 
 
 def _note_style_has_packs(
@@ -75,59 +100,76 @@ def note_style_prepare_and_send_task(
     """Celery task wrapper around :func:`prepare_and_send`."""
 
     sid_text = str(sid or "").strip()
-    if not _note_style_has_packs(sid_text, runs_root=runs_root):
-        log.info("NOTE_STYLE_AUTO: skip_send sid=%s reason=no_note_style_packs", sid_text)
-        return {
-            "sid": sid_text,
-            "built": 0,
-            "sent": 0,
-            "reason": "no_note_style_packs",
-        }
+    lock_key = f"note-style:prepare:{sid_text}"
+    with redis_lock(lock_key) as acquired:
+        if not acquired:
+            logger.info("NOTE_STYLE_LOCK_SKIP sid=%s phase=prepare", sid_text)
+            return {"sid": sid_text, "skipped": "locked"}
 
-    start = time.monotonic()
-    log_structured_event(
-        "NOTE_STYLE_CELERY_START",
-        logger=log,
-        task="prepare_and_send",
-        sid=sid_text,
-        runs_root=runs_root,
-    )
-    try:
-        result = prepare_and_send(sid_text, runs_root=runs_root)
-    except Exception:
+        status = runs.get_stage_status(
+            sid_text, stage="note_style", runs_root=runs_root
+        )
+        if status and is_terminal_status(status):
+            logger.info(
+                "NOTE_STYLE_TERMINAL_SKIP sid=%s status=%s", sid_text, status
+            )
+            return {"sid": sid_text, "skipped": "terminal", "status": status}
+
+        if not _note_style_has_packs(sid_text, runs_root=runs_root):
+            log.info(
+                "NOTE_STYLE_AUTO: skip_send sid=%s reason=no_note_style_packs", sid_text
+            )
+            return {
+                "sid": sid_text,
+                "built": 0,
+                "sent": 0,
+                "reason": "no_note_style_packs",
+            }
+
+        start = time.monotonic()
+        log_structured_event(
+            "NOTE_STYLE_CELERY_START",
+            logger=log,
+            task="prepare_and_send",
+            sid=sid_text,
+            runs_root=runs_root,
+        )
+        try:
+            result = prepare_and_send(sid_text, runs_root=runs_root)
+        except Exception:
+            duration = time.monotonic() - start
+            log_structured_event(
+                "NOTE_STYLE_CELERY_ERROR",
+                logger=log,
+                task="prepare_and_send",
+                sid=sid_text,
+                runs_root=runs_root,
+                duration_seconds=duration,
+                level=logging.ERROR,
+            )
+            _append_task_failure_log(
+                sid=sid_text,
+                runs_root=runs_root,
+                message=f"task=prepare_and_send sid={sid_text} status=error",
+            )
+            raise
+
         duration = time.monotonic() - start
         log_structured_event(
-            "NOTE_STYLE_CELERY_ERROR",
+            "NOTE_STYLE_CELERY_SUCCESS",
             logger=log,
             task="prepare_and_send",
             sid=sid_text,
             runs_root=runs_root,
             duration_seconds=duration,
-            level=logging.ERROR,
         )
-        _append_task_failure_log(
-            sid=sid_text,
-            runs_root=runs_root,
-            message=f"task=prepare_and_send sid={sid_text} status=error",
+        log.info(
+            "NOTE_STYLE_AUTO: sent sid=%s built=%s sent=%s",
+            sid_text,
+            result.get("built"),
+            result.get("sent"),
         )
-        raise
-
-    duration = time.monotonic() - start
-    log_structured_event(
-        "NOTE_STYLE_CELERY_SUCCESS",
-        logger=log,
-        task="prepare_and_send",
-        sid=sid_text,
-        runs_root=runs_root,
-        duration_seconds=duration,
-    )
-    log.info(
-        "NOTE_STYLE_AUTO: sent sid=%s built=%s sent=%s",
-        sid_text,
-        result.get("built"),
-        result.get("sent"),
-    )
-    return result
+        return result
 
 
 @celery.task(name="backend.ai.note_style.tasks.note_style_send_account_task")
@@ -209,47 +251,66 @@ def note_style_send_sid_task(
     """Send all built note_style packs for ``sid`` inside Celery."""
 
     sid_text = str(sid or "").strip()
-    start = time.monotonic()
-    log_structured_event(
-        "NOTE_STYLE_CELERY_START",
-        logger=log,
-        task="send_sid",
-        sid=sid_text,
-        runs_root=runs_root,
-    )
+    lock_key = f"note-style:send:{sid_text}"
+    with redis_lock(lock_key) as acquired:
+        if not acquired:
+            logger.info("NOTE_STYLE_LOCK_SKIP sid=%s phase=send", sid_text)
+            return {"sid": sid_text, "skipped": "locked"}
 
-    processed: list[str]
-    try:
-        processed = send_note_style_packs_for_sid(sid_text, runs_root=runs_root)
-    except Exception:
-        duration = time.monotonic() - start
+        status = runs.get_stage_status(
+            sid_text, stage="note_style", runs_root=runs_root
+        )
+        if status and is_terminal_status(status):
+            logger.info(
+                "NOTE_STYLE_TERMINAL_SKIP sid=%s status=%s", sid_text, status
+            )
+            return {"sid": sid_text, "skipped": "terminal", "status": status}
+
+        if runs.all_note_style_results_terminal(sid_text, runs_root=runs_root):
+            logger.info("NOTE_STYLE_ALREADY_TERMINAL sid=%s", sid_text)
+            return {"sid": sid_text, "skipped": "already_terminal"}
+
+        start = time.monotonic()
         log_structured_event(
-            "NOTE_STYLE_CELERY_ERROR",
+            "NOTE_STYLE_CELERY_START",
             logger=log,
             task="send_sid",
             sid=sid_text,
             runs_root=runs_root,
-            duration_seconds=duration,
-            level=logging.ERROR,
         )
-        _append_task_failure_log(
+
+        processed: list[str]
+        try:
+            processed = send_note_style_packs_for_sid(sid_text, runs_root=runs_root)
+        except Exception:
+            duration = time.monotonic() - start
+            log_structured_event(
+                "NOTE_STYLE_CELERY_ERROR",
+                logger=log,
+                task="send_sid",
+                sid=sid_text,
+                runs_root=runs_root,
+                duration_seconds=duration,
+                level=logging.ERROR,
+            )
+            _append_task_failure_log(
+                sid=sid_text,
+                runs_root=runs_root,
+                message=f"task=send_sid sid={sid_text} status=error",
+            )
+            raise
+
+        duration = time.monotonic() - start
+        log_structured_event(
+            "NOTE_STYLE_CELERY_SUCCESS",
+            logger=log,
+            task="send_sid",
             sid=sid_text,
             runs_root=runs_root,
-            message=f"task=send_sid sid={sid_text} status=error",
+            processed_accounts=processed,
+            duration_seconds=duration,
         )
-        raise
-
-    duration = time.monotonic() - start
-    log_structured_event(
-        "NOTE_STYLE_CELERY_SUCCESS",
-        logger=log,
-        task="send_sid",
-        sid=sid_text,
-        runs_root=runs_root,
-        processed_accounts=processed,
-        duration_seconds=duration,
-    )
-    return {"sid": sid_text, "processed": processed}
+        return {"sid": sid_text, "processed": processed}
 
 
 __all__ = [

@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Mapping
+from typing import Any, Mapping
 import json, os, glob, shutil, logging
 import tempfile
 
@@ -1175,4 +1175,152 @@ def persist_manifest(
             for key, value in entries.items():
                 cursor[str(key)] = str(Path(value).resolve())
     return manifest.save()
+
+
+def _run_dir_for_sid(sid: str, runs_root: Path | str | None = None) -> Path:
+    base = Path(runs_root) if runs_root is not None else get_runs_root()
+    return Path(base).resolve() / str(sid)
+
+
+def _load_runflow_payload(
+    sid: str, *, runs_root: Path | str | None = None
+) -> Mapping[str, Any] | None:
+    run_dir = _run_dir_for_sid(sid, runs_root)
+    runflow_path = run_dir / "runflow.json"
+    try:
+        raw = runflow_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        logger.warning(
+            "RUNS_RUNFLOW_LOAD_FAILED sid=%s path=%s", sid, runflow_path, exc_info=True
+        )
+        return None
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning(
+            "RUNS_RUNFLOW_INVALID sid=%s path=%s", sid, runflow_path, exc_info=True
+        )
+        return None
+
+    if isinstance(payload, Mapping):
+        return payload
+    return None
+
+
+def get_stage_status(
+    sid: str,
+    *,
+    stage: str,
+    runs_root: Path | str | None = None,
+) -> str | None:
+    """Return the lower-cased runflow status for ``stage`` if available."""
+
+    payload = _load_runflow_payload(sid, runs_root=runs_root)
+    if not isinstance(payload, Mapping):
+        return None
+
+    stages = payload.get("stages")
+    if not isinstance(stages, Mapping):
+        return None
+
+    stage_payload = stages.get(str(stage))
+    if not isinstance(stage_payload, Mapping):
+        return None
+
+    status = stage_payload.get("status")
+    if isinstance(status, str):
+        normalized = status.strip().lower()
+        return normalized or None
+    return None
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            text = str(value).strip()
+        except Exception:
+            return None
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except (TypeError, ValueError):
+            return None
+
+
+def _extract_stage_counts(mapping: Mapping[str, Any] | None) -> tuple[int | None, int, int]:
+    if not isinstance(mapping, Mapping):
+        return (None, 0, 0)
+    total = (
+        _coerce_int(mapping.get("results_total"))
+        or _coerce_int(mapping.get("packs_total"))
+        or _coerce_int(mapping.get("total"))
+    )
+    completed = _coerce_int(mapping.get("completed")) or 0
+    failed = _coerce_int(mapping.get("failed")) or 0
+    return (total, completed, failed)
+
+
+def all_note_style_results_terminal(
+    sid: str, *, runs_root: Path | str | None = None
+) -> bool:
+    """Return ``True`` when note_style results appear to be terminal."""
+
+    payload = _load_runflow_payload(sid, runs_root=runs_root)
+    if not isinstance(payload, Mapping):
+        return False
+
+    stages = payload.get("stages")
+    if not isinstance(stages, Mapping):
+        return False
+
+    stage_payload = stages.get("note_style")
+    if not isinstance(stage_payload, Mapping):
+        return False
+
+    status = stage_payload.get("status")
+    if isinstance(status, str):
+        normalized = status.strip().lower()
+        if normalized in {"success", "completed", "error", "failed", "published"}:
+            return True
+
+    summary = stage_payload.get("summary")
+    total, completed, failed = _extract_stage_counts(summary)
+    if total is not None and (total <= 0 or completed + failed >= total):
+        return True
+
+    results = stage_payload.get("results")
+    total_results, completed_results, failed_results = _extract_stage_counts(results)
+    if total_results is not None and (
+        total_results <= 0 or completed_results + failed_results >= total_results
+    ):
+        return True
+
+    empty_ok = False
+    if isinstance(stage_payload.get("empty_ok"), bool):
+        empty_ok = bool(stage_payload["empty_ok"])
+    elif isinstance(summary, Mapping) and "empty_ok" in summary:
+        empty_value = summary.get("empty_ok")
+        if isinstance(empty_value, bool):
+            empty_ok = empty_value
+        elif empty_value is not None:
+            empty_ok = bool(empty_value)
+
+    if empty_ok and (
+        (total is None and total_results is None)
+        or total == 0
+        or total_results == 0
+    ):
+        return True
+
+    return False
 

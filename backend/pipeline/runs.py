@@ -10,6 +10,8 @@ from backend.core.ai.paths import (
     MergePaths,
     ensure_merge_paths,
     merge_paths_from_any,
+    normalize_note_style_account_id,
+    note_style_result_filename,
 )
 
 RUNS_ROOT_ENV = "RUNS_ROOT"                 # optional override
@@ -64,6 +66,21 @@ def safe_replace(dst_path: str, data: str) -> None:
                 os.remove(tmp_path)
         finally:
             raise
+
+
+def _resolve_optional_runs_root(runs_root: Path | str | None) -> Path:
+    if runs_root is None:
+        return RUNS_ROOT
+    if isinstance(runs_root, Path):
+        return runs_root
+    try:
+        text = str(runs_root)
+    except Exception:
+        return RUNS_ROOT
+    normalized = text.strip()
+    if not normalized:
+        return RUNS_ROOT
+    return Path(normalized)
 
 @dataclass
 class RunManifest:
@@ -1270,56 +1287,139 @@ def _extract_stage_counts(mapping: Mapping[str, Any] | None) -> tuple[int | None
     return (total, completed, failed)
 
 
+def account_result_ready(
+    sid: str,
+    acc_id: str,
+    *,
+    runs_root: Path | str | None = None,
+) -> bool:
+    """Return ``True`` when the note_style result for ``acc_id`` is readable JSON."""
+
+    sid_text = str(sid or "").strip()
+    if not sid_text:
+        return False
+
+    normalized_account = normalize_note_style_account_id(acc_id)
+    if not normalized_account:
+        return False
+
+    runs_root_path = _resolve_optional_runs_root(runs_root)
+    results_dir = (
+        runs_root_path
+        / sid_text
+        / "ai_packs"
+        / "note_style"
+        / "results"
+    )
+
+    filename_candidates = {
+        note_style_result_filename(normalized_account),
+        f"acc_{normalized_account}.result",
+    }
+
+    for filename in filename_candidates:
+        candidate_path = results_dir / filename
+        if not candidate_path.exists():
+            continue
+        try:
+            with candidate_path.open("r", encoding="utf-8") as handle:
+                json.load(handle)
+        except Exception:
+            continue
+        else:
+            return True
+
+    return False
+
+
 def all_note_style_results_terminal(
     sid: str, *, runs_root: Path | str | None = None
 ) -> bool:
-    """Return ``True`` when note_style results appear to be terminal."""
+    """Return ``True`` when all expected note_style results are present."""
 
-    payload = _load_runflow_payload(sid, runs_root=runs_root)
-    if not isinstance(payload, Mapping):
+    sid_text = str(sid or "").strip()
+    if not sid_text:
         return False
 
-    stages = payload.get("stages")
-    if not isinstance(stages, Mapping):
-        return False
+    runs_root_path = _resolve_optional_runs_root(runs_root)
+    stage_root = runs_root_path / sid_text / "ai_packs" / "note_style"
+    index_path = stage_root / "index.json"
+    results_dir = stage_root / "results"
 
-    stage_payload = stages.get("note_style")
-    if not isinstance(stage_payload, Mapping):
-        return False
+    expected_accounts: list[str] = []
+    packs_total: int | None = None
 
-    status = stage_payload.get("status")
-    if isinstance(status, str):
-        normalized = status.strip().lower()
-        if normalized in {"success", "completed", "error", "failed", "published"}:
-            return True
+    if index_path.exists():
+        try:
+            with index_path.open("r", encoding="utf-8") as handle:
+                index_payload = json.load(handle)
+        except Exception:
+            index_payload = None
+        if isinstance(index_payload, Mapping):
+            packs_payload = index_payload.get("packs")
+            if isinstance(packs_payload, list):
+                for entry in packs_payload:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    account_value = entry.get("account_id")
+                    normalized = normalize_note_style_account_id(account_value)
+                    if normalized:
+                        expected_accounts.append(normalized)
+            totals_payload = index_payload.get("totals")
+            if isinstance(totals_payload, Mapping):
+                packs_total = (
+                    _coerce_int(totals_payload.get("packs_total"))
+                    or _coerce_int(totals_payload.get("results_total"))
+                )
 
-    summary = stage_payload.get("summary")
-    total, completed, failed = _extract_stage_counts(summary)
-    if total is not None and (total <= 0 or completed + failed >= total):
+    if packs_total is not None and packs_total <= 0:
         return True
 
-    results = stage_payload.get("results")
-    total_results, completed_results, failed_results = _extract_stage_counts(results)
-    if total_results is not None and (
-        total_results <= 0 or completed_results + failed_results >= total_results
-    ):
+    unique_expected: list[str] = []
+    seen: set[str] = set()
+    for account in expected_accounts:
+        if account not in seen:
+            seen.add(account)
+            unique_expected.append(account)
+
+    if unique_expected:
+        for account in unique_expected:
+            if not account_result_ready(
+                sid_text, account, runs_root=runs_root_path
+            ):
+                return False
         return True
 
-    empty_ok = False
-    if isinstance(stage_payload.get("empty_ok"), bool):
-        empty_ok = bool(stage_payload["empty_ok"])
-    elif isinstance(summary, Mapping) and "empty_ok" in summary:
-        empty_value = summary.get("empty_ok")
-        if isinstance(empty_value, bool):
-            empty_ok = empty_value
-        elif empty_value is not None:
-            empty_ok = bool(empty_value)
+    discovered_accounts: list[str] = []
+    if results_dir.is_dir():
+        for candidate in sorted(results_dir.glob("acc_*")):
+            if not candidate.is_file():
+                continue
+            name = candidate.name
+            if not name.startswith("acc_"):
+                continue
+            remainder = name[len("acc_"):]
+            if not remainder:
+                continue
+            account_piece = remainder.split(".", 1)[0]
+            normalized = normalize_note_style_account_id(account_piece)
+            if normalized:
+                discovered_accounts.append(normalized)
 
-    if empty_ok and (
-        (total is None and total_results is None)
-        or total == 0
-        or total_results == 0
-    ):
+    if discovered_accounts:
+        unique_discovered: list[str] = []
+        seen_discovered: set[str] = set()
+        for account in discovered_accounts:
+            if account in seen_discovered:
+                continue
+            seen_discovered.add(account)
+            unique_discovered.append(account)
+
+        for account in unique_discovered:
+            if not account_result_ready(
+                sid_text, account, runs_root=runs_root_path
+            ):
+                return False
         return True
 
     return False

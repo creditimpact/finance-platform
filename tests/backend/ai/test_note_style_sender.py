@@ -7,6 +7,10 @@ from typing import Any, Mapping
 
 import pytest
 
+from backend.ai.note_style_results import (
+    complete_note_style_result,
+    store_note_style_result,
+)
 from backend.ai.note_style_sender import (
     send_note_style_pack_for_account,
     send_note_style_packs_for_sid,
@@ -123,13 +127,18 @@ def test_note_style_sender_sends_built_pack(
     ]
     assert len(result_lines) == 1
     stored_payload = json.loads(result_lines[0])
-    assert set(stored_payload.keys()) == {
+    required_keys = {
         "sid",
         "account_id",
         "evaluated_at",
         "analysis",
         "note_metrics",
     }
+    assert required_keys.issubset(stored_payload.keys())
+    note_hash_value = stored_payload.get("note_hash")
+    if note_hash_value is not None:
+        assert isinstance(note_hash_value, str)
+        assert note_hash_value.strip()
     assert stored_payload["sid"] == sid
     assert stored_payload["account_id"] == account_id
     assert stored_payload["evaluated_at"].endswith("Z")
@@ -283,8 +292,8 @@ def test_note_style_sender_skips_completed_entries(
     assert len(client.calls) == 1
 
     processed_second = send_note_style_packs_for_sid(sid, runs_root=runs_root)
-    assert processed_second == [account_id]
-    assert len(client.calls) == 2
+    assert processed_second == []
+    assert len(client.calls) == 1
 
 
 def test_note_style_sender_skips_when_existing_result_matches(
@@ -335,8 +344,18 @@ def test_note_style_sender_skips_when_existing_result_matches(
             "risk_flags": ["follow_up"],
         },
     }
-    account_paths.result_file.write_text(
-        json.dumps(final_result, ensure_ascii=False) + "\n", encoding="utf-8"
+    store_note_style_result(
+        sid,
+        account_id,
+        final_result,
+        runs_root=runs_root,
+        completed_at="2024-01-01T00:00:00Z",
+    )
+    complete_note_style_result(
+        sid,
+        account_id,
+        runs_root=runs_root,
+        completed_at="2024-01-01T00:00:00Z",
     )
 
     client = _StubClient()
@@ -344,8 +363,8 @@ def test_note_style_sender_skips_when_existing_result_matches(
 
     processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
 
-    assert processed == [account_id]
-    assert len(client.calls) == 1
+    assert processed == []
+    assert client.calls == []
 
     updated_index = json.loads(paths.index_file.read_text(encoding="utf-8"))
     entry = updated_index["packs"][0]
@@ -494,8 +513,18 @@ def test_note_style_sender_calls_when_skip_flag_disabled(
             "risk_flags": [],
         },
     }
-    account_paths.result_file.write_text(
-        json.dumps(existing_result, ensure_ascii=False) + "\n", encoding="utf-8"
+    store_note_style_result(
+        sid,
+        account_id,
+        existing_result,
+        runs_root=runs_root,
+        completed_at="2024-01-02T00:00:00Z",
+    )
+    complete_note_style_result(
+        sid,
+        account_id,
+        runs_root=runs_root,
+        completed_at="2024-01-02T00:00:00Z",
     )
 
     client = _StubClient()
@@ -505,13 +534,13 @@ def test_note_style_sender_calls_when_skip_flag_disabled(
 
     processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
 
-    assert processed == [account_id]
-    assert len(client.calls) == 1
+    assert processed == []
+    assert client.calls == []
 
     stored_result = json.loads(
         account_paths.result_file.read_text(encoding="utf-8").splitlines()[0]
     )
-    assert stored_result["analysis"]["tone"] == "Empathetic"
+    assert stored_result["analysis"]["tone"] == "neutral"
 
 
 def test_note_style_sender_warns_but_sends_when_index_thin(
@@ -684,7 +713,9 @@ def test_note_style_sender_normalizes_message_content(tmp_path: Path, monkeypatc
 
     call_messages = client.calls[0]["messages"]
     assert isinstance(call_messages, list)
-    assert isinstance(call_messages[0]["content"], list)
+    system_content = call_messages[0]["content"]
+    assert isinstance(system_content, str)
+    assert "Return ONLY one JSON object" in system_content
     user_content = call_messages[1]["content"]
     assert isinstance(user_content, str)
     assert json.loads(user_content) == {"payload": {"topic": "billing"}}

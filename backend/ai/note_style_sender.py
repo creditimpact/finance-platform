@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 from backend import config
+from backend.ai.note_style.io import note_style_snapshot
 from backend.ai.note_style_ingest import ingest_note_style_result
 from backend.ai.note_style_results import record_note_style_failure
 from backend.ai.note_style_logging import log_structured_event
@@ -74,6 +75,20 @@ def _log_sender_paths(sid: str, paths: NoteStylePaths) -> None:
         paths.log_file,
         config.NOTE_STYLE_USE_MANIFEST_PATHS,
     )
+
+
+def _build_normalized_lookup(accounts: set[str]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for account in accounts:
+        normalized = normalize_note_style_account_id(account)
+        if not normalized:
+            continue
+        mapping.setdefault(normalized, account)
+    return mapping
+
+
+def _normalize_account_id_set(accounts: set[str]) -> set[str]:
+    return set(_build_normalized_lookup(accounts).keys())
 
 
 def _extract_pack_note_text(pack_payload: Mapping[str, Any]) -> str | None:
@@ -1112,6 +1127,12 @@ def send_note_style_packs_for_sid(
     paths = resolve_note_style_stage_paths(runs_root_path, sid, create=False)
     _log_sender_paths(sid, paths)
     _warn_if_index_thin(paths, sid=sid)
+    snapshot = note_style_snapshot(sid, runs_root=runs_root_path)
+    expected_lookup = _build_normalized_lookup(set(snapshot.packs_expected))
+    expected_normalized = set(expected_lookup.keys())
+    completed_normalized = _normalize_account_id_set(set(snapshot.packs_completed))
+    failed_normalized = _normalize_account_id_set(set(snapshot.packs_failed))
+    pending_normalized = expected_normalized - (completed_normalized | failed_normalized)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
     env_glob_raw = os.getenv("NOTE_STYLE_PACK_GLOB")
@@ -1210,13 +1231,34 @@ def send_note_style_packs_for_sid(
         sample_candidates,
     )
 
+    pending_tracker = set(pending_normalized)
+
+    if not pending_normalized:
+        log.info(
+            "NOTE_STYLE_NO_PENDING sid=%s expected=%s completed=%s failed=%s",
+            sid,
+            len(expected_normalized),
+            len(completed_normalized),
+            len(failed_normalized),
+        )
+        return []
+
     if not pack_candidates:
         log.info("NOTE_STYLE_NO_PACKS sid=%s", sid)
+        if pending_tracker:
+            for missing_account in sorted(pending_tracker):
+                display_account = expected_lookup.get(missing_account, missing_account)
+                log.warning(
+                    "NOTE_STYLE_PENDING_NO_PACK sid=%s account_id=%s",
+                    sid,
+                    display_account,
+                )
         return []
 
     client = get_ai_client()
     processed: list[str] = []
     index_account_map = _load_index_account_map(paths)
+    seen_accounts: set[str] = set()
 
     for candidate in pack_candidates:
         pack_path = candidate.pack_path
@@ -1278,6 +1320,36 @@ def send_note_style_packs_for_sid(
             account_paths = _account_paths_for_candidate(paths, account_id, candidate)
 
             normalized_account_id = account_paths.account_id
+
+            if normalized_account_id in seen_accounts:
+                log.info(
+                    "NOTE_STYLE_SKIP_DUPLICATE sid=%s account_id=%s pack=%s",
+                    sid,
+                    account_id,
+                    pack_relative,
+                )
+                continue
+
+            seen_accounts.add(normalized_account_id)
+
+            if normalized_account_id not in expected_normalized:
+                log.info(
+                    "NOTE_STYLE_SKIP_UNEXPECTED sid=%s account_id=%s pack=%s",
+                    sid,
+                    account_id,
+                    pack_relative,
+                )
+                continue
+
+            if normalized_account_id not in pending_normalized:
+                log.info(
+                    "NOTE_STYLE_SKIP_NOT_PENDING sid=%s account_id=%s pack=%s",
+                    sid,
+                    account_id,
+                    pack_relative,
+                )
+                continue
+
             if pipeline_runs.account_result_ready(
                 sid,
                 normalized_account_id,
@@ -1300,6 +1372,7 @@ def send_note_style_packs_for_sid(
                     reason="terminal_result",
                     result_path=result_relative,
                 )
+                pending_tracker.discard(normalized_account_id)
                 continue
 
             log.info(
@@ -1321,12 +1394,22 @@ def send_note_style_packs_for_sid(
                 client=client,
             ):
                 processed.append(account_id)
+            pending_tracker.discard(normalized_account_id)
 
     log.info(
         "NOTE_STYLE_SEND_DONE sid=%s processed=%s",
         sid,
         processed,
     )
+
+    if pending_tracker:
+        for missing_account in sorted(pending_tracker):
+            display_account = expected_lookup.get(missing_account, missing_account)
+            log.warning(
+                "NOTE_STYLE_PENDING_NO_PACK sid=%s account_id=%s",
+                sid,
+                display_account,
+            )
 
     return processed
 
@@ -1341,6 +1424,30 @@ def send_note_style_pack_for_account(
     paths = resolve_note_style_stage_paths(runs_root_path, sid, create=False)
     _log_sender_paths(sid, paths)
     _warn_if_index_thin(paths, sid=sid)
+    snapshot = note_style_snapshot(sid, runs_root=runs_root_path)
+    expected_normalized = set(
+        _build_normalized_lookup(set(snapshot.packs_expected)).keys()
+    )
+    completed_normalized = _normalize_account_id_set(set(snapshot.packs_completed))
+    failed_normalized = _normalize_account_id_set(set(snapshot.packs_failed))
+
+    target_normalized = normalize_note_style_account_id(account_id)
+    if not target_normalized or target_normalized not in expected_normalized:
+        log.info(
+            "NOTE_STYLE_SKIP_UNEXPECTED sid=%s account_id=%s pack=<direct>",
+            sid,
+            account_id,
+        )
+        return False
+
+    if target_normalized in completed_normalized | failed_normalized:
+        log.info(
+            "NOTE_STYLE_SKIP_NOT_PENDING sid=%s account_id=%s pack=<direct>",
+            sid,
+            account_id,
+        )
+        return False
+
     candidate: _PackCandidate | None = None
     if config.NOTE_STYLE_USE_MANIFEST_PATHS:
         target = normalize_note_style_account_id(account_id)

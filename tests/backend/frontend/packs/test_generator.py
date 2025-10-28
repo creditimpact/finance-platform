@@ -9,11 +9,12 @@ from pathlib import Path
 import pytest
 
 import backend.frontend.packs.generator as generator_module
+from backend.api.app import resolve_display_fields
 from backend.domain.claims import CLAIM_FIELD_LINK_MAP
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
 
 
-def _write_json(path: Path, payload: dict) -> None:
+def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -42,6 +43,22 @@ def _build_fields_flat(**fields: object) -> dict:
             flat[key] = value
     flat.update(per_bureau)
     return flat
+
+
+def _write_bureaus_case(
+    base_dir: Path,
+    sid: str,
+    account_id: str,
+    *,
+    bureaus: dict,
+    meta: dict | None = None,
+    tags: list | None = None,
+) -> Path:
+    account_dir = base_dir / sid / "cases" / "accounts" / account_id
+    _write_json(account_dir / "bureaus.json", bureaus)
+    _write_json(account_dir / "meta.json", meta or {})
+    _write_json(account_dir / "tags.json", tags or [])
+    return account_dir
 
 
 def test_build_stage_manifest_scans_review_pack_directory(tmp_path: Path) -> None:
@@ -310,6 +327,62 @@ def test_bureaus_only_display_uses_fallbacks(monkeypatch, tmp_path: Path) -> Non
     assert status_block["consensus"] == "Collection"
     assert display["dofd"]["transunion"] == "2021-12-15"
     assert display["balance_owed"]["per_bureau"].get("experian", "--") == "--"
+
+
+def test_bureaus_only_resolved_populates_display(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("FRONTEND_USE_BUREAUS_JSON_ONLY", "1")
+
+    runs_root = tmp_path / "runs"
+    sid = "BO-RESOLVED"
+    account_id = "1"
+
+    bureaus_payload = {
+        "transunion": {
+            "account_number_display": "****5678",
+            "account_type": "Credit Card",
+            "account_status": "Open",
+            "balance_owed": "$100",
+            "date_opened": "2023-01-01",
+            "closed_date": "2023-02-01",
+        },
+        "experian": {
+            "account_status": "Open",
+            "account_type": "Credit Card",
+            "balance_owed": "$150",
+        },
+    }
+
+    _write_bureaus_case(
+        runs_root,
+        sid,
+        account_id,
+        bureaus=bureaus_payload,
+        meta={"heading_guess": "Resolved Bank"},
+        tags=[{"kind": "issue", "type": "late_payment"}],
+    )
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    assert result["packs_count"] == 1
+
+    _, stage_pack_payload = _read_stage_pack(runs_root, sid, account_id)
+    display = stage_pack_payload["display"]
+
+    per_bureau = display["account_number"]["per_bureau"]
+    assert per_bureau["transunion"] == "****5678"
+    assert stage_pack_payload["holder_name"] == "Resolved Bank"
+    assert stage_pack_payload["creditor_name"] == "Resolved Bank"
+
+    resolved = resolve_display_fields(display)
+    assert resolved["account_number"]["value"] == "****5678"
+    assert resolved["account_type"]["value"] == "Credit Card"
+    assert resolved["status"]["value"] == "Open"
+    balance_value = resolved["balance_owed"]["value"]
+    assert balance_value
+    assert balance_value != "--"
+    assert resolved["date_opened"]["value"] == "2023-01-01"
+    assert resolved["closed_date"]["value"] == "2023-02-01"
 
 
 def test_bureaus_only_meta_prefers_nested_furnisher(monkeypatch, tmp_path: Path) -> None:

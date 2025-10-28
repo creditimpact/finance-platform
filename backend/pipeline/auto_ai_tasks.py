@@ -48,7 +48,7 @@ from backend.runflow.decider import (
     reconcile_umbrella_barriers,
 )
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
-from backend.api.tasks import generate_frontend_packs_task
+from backend.api.tasks import enqueue_generate_frontend_packs
 from backend.runflow.manifest import (
     update_manifest_frontend,
     update_manifest_state,
@@ -74,7 +74,7 @@ def _maybe_autobuild_review(sid: str) -> None:
     if os.getenv("GENERATE_FRONTEND_ON_VALIDATION", "1") != "1":
         logger.info("REVIEW_AUTO: skip enqueue sid=%s reason=env_disabled", sid)
         return
-    generate_frontend_packs_task.delay(sid)
+    enqueue_generate_frontend_packs(sid)
     logger.info("REVIEW_AUTO: queued_generate_frontend_packs sid=%s", sid)
 
 

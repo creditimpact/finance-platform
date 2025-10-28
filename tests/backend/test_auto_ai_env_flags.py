@@ -19,10 +19,10 @@ def test_maybe_autobuild_review_honors_generate_frontend_env(monkeypatch, env_va
     captured: list[Any] = []
 
     class _TaskStub:
-        def delay(self, sid: str) -> None:
+        def __call__(self, sid: str, *, runs_root: Any | None = None, force: Any | None = None) -> None:
             captured.append(sid)
 
-    monkeypatch.setattr(auto_ai_tasks, "generate_frontend_packs_task", _TaskStub())
+    monkeypatch.setattr(auto_ai_tasks, "enqueue_generate_frontend_packs", _TaskStub())
 
     if env_value is None:
         monkeypatch.delenv("GENERATE_FRONTEND_ON_VALIDATION", raising=False)

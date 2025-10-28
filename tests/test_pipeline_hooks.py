@@ -11,11 +11,14 @@ class _TaskStub:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def delay(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover - exercised in tests
-        self.calls.append({"method": "delay", "args": args, "kwargs": kwargs})
-
-    def apply_async(self, *, args: list[Any], queue: str) -> None:  # pragma: no cover - compatibility fallback
-        self.calls.append({"method": "apply_async", "args": tuple(args), "kwargs": {"queue": queue}})
+    def __call__(self, sid: str, *, runs_root: Any | None = None, force: Any | None = None) -> None:
+        self.calls.append(
+            {
+                "sid": sid,
+                "runs_root": runs_root,
+                "force": force,
+            }
+        )
 
 
 @pytest.fixture()
@@ -23,7 +26,7 @@ def task_stub(monkeypatch: pytest.MonkeyPatch) -> _TaskStub:
     from backend.api import tasks as tasks_module
 
     stub = _TaskStub()
-    monkeypatch.setattr(tasks_module, "generate_frontend_packs_task", stub)
+    monkeypatch.setattr(tasks_module, "enqueue_generate_frontend_packs", stub)
     return stub
 
 
@@ -34,10 +37,11 @@ def test_on_cases_built_default_enabled(monkeypatch: pytest.MonkeyPatch, task_st
 
     from pipeline import hooks
 
-    hooks.on_cases_built("SID-456")
+    result = hooks.on_cases_built("SID-456")
 
+    assert result is True
     assert task_stub.calls == [
-        {"method": "delay", "args": ("SID-456",), "kwargs": {}}
+        {"sid": "SID-456", "runs_root": None, "force": None}
     ]
 
 
@@ -48,6 +52,7 @@ def test_on_cases_built_respects_env_flag(monkeypatch: pytest.MonkeyPatch, task_
 
     from pipeline import hooks
 
-    hooks.on_cases_built("SID-789")
+    result = hooks.on_cases_built("SID-789")
 
+    assert result is False
     assert task_stub.calls == []

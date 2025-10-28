@@ -598,6 +598,29 @@ def _create_frontend_enqueue_marker(lock_path: Path, sid: str) -> bool:
     return True
 
 
+def enqueue_generate_frontend_packs(
+    sid: str,
+    *,
+    runs_root: str | None = None,
+    force: bool = False,
+) -> None:
+    """Queue ``generate_frontend_packs_task`` on the frontend Celery queue."""
+
+    queue_name = _frontend_queue_name()
+    log.info(
+        "enqueue generate_frontend_packs_task sid=%s queue=%s runs_root=%s force=%s",
+        sid,
+        queue_name,
+        runs_root,
+        force,
+    )
+    generate_frontend_packs_task.apply_async(
+        args=[sid],
+        kwargs={"runs_root": runs_root, "force": force},
+        queue=queue_name,
+    )
+
+
 def _enqueue_frontend_build(sid: str, *, run_dir: Path | None) -> bool:
     """Enqueue the frontend pack builder for ``sid`` if not already queued."""
 
@@ -633,34 +656,33 @@ def _enqueue_frontend_build(sid: str, *, run_dir: Path | None) -> bool:
                 exc_info=True,
             )
 
+    def _enqueue_directly() -> bool:
+        try:
+            enqueue_generate_frontend_packs(sid)
+        except Exception:  # pragma: no cover - defensive logging
+            log.error("FRONTEND_ENQUEUE_FAILED sid=%s", sid, exc_info=True)
+            _cleanup_marker()
+            return False
+        return True
+
     try:
         from pipeline.hooks import on_cases_built
     except Exception:  # pragma: no cover - defensive logging
         log.error("FRONTEND_ENQUEUE_HOOK_IMPORT_FAILED sid=%s", sid, exc_info=True)
-        queue_name = _frontend_queue_name()
-        try:
-            generate_frontend_packs_task.apply_async(args=[sid], queue=queue_name)
-        except Exception:  # pragma: no cover - defensive logging
-            log.error("FRONTEND_ENQUEUE_FAILED sid=%s", sid, exc_info=True)
-            _cleanup_marker()
-            return False
-        return True
+        return _enqueue_directly()
 
     try:
-        on_cases_built(sid)
+        enqueued = bool(on_cases_built(sid))
     except Exception:  # pragma: no cover - defensive logging
         log.error("FRONTEND_ENQUEUE_HOOK_FAILED sid=%s", sid, exc_info=True)
-        queue_name = _frontend_queue_name()
-        try:
-            generate_frontend_packs_task.apply_async(args=[sid], queue=queue_name)
-        except Exception:  # pragma: no cover - defensive logging
-            log.error("FRONTEND_ENQUEUE_FAILED sid=%s", sid, exc_info=True)
-            _cleanup_marker()
-            return False
+        return _enqueue_directly()
+
+    log.info("FRONTEND_ENQUEUE sid=%s enqueued=%s", sid, enqueued)
+    if enqueued:
         return True
 
-    log.info("FRONTEND_ENQUEUE sid=%s", sid)
-    return True
+    _cleanup_marker()
+    return False
 
 
 def _enqueue_frontend_after_cases(
@@ -687,6 +709,8 @@ def request_frontend_review_build(
     prevents duplicate queue submissions.  When neither is supplied the
     in-memory guard still prevents duplicate submissions within the current
     process.
+
+    Returns ``True`` when the Celery task was queued, ``False`` otherwise.
     """
 
     resolved_run_dir: Path | None = None

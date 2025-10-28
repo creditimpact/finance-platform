@@ -9,13 +9,14 @@ import os
 logger = logging.getLogger(__name__)
 
 
-def on_cases_built(sid: str) -> None:
+def on_cases_built(sid: str) -> bool:
     """Trigger frontend pack generation when cases are materialised."""
 
     if os.getenv("FRONTEND_TRIGGER_AFTER_CASES", "1") != "1":
         logger.info("REVIEW_TRIGGER: skip_enqueue sid=%s reason=env_disabled", sid)
-        return
+        return False
 
-    from backend.api.tasks import generate_frontend_packs_task
+    from backend.api.tasks import enqueue_generate_frontend_packs
 
-    generate_frontend_packs_task.delay(sid)
+    enqueue_generate_frontend_packs(sid)
+    return True

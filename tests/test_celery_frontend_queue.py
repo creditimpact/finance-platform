@@ -64,3 +64,34 @@ def test_generate_frontend_task_logs_receipt(monkeypatch, caplog):
     assert any(
         "FRONTEND_TASK_RECEIVED sid=SID-123" in message for message in caplog.messages
     )
+
+
+def test_enqueue_helper_uses_frontend_queue(monkeypatch, caplog):
+    monkeypatch.setenv("CELERY_FRONTEND_QUEUE", "frontend")
+
+    import backend.api.tasks as tasks_module
+
+    class _TaskStub:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def apply_async(self, *, args, kwargs, queue):  # type: ignore[no-untyped-def]
+            self.calls.append({"args": tuple(args), "kwargs": dict(kwargs), "queue": queue})
+
+    stub = _TaskStub()
+    monkeypatch.setattr(tasks_module, "generate_frontend_packs_task", stub)
+
+    with caplog.at_level(logging.INFO):
+        tasks_module.enqueue_generate_frontend_packs("SID-999")
+
+    assert stub.calls == [
+        {
+            "args": ("SID-999",),
+            "kwargs": {"runs_root": None, "force": False},
+            "queue": "frontend",
+        }
+    ]
+    assert any(
+        "enqueue generate_frontend_packs_task sid=SID-999 queue=frontend" in message
+        for message in caplog.messages
+    )

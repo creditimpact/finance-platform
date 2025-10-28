@@ -50,37 +50,24 @@ def test_persist_manifest_writes_to_disk(runs_root):
     assert stored == str(artifact_path.resolve())
 
 
-def test_persist_manifest_twice_on_windows_handles_missing_temp(
-    runs_root, monkeypatch
-):
+def test_safe_replace_removes_temp_file_on_failure(tmp_path, monkeypatch):
     from backend.pipeline import runs as runs_module
 
-    manifest = RunManifest.for_sid("sid_win")
-    persist_manifest(manifest)
+    dst = tmp_path / "manifest.json"
 
-    original_safe_replace = runs_module.safe_replace
+    calls: list[tuple[str, str]] = []
 
-    class WindowsOsProxy:
-        name = "nt"
+    def failing_replace(src: str, dst_path: str) -> None:
+        calls.append((src, dst_path))
+        raise RuntimeError("fail")
 
-        def __getattr__(self, attr):
-            return getattr(os, attr)
+    monkeypatch.setattr(runs_module.os, "replace", failing_replace)
 
-    def remove_temp_then_replace(src, dst, *args, **kwargs):
-        src_path = Path(src)
-        if src_path.exists():
-            try:
-                src_path.unlink()
-            except FileNotFoundError:
-                pass
-        return original_safe_replace(src, dst, *args, **kwargs)
+    with pytest.raises(RuntimeError):
+        runs_module.safe_replace(str(dst), "{}")
 
-    monkeypatch.setattr(runs_module, "os", WindowsOsProxy())
-    monkeypatch.setattr(runs_module, "safe_replace", remove_temp_then_replace)
-
-    persist_manifest(manifest)
-
-    assert manifest.path.exists()
+    assert calls, "os.replace should have been invoked"
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_api_upload_updates_manifest(tmp_path, monkeypatch, runs_root):

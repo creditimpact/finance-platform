@@ -25,6 +25,7 @@ from backend.ai.note_style.io import (
     note_style_snapshot,
     note_style_stage_view,
 )
+from backend.ai.note_style_logging import log_note_style_decision
 from backend.core.ai.paths import (
     NoteStylePaths,
     ensure_note_style_account_paths,
@@ -723,6 +724,15 @@ def _record_stage_snapshot(
         )
     except Exception:  # pragma: no cover - defensive logging
         log.exception("NOTE_STYLE_STAGE_RECORD_FAILED sid=%s", sid)
+
+    log_note_style_decision(
+        "NOTE_STYLE_STAGE_SNAPSHOT",
+        logger=log,
+        sid=sid,
+        runs_root=runs_root,
+        view=view,
+        reason="record_stage_snapshot",
+    )
 
     return view
 

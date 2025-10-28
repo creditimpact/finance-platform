@@ -369,6 +369,43 @@ def test_bureaus_only_holder_falls_back_to_bureaus_when_meta_missing(
     assert stage_pack_payload["display"]["holder_name"] == "TransUnion Creditor"
 
 
+def test_bureaus_only_preserves_issue_priority(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FRONTEND_USE_BUREAUS_JSON_ONLY", "1")
+    monkeypatch.setenv("FRONTEND_STAGE_PAYLOAD", "full")
+
+    runs_root = tmp_path / "runs"
+    sid = "BO-ISSUES"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    bureaus_payload = {
+        "transunion": {
+            "account_number_display": "****3333",
+            "account_type": "Installment",
+            "account_status": "Open",
+        }
+    }
+
+    tags_payload = [
+        {"kind": "note", "type": "skip"},
+        {"kind": "issue", "type": "late_payment"},
+        {"kind": "issue", "type": "wrong_account"},
+        {"kind": "issue", "type": "late_payment"},
+    ]
+
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+    _write_json(account_dir / "meta.json", {"heading_guess": "Issue Bank"})
+    _write_json(account_dir / "tags.json", tags_payload)
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    assert result["packs_count"] == 1
+
+    _, stage_pack_payload = _read_stage_pack(runs_root, sid, "1")
+
+    assert stage_pack_payload["primary_issue"] == "late_payment"
+    assert stage_pack_payload["display"]["primary_issue"] == "late_payment"
+    assert stage_pack_payload["issues"] == ["late_payment", "wrong_account"]
+
+
 def test_generate_frontend_packs_bureaus_only_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

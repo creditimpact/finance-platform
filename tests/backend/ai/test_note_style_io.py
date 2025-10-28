@@ -39,6 +39,14 @@ def _write_result(paths, account: str, payload: dict[str, object]) -> Path:
     return result_path
 
 
+def _write_response(base_dir: Path, account: str, payload: dict[str, object]) -> Path:
+    responses_dir = base_dir / "frontend" / "review" / "responses"
+    responses_dir.mkdir(parents=True, exist_ok=True)
+    response_path = responses_dir / f"{account}.result.json"
+    response_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return response_path
+
+
 def test_note_style_snapshot_empty(tmp_path: Path) -> None:
     snapshot = note_style_snapshot("SID-EMPTY", runs_root=tmp_path)
     assert snapshot.packs_expected == set()
@@ -111,3 +119,29 @@ def test_note_style_snapshot_tracks_results(tmp_path: Path) -> None:
         normalize_note_style_account_id(accounts[2]),
     }
     assert snapshot.packs_completed == {normalize_note_style_account_id(accounts[0])}
+
+
+def test_note_style_snapshot_counts_responses_as_expected(tmp_path: Path) -> None:
+    sid = "SID-RESPONSES"
+    accounts = ["A1", "A2", "A3"]
+    run_dir = tmp_path / sid
+
+    for account in accounts:
+        _write_response(run_dir, account, {"answers": {"explain": f"Note {account}"}})
+
+    paths = ensure_note_style_paths(tmp_path, sid, create=True)
+    _write_pack(paths, accounts[0])
+    _write_pack(paths, accounts[1])
+
+    snapshot = note_style_snapshot(sid, runs_root=tmp_path)
+
+    normalized_accounts = {
+        normalize_note_style_account_id(account) for account in accounts
+    }
+    assert snapshot.packs_expected == normalized_accounts
+
+    built_accounts = {
+        normalize_note_style_account_id(account) for account in accounts[:2]
+    }
+    assert snapshot.packs_built >= built_accounts
+    assert normalize_note_style_account_id(accounts[2]) not in snapshot.packs_built

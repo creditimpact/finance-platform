@@ -138,6 +138,57 @@ def test_generate_frontend_task_updates_manifest_on_success(monkeypatch):
     assert len(recorded) == 1
 
 
+def test_generate_frontend_task_uses_manifest_builder_when_flagged(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("FRONTEND_BUILDER_IMPL", "manifest")
+
+    import backend.api.tasks as tasks_module
+
+    def _legacy_should_not_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("legacy builder should not run when manifest flag is set")
+
+    monkeypatch.setattr(
+        tasks_module, "generate_frontend_packs_for_run", _legacy_should_not_run
+    )
+
+    recorded_builder: dict[str, object] = {}
+
+    def _fake_manifest_builder(sid: str, manifest: dict[str, object]) -> dict[str, object]:
+        recorded_builder["called"] = True
+        recorded_builder["manifest"] = dict(manifest)
+        return {
+            "status": "success",
+            "packs_count": 2,
+            "built": True,
+            "packs_dir": str(tmp_path / "packs"),
+            "last_built_at": "2024-01-01T00:00:00Z",
+        }
+
+    monkeypatch.setattr(
+        "backend.frontend.review_pack_builder.build_review_packs",
+        _fake_manifest_builder,
+    )
+
+    manifest_updates: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        tasks_module,
+        "update_manifest_frontend",
+        lambda *args, **kwargs: manifest_updates.append((args, kwargs)),
+    )
+
+    result = tasks_module.generate_frontend_packs_task.run(
+        "SID-MANIFEST", runs_root=str(tmp_path)
+    )
+
+    assert recorded_builder.get("called") is True
+    manifest_hint = recorded_builder.get("manifest")
+    assert isinstance(manifest_hint, dict)
+    assert str(manifest_hint.get("path")).endswith("SID-MANIFEST/manifest.json")
+    assert result["packs_count"] == 2
+    assert manifest_updates, "manifest update should be triggered"
+
+
 def test_enqueue_helper_uses_frontend_queue(monkeypatch, caplog):
     monkeypatch.setenv("CELERY_FRONTEND_QUEUE", "frontend")
 

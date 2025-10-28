@@ -105,6 +105,10 @@ $PY = "$PWD\.venv\Scripts\python.exe"
 
 At least one worker process must listen on the `frontend` queue so the review
 packs generate promptly even while merge or validation jobs are running.
+When the worker boots, confirm the banner lists `frontend` in the `queues` line
+and shows `backend.api.tasks.generate_frontend_packs_task` under `[tasks]`.
+Submitting a run should emit `enqueue generate_frontend_packs_task ... queue=frontend`
+in the logs, indicating the job was routed correctly.
 ```
 
 `backend.validation.manifest` validates that every pack referenced in the

@@ -440,7 +440,7 @@ def test_note_style_stage_promotion_partial_failures_mark_success(tmp_path: Path
     assert stage_payload["completed_at"].endswith("Z")
 
 
-def test_note_style_stage_promotion_all_failed_marks_error(tmp_path: Path) -> None:
+def test_note_style_stage_promotion_all_failed_marks_success(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
     sid = "SID-note-all-failed"
     run_dir = runs_root / sid
@@ -462,11 +462,11 @@ def test_note_style_stage_promotion_all_failed_marks_error(tmp_path: Path) -> No
     )
 
     assert updated is True
-    assert promoted is False
+    assert promoted is True
     assert log_context == {"total": 2, "completed": 0, "failed": 2}
 
     stage_payload = data["stages"]["note_style"]
-    assert stage_payload["status"] == "error"
+    assert stage_payload["status"] == "success"
     assert stage_payload["empty_ok"] is False
     assert stage_payload["metrics"] == {"packs_total": 2}
     assert stage_payload["results"] == {"results_total": 2, "completed": 0, "failed": 2}

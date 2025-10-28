@@ -493,9 +493,11 @@ def _looks_like_analysis_payload(candidate: Mapping[str, Any]) -> bool:
     return True
 
 
-def _result_file_contains_valid_analysis(result_path: Path | None) -> bool:
+def _result_file_status(result_path: Path | None) -> tuple[bool, bool]:
+    """Return ``(valid_json, analysis_valid)`` for ``result_path``."""
+
     if result_path is None or not result_path.exists():
-        return False
+        return (False, False)
 
     try:
         with result_path.open("r", encoding="utf-8") as handle:
@@ -511,26 +513,29 @@ def _result_file_contains_valid_analysis(result_path: Path | None) -> bool:
                         result_path,
                         exc_info=True,
                     )
-                    return False
+                    return (False, False)
                 if not isinstance(payload, Mapping):
-                    return False
-                if _looks_like_analysis_payload(payload):
-                    return True
-                analysis_payload = payload.get("analysis")
-                if isinstance(analysis_payload, Mapping) and _looks_like_analysis_payload(
-                    analysis_payload
-                ):
-                    return True
-                return False
+                    return (False, False)
+                analysis_valid = _looks_like_analysis_payload(payload)
+                if not analysis_valid:
+                    analysis_payload = payload.get("analysis")
+                    if isinstance(analysis_payload, Mapping):
+                        analysis_valid = _looks_like_analysis_payload(analysis_payload)
+                return (True, analysis_valid)
     except FileNotFoundError:
-        return False
+        return (False, False)
     except OSError:
         log.warning(
             "NOTE_STYLE_RESULT_READ_FAILED path=%s", result_path, exc_info=True
         )
-        return False
+        return (False, False)
 
-    return False
+    return (False, False)
+
+
+def _result_file_contains_valid_analysis(result_path: Path | None) -> bool:
+    _, analysis_valid = _result_file_status(result_path)
+    return analysis_valid
 
 
 def _load_pack_note_metrics(pack_path: Path) -> Mapping[str, Any] | None:
@@ -1061,20 +1066,20 @@ class NoteStyleIndexWriter:
         pack_path: Path | None,
         result_path: Path | None,
         completed_at: str | None = None,
-    ) -> tuple[Mapping[str, Any] | None, dict[str, int], int, bool]:
+    ) -> tuple[Mapping[str, Any] | None, dict[str, int], int, bool, bool]:
         document = self._load_document()
         key, entries = self._extract_entries(document)
 
         timestamp = completed_at or _now_iso()
         normalized_account = str(account_id)
-        analysis_valid = _result_file_contains_valid_analysis(result_path)
+        result_valid, analysis_valid = _result_file_status(result_path)
 
         rewritten: list[dict[str, Any]] = []
         updated_entry: dict[str, Any] | None = None
         for entry in entries:
             entry_payload = dict(entry)
             if str(entry_payload.get("account_id") or "") == normalized_account:
-                if analysis_valid:
+                if result_valid:
                     entry_payload["status"] = "completed"
                     entry_payload["completed_at"] = timestamp
                 else:
@@ -1093,30 +1098,34 @@ class NoteStyleIndexWriter:
                         "pack", _relativize(pack_path, self._paths.base)
                     )
                 entry_payload.pop("error", None)
+                entry_payload["updated_at"] = timestamp
                 updated_entry = entry_payload
             rewritten.append(entry_payload)
 
         if updated_entry is None:
             entry_payload = {"account_id": normalized_account}
-            if analysis_valid:
+            if result_valid:
                 entry_payload["status"] = "completed"
                 entry_payload["completed_at"] = timestamp
             else:
                 entry_payload["status"] = "pending"
-            if pack_path is not None:
-                entry_payload["pack"] = _relativize(pack_path, self._paths.base)
             if result_path is not None:
                 entry_payload["result_path"] = _relativize(
                     result_path, self._paths.base
                 )
             else:
                 entry_payload["result_path"] = ""
+            if pack_path is not None:
+                entry_payload["pack"] = _relativize(pack_path, self._paths.base)
+            entry_payload.pop("error", None)
+            entry_payload["updated_at"] = timestamp
             rewritten.append(entry_payload)
             updated_entry = entry_payload
 
         rewritten.sort(key=lambda item: str(item.get("account_id") or ""))
         document[key] = rewritten
         document["totals"] = _compute_totals(rewritten)
+        document["updated_at"] = timestamp
         skipped_count = sum(
             1
             for entry in rewritten
@@ -1145,14 +1154,26 @@ class NoteStyleIndexWriter:
             pack_value,
             result_value,
         )
-        if result_path is not None and not analysis_valid:
+        if not result_valid:
+            log.warning(
+                "NOTE_STYLE_RESULT_INVALID sid=%s account_id=%s path=%s",
+                self.sid,
+                normalized_account,
+                result_value
+                or (
+                    _relative_to_base(result_path, self._paths.base)
+                    if result_path is not None
+                    else ""
+                ),
+            )
+        elif result_path is not None and not analysis_valid:
             log.warning(
                 "NOTE_STYLE_RESULT_ANALYSIS_MISSING sid=%s account_id=%s path=%s",
                 self.sid,
                 normalized_account,
                 _relative_to_base(result_path, self._paths.base),
             )
-        return updated_entry, totals, skipped_count, analysis_valid
+        return updated_entry, totals, skipped_count, result_valid, analysis_valid
 
     def mark_failed(
         self,
@@ -1183,6 +1204,7 @@ class NoteStyleIndexWriter:
                         "pack", _relativize(pack_path, self._paths.base)
                     )
                 entry_payload.setdefault("result_path", "")
+                entry_payload["updated_at"] = timestamp
                 updated_entry = entry_payload
             rewritten.append(entry_payload)
 
@@ -1197,12 +1219,14 @@ class NoteStyleIndexWriter:
                 entry_payload["pack"] = _relativize(pack_path, self._paths.base)
             if error:
                 entry_payload["error"] = str(error)
+            entry_payload["updated_at"] = timestamp
             rewritten.append(entry_payload)
             updated_entry = entry_payload
 
         rewritten.sort(key=lambda item: str(item.get("account_id") or ""))
         document[key] = rewritten
         document["totals"] = _compute_totals(rewritten)
+        document["updated_at"] = timestamp
         skipped_count = sum(
             1
             for entry in rewritten
@@ -1375,7 +1399,7 @@ def complete_note_style_result(
     account_paths: NoteStyleAccountPaths | None = None,
     completed_at: str | None = None,
     update_stage: bool = True,
-) -> tuple[Mapping[str, Any] | None, dict[str, int], int, bool]:
+) -> tuple[Mapping[str, Any] | None, dict[str, int], int, bool, bool]:
     """Mark ``account_id`` as completed and refresh note_style stage data."""
 
     runs_root_path = _resolve_runs_root(runs_root)
@@ -1387,7 +1411,13 @@ def complete_note_style_result(
     )
 
     writer = NoteStyleIndexWriter(sid=sid, paths=resolved_paths)
-    updated_entry, totals, skipped_count, analysis_valid = writer.mark_completed(
+    (
+        updated_entry,
+        totals,
+        skipped_count,
+        result_valid,
+        analysis_valid,
+    ) = writer.mark_completed(
         account_id,
         pack_path=resolved_account_paths.pack_file,
         result_path=resolved_account_paths.result_file,
@@ -1395,7 +1425,7 @@ def complete_note_style_result(
     )
 
     if update_stage:
-        if analysis_valid:
+        if result_valid:
             _refresh_after_index_update(
                 sid=sid,
                 account_id=account_id,
@@ -1411,10 +1441,10 @@ def complete_note_style_result(
                 "NOTE_STYLE_REFRESH_DEFERRED sid=%s account_id=%s reason=%s",
                 sid,
                 account_id,
-                "analysis_missing",
+                "result_invalid",
             )
 
-    return updated_entry, totals, skipped_count, analysis_valid
+    return updated_entry, totals, skipped_count, result_valid, analysis_valid
 
 
 def store_note_style_result(

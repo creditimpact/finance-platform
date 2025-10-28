@@ -15,7 +15,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from backend.core.io.json_io import _atomic_write_json as _shared_atomic_write_json
 from backend.core.paths.frontend_review import (
@@ -50,7 +50,7 @@ _BUREAU_BADGES: Mapping[str, Mapping[str, str]] = {
 
 _BUREAU_ORDER: tuple[str, ...] = ("transunion", "experian", "equifax")
 
-_DISPLAY_SCHEMA_VERSION = "1.2"
+_DISPLAY_SCHEMA_VERSION = "1.3"
 
 _STAGE_PAYLOAD_MODE_MINIMAL = "minimal"
 _STAGE_PAYLOAD_MODE_FULL = "full"
@@ -892,6 +892,170 @@ def _collect_field_text_values(
     return values
 
 
+def _normalize_status_text(value: str) -> str:
+    normalized = value.strip()
+    lowered = normalized.lower()
+    simplified = re.sub(r"[^a-z]", "", lowered)
+    if simplified == "collectionchargeoff":
+        return "Collection"
+    return normalized
+
+
+def _collect_bureau_field_map(
+    bureaus: Mapping[str, Mapping[str, Any]],
+    key: str,
+    *,
+    fallback_key: str | None = None,
+    transform: Callable[[str], str] | None = None,
+) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for bureau in _BUREAU_ORDER:
+        payload = bureaus.get(bureau)
+        if not isinstance(payload, Mapping):
+            continue
+        raw_value = payload.get(key)
+        text_value = _coerce_display_text(raw_value)
+        if not text_value and fallback_key:
+            raw_value = payload.get(fallback_key)
+            text_value = _coerce_display_text(raw_value)
+        if not text_value:
+            continue
+        if transform is not None:
+            transformed = transform(text_value)
+            text_value = _coerce_display_text(transformed)
+            if not text_value:
+                continue
+        values[bureau] = text_value
+    return values
+
+
+def _resolve_meta_holder_name(
+    meta_payload: Mapping[str, Any] | None,
+) -> tuple[str | None, str]:
+    if isinstance(meta_payload, Mapping):
+        for key in (
+            "heading_guess",
+            "furnisher_name",
+            "furnisher",
+            "creditor_name",
+            "creditor",
+            "name",
+        ):
+            candidate = _extract_text(meta_payload.get(key))
+            if candidate:
+                return candidate, f"meta.{key}"
+    return None, "missing"
+
+
+def build_display_from_bureaus(
+    bureaus: Mapping[str, Any],
+    meta: Mapping[str, Any] | None,
+    tags: Any,
+) -> dict[str, Any]:
+    bureaus_branches: dict[str, Mapping[str, Any]] = {
+        bureau: payload
+        for bureau, payload in bureaus.items()
+        if bureau in _BUREAU_BADGES and isinstance(payload, Mapping)
+    }
+
+    account_number_values = _collect_bureau_field_map(
+        bureaus_branches, "account_number_display"
+    )
+    if not account_number_values:
+        account_number_values = _collect_bureau_field_map(
+            bureaus_branches, "account_number"
+        )
+    account_number_per_bureau = _normalize_per_bureau(account_number_values)
+    account_number_consensus = _resolve_account_number_consensus(
+        account_number_per_bureau
+    )
+
+    account_type_values = _collect_bureau_field_map(bureaus_branches, "account_type")
+    account_type_per_bureau = _normalize_per_bureau(account_type_values)
+    account_type_consensus = _resolve_majority_consensus(account_type_per_bureau)
+
+    status_values = _collect_bureau_field_map(
+        bureaus_branches,
+        "account_status",
+        fallback_key="payment_status",
+        transform=_normalize_status_text,
+    )
+    status_per_bureau = _normalize_per_bureau(status_values)
+    status_consensus = _resolve_majority_consensus(status_per_bureau)
+
+    opened_per_bureau = _normalize_per_bureau(
+        _collect_bureau_field_map(bureaus_branches, "date_opened")
+    )
+    closed_date_per_bureau = _normalize_per_bureau(
+        _collect_bureau_field_map(bureaus_branches, "closed_date")
+    )
+    last_payment_per_bureau = _normalize_per_bureau(
+        _collect_bureau_field_map(bureaus_branches, "last_payment")
+    )
+    dofd_per_bureau = _normalize_per_bureau(
+        _collect_bureau_field_map(
+            bureaus_branches,
+            "date_of_first_delinquency",
+            fallback_key="date_of_last_activity",
+        )
+    )
+    balance_per_bureau = _normalize_per_bureau(
+        _collect_bureau_field_map(bureaus_branches, "balance_owed")
+    )
+    high_balance_per_bureau = _normalize_per_bureau(
+        _collect_bureau_field_map(bureaus_branches, "high_balance")
+    )
+    limit_per_bureau = _normalize_per_bureau(
+        _collect_bureau_field_map(bureaus_branches, "credit_limit")
+    )
+    remarks_per_bureau = _normalize_per_bureau(
+        _collect_bureau_field_map(bureaus_branches, "creditor_remarks")
+    )
+
+    holder_candidate, _holder_resolver = _resolve_meta_holder_name(meta)
+    display_holder_name = _coerce_display_text(holder_candidate)
+    if not display_holder_name:
+        display_holder_name = "Unknown"
+
+    issues = _collect_issue_types(tags)
+    primary_issue_value = issues[0] if issues else None
+    display_primary_issue = _coerce_display_text(primary_issue_value or "unknown")
+    if not display_primary_issue:
+        display_primary_issue = "unknown"
+
+    balance_payload = {"per_bureau": dict(balance_per_bureau)}
+
+    display_payload: dict[str, Any] = {
+        "display_version": _DISPLAY_SCHEMA_VERSION,
+        "holder_name": display_holder_name,
+        "primary_issue": display_primary_issue,
+        "account_number": {
+            "per_bureau": dict(account_number_per_bureau),
+            "consensus": account_number_consensus,
+        },
+        "account_type": {
+            "per_bureau": dict(account_type_per_bureau),
+            "consensus": account_type_consensus,
+        },
+        "status": {
+            "per_bureau": dict(status_per_bureau),
+            "consensus": status_consensus,
+        },
+        "balance": dict(balance_payload),
+        "balance_owed": dict(balance_payload),
+        "high_balance": {"per_bureau": dict(high_balance_per_bureau)},
+        "limit": {"per_bureau": dict(limit_per_bureau)},
+        "remarks": {"per_bureau": dict(remarks_per_bureau)},
+        "opened": dict(opened_per_bureau),
+        "date_opened": dict(opened_per_bureau),
+        "closed_date": dict(closed_date_per_bureau),
+        "last_payment": dict(last_payment_per_bureau),
+        "dofd": dict(dofd_per_bureau),
+    }
+
+    return display_payload
+
+
 def _extract_bureaus_majority_value(
     bureaus_payload: Mapping[str, Any], field: str
 ) -> str | None:
@@ -1077,14 +1241,10 @@ def _derive_holder_name_from_meta(
     return fallback, "account_id"
 
 
-def _extract_issue_tags(
-    tags_path: Path, payload: Any | None = None
-) -> tuple[str | None, list[str]]:
-    if payload is None:
-        payload = _load_json_payload(tags_path)
+def _collect_issue_types(payload: Any) -> list[str]:
     issues: list[str] = []
     seen: set[str] = set()
-    if isinstance(payload, Sequence):
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
         for entry in payload:
             if not isinstance(entry, Mapping):
                 continue
@@ -1094,13 +1254,20 @@ def _extract_issue_tags(
             if not isinstance(issue_type, str):
                 continue
             trimmed = issue_type.strip()
-            if not trimmed:
-                continue
-            if trimmed in seen:
+            if not trimmed or trimmed in seen:
                 continue
             issues.append(trimmed)
             seen.add(trimmed)
+    return issues
 
+
+def _extract_issue_tags(
+    tags_path: Path, payload: Any | None = None
+) -> tuple[str | None, list[str]]:
+    if payload is None:
+        payload = _load_json_payload(tags_path)
+
+    issues = _collect_issue_types(payload)
     primary = issues[0] if issues else None
     return primary, issues
 
@@ -1339,6 +1506,11 @@ def build_display_payload(
     balance_per_bureau: Mapping[str, str],
     date_opened_per_bureau: Mapping[str, str],
     closed_date_per_bureau: Mapping[str, str],
+    last_payment_per_bureau: Mapping[str, str] | None = None,
+    dofd_per_bureau: Mapping[str, str] | None = None,
+    high_balance_per_bureau: Mapping[str, str] | None = None,
+    limit_per_bureau: Mapping[str, str] | None = None,
+    remarks_per_bureau: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     account_number_consensus_text = _normalize_consensus_text(account_number_consensus)
     account_type_consensus_text = _normalize_consensus_text(account_type_consensus)
@@ -1360,9 +1532,36 @@ def build_display_payload(
             "per_bureau": dict(status_per_bureau),
             "consensus": status_consensus_text,
         },
+        "balance": {"per_bureau": dict(balance_per_bureau)},
         "balance_owed": {"per_bureau": dict(balance_per_bureau)},
+        "high_balance": {
+            "per_bureau": dict(_normalize_per_bureau(high_balance_per_bureau))
+            if high_balance_per_bureau is not None
+            else dict(_normalize_per_bureau({}))
+        },
+        "limit": {
+            "per_bureau": dict(_normalize_per_bureau(limit_per_bureau))
+            if limit_per_bureau is not None
+            else dict(_normalize_per_bureau({}))
+        },
+        "remarks": {
+            "per_bureau": dict(_normalize_per_bureau(remarks_per_bureau))
+            if remarks_per_bureau is not None
+            else dict(_normalize_per_bureau({}))
+        },
+        "opened": dict(date_opened_per_bureau),
         "date_opened": dict(date_opened_per_bureau),
         "closed_date": dict(closed_date_per_bureau),
+        "last_payment": dict(
+            _normalize_per_bureau(last_payment_per_bureau)
+            if last_payment_per_bureau is not None
+            else _normalize_per_bureau({})
+        ),
+        "dofd": dict(
+            _normalize_per_bureau(dofd_per_bureau)
+            if dofd_per_bureau is not None
+            else _normalize_per_bureau({})
+        ),
     }
 
 
@@ -1404,11 +1603,26 @@ def _build_compact_display(
         "status": _copy_account_section(
             display_payload.get("status"), include_consensus=True
         ),
+        "balance": _copy_account_section(
+            display_payload.get("balance"), include_consensus=False
+        ),
         "balance_owed": _copy_account_section(
             display_payload.get("balance_owed"), include_consensus=False
         ),
+        "high_balance": _copy_account_section(
+            display_payload.get("high_balance"), include_consensus=False
+        ),
+        "limit": _copy_account_section(
+            display_payload.get("limit"), include_consensus=False
+        ),
+        "remarks": _copy_account_section(
+            display_payload.get("remarks"), include_consensus=False
+        ),
+        "opened": _bureau_dates(display_payload.get("opened")),
         "date_opened": _bureau_dates(display_payload.get("date_opened")),
         "closed_date": _bureau_dates(display_payload.get("closed_date")),
+        "last_payment": _bureau_dates(display_payload.get("last_payment")),
+        "dofd": _bureau_dates(display_payload.get("dofd")),
     }
 
 
@@ -1493,6 +1707,11 @@ def build_stage_pack_doc(
     balance_per_bureau: Mapping[str, Any] | None = None,
     date_opened_per_bureau: Mapping[str, Any] | None = None,
     closed_date_per_bureau: Mapping[str, Any] | None = None,
+    high_balance_per_bureau: Mapping[str, Any] | None = None,
+    limit_per_bureau: Mapping[str, Any] | None = None,
+    remarks_per_bureau: Mapping[str, Any] | None = None,
+    last_payment_per_bureau: Mapping[str, Any] | None = None,
+    dofd_per_bureau: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     display = _build_compact_display(
         holder_name=holder_name,
@@ -1512,6 +1731,11 @@ def build_stage_pack_doc(
         balance_per_bureau=balance_per_bureau,
         date_opened_per_bureau=date_opened_per_bureau,
         closed_date_per_bureau=closed_date_per_bureau,
+        high_balance_per_bureau=high_balance_per_bureau,
+        limit_per_bureau=limit_per_bureau,
+        remarks_per_bureau=remarks_per_bureau,
+        last_payment_per_bureau=last_payment_per_bureau,
+        dofd_per_bureau=dofd_per_bureau,
         bureau_summary=bureau_summary,
     )
 
@@ -1571,6 +1795,11 @@ def _enrich_stage_display(
     balance_per_bureau: Mapping[str, Any] | None = None,
     date_opened_per_bureau: Mapping[str, Any] | None = None,
     closed_date_per_bureau: Mapping[str, Any] | None = None,
+    high_balance_per_bureau: Mapping[str, Any] | None = None,
+    limit_per_bureau: Mapping[str, Any] | None = None,
+    remarks_per_bureau: Mapping[str, Any] | None = None,
+    last_payment_per_bureau: Mapping[str, Any] | None = None,
+    dofd_per_bureau: Mapping[str, Any] | None = None,
     bureau_summary: Mapping[str, Any] | None = None,
 ) -> None:
     if not isinstance(display, dict):
@@ -1646,19 +1875,19 @@ def _enrich_stage_display(
         "account_number",
         account_number_per_bureau,
         consensus=account_number_consensus,
-        fill_missing_from_consensus=True,
+        fill_missing_from_consensus=False,
     )
     _apply_per_bureau(
         "account_type",
         account_type_per_bureau,
         consensus=account_type_consensus,
-        fill_missing_from_consensus=True,
+        fill_missing_from_consensus=False,
     )
     _apply_per_bureau(
         "status",
         status_per_bureau,
         consensus=status_consensus,
-        fill_missing_from_consensus=True,
+        fill_missing_from_consensus=False,
     )
 
     balance_source = balance_per_bureau
@@ -1678,6 +1907,26 @@ def _enrich_stage_display(
         balance_source,
         fill_missing_from_consensus=False,
     )
+    _apply_per_bureau(
+        "balance",
+        balance_source,
+        fill_missing_from_consensus=False,
+    )
+    _apply_per_bureau(
+        "high_balance",
+        high_balance_per_bureau,
+        fill_missing_from_consensus=False,
+    )
+    _apply_per_bureau(
+        "limit",
+        limit_per_bureau,
+        fill_missing_from_consensus=False,
+    )
+    _apply_per_bureau(
+        "remarks",
+        remarks_per_bureau,
+        fill_missing_from_consensus=False,
+    )
 
     date_opened_source: Mapping[str, Any] | None = date_opened_per_bureau
     closed_date_source: Mapping[str, Any] | None = closed_date_per_bureau
@@ -1691,8 +1940,11 @@ def _enrich_stage_display(
             if isinstance(candidate, Mapping):
                 closed_date_source = candidate
 
+    _apply_date_mapping("opened", date_opened_source)
     _apply_date_mapping("date_opened", date_opened_source)
     _apply_date_mapping("closed_date", closed_date_source)
+    _apply_date_mapping("last_payment", last_payment_per_bureau)
+    _apply_date_mapping("dofd", dofd_per_bureau)
 
 
 def _has_meaningful_text(value: Any, *, treat_unknown: bool = False) -> bool:
@@ -1754,10 +2006,36 @@ def _has_meaningful_display(display: Mapping[str, Any] | None) -> bool:
         balance.get("per_bureau")
     ):
         return True
+    balance_new = display.get("balance")
+    if isinstance(balance_new, Mapping) and _mapping_has_meaningful_values(
+        balance_new.get("per_bureau")
+    ):
+        return True
+    high_balance = display.get("high_balance")
+    if isinstance(high_balance, Mapping) and _mapping_has_meaningful_values(
+        high_balance.get("per_bureau")
+    ):
+        return True
+    credit_limit = display.get("limit")
+    if isinstance(credit_limit, Mapping) and _mapping_has_meaningful_values(
+        credit_limit.get("per_bureau")
+    ):
+        return True
+    remarks = display.get("remarks")
+    if isinstance(remarks, Mapping) and _mapping_has_meaningful_values(
+        remarks.get("per_bureau"), treat_unknown=True
+    ):
+        return True
 
+    if _mapping_has_meaningful_values(display.get("opened")):
+        return True
     if _mapping_has_meaningful_values(display.get("date_opened")):
         return True
     if _mapping_has_meaningful_values(display.get("closed_date")):
+        return True
+    if _mapping_has_meaningful_values(display.get("last_payment")):
+        return True
+    if _mapping_has_meaningful_values(display.get("dofd")):
         return True
 
     return False
@@ -1920,9 +2198,16 @@ def _preserve_stage_display_values(
     _preserve_section("account_number", treat_unknown=False)
     _preserve_section("account_type", treat_unknown=True)
     _preserve_section("status", treat_unknown=True)
+    _preserve_section("balance", treat_unknown=False, include_consensus=False)
     _preserve_section("balance_owed", treat_unknown=False, include_consensus=False)
+    _preserve_section("high_balance", treat_unknown=False, include_consensus=False)
+    _preserve_section("limit", treat_unknown=False, include_consensus=False)
+    _preserve_section("remarks", treat_unknown=True, include_consensus=False)
+    _preserve_date_mapping("opened")
     _preserve_date_mapping("date_opened")
     _preserve_date_mapping("closed_date")
+    _preserve_date_mapping("last_payment")
+    _preserve_date_mapping("dofd")
 
     return merged, changed
 
@@ -2571,8 +2856,12 @@ def generate_frontend_packs_for_run(
             for account_dir in account_dirs:
                 summary_path = account_dir / "summary.json"
                 if use_bureaus_only:
-                    summary = {}
-                    account_id = account_dir.name
+                    summary = _load_json(summary_path)
+                    if isinstance(summary, Mapping):
+                        account_id = str(summary.get("account_id") or account_dir.name)
+                    else:
+                        summary = {}
+                        account_id = account_dir.name
                 else:
                     summary = _load_json(summary_path)
                     if not summary:
@@ -2641,46 +2930,94 @@ def generate_frontend_packs_for_run(
                         if bureau in _BUREAU_BADGES and isinstance(payload, Mapping)
                     }
 
-                    account_number_values_raw = _collect_field_text_values(
-                        bureaus_branches, "account_number_display"
+                    display_payload = build_display_from_bureaus(
+                        bureaus_payload, meta_payload, tags_payload_override
                     )
-                    if not account_number_values_raw:
-                        account_number_values_raw = _collect_field_text_values(
-                            bureaus_branches, "account_number"
+
+                    def _section_per_bureau(source: Any) -> Mapping[str, Any]:
+                        if isinstance(source, Mapping):
+                            per = source.get("per_bureau")
+                            if isinstance(per, Mapping):
+                                return per
+                            return source
+                        return {}
+
+                    account_number_section = display_payload.get("account_number")
+                    if isinstance(account_number_section, Mapping):
+                        account_number_per_bureau = _normalize_per_bureau(
+                            _section_per_bureau(account_number_section)
                         )
-                    account_number_per_bureau = _normalize_per_bureau(account_number_values_raw)
-                    account_number_consensus = _resolve_account_number_consensus(
-                        account_number_per_bureau
+                        account_number_consensus = (
+                            _coerce_display_text(account_number_section.get("consensus"))
+                            or "--"
+                        )
+                    else:
+                        account_number_per_bureau = _normalize_per_bureau({})
+                        account_number_consensus = "--"
+
+                    account_type_section = display_payload.get("account_type")
+                    if isinstance(account_type_section, Mapping):
+                        account_type_per_bureau = _normalize_per_bureau(
+                            _section_per_bureau(account_type_section)
+                        )
+                        account_type_consensus = (
+                            _coerce_display_text(account_type_section.get("consensus"))
+                            or "--"
+                        )
+                    else:
+                        account_type_per_bureau = _normalize_per_bureau({})
+                        account_type_consensus = "--"
+
+                    status_section = display_payload.get("status")
+                    if isinstance(status_section, Mapping):
+                        status_per_bureau = _normalize_per_bureau(
+                            _section_per_bureau(status_section)
+                        )
+                        status_consensus = (
+                            _coerce_display_text(status_section.get("consensus")) or "--"
+                        )
+                    else:
+                        status_per_bureau = _normalize_per_bureau({})
+                        status_consensus = "--"
+
+                    balance_section = (
+                        display_payload.get("balance")
+                        or display_payload.get("balance_owed")
+                    )
+                    balance_per_bureau = _normalize_per_bureau(
+                        _section_per_bureau(balance_section)
                     )
 
-                    account_type_values_raw = _collect_field_text_values(
-                        bureaus_branches, "account_type"
-                    )
-                    account_type_per_bureau = _normalize_per_bureau(account_type_values_raw)
-                    account_type_consensus = _resolve_majority_consensus(
-                        account_type_per_bureau
+                    date_opened_per_bureau = _normalize_per_bureau(
+                        _section_per_bureau(
+                            display_payload.get("opened")
+                            or display_payload.get("date_opened")
+                        )
                     )
 
-                    status_values_raw = _collect_field_text_values(
-                        bureaus_branches, "account_status"
+                    closed_date_per_bureau = _normalize_per_bureau(
+                        _section_per_bureau(display_payload.get("closed_date"))
                     )
-                    status_per_bureau = _normalize_per_bureau(status_values_raw)
-                    status_consensus = _resolve_majority_consensus(status_per_bureau)
 
-                    balance_values_raw = _collect_field_text_values(
-                        bureaus_branches, "balance_owed"
+                    last_payment_per_bureau = _normalize_per_bureau(
+                        _section_per_bureau(display_payload.get("last_payment"))
                     )
-                    balance_per_bureau = _normalize_per_bureau(balance_values_raw)
 
-                    date_opened_values_raw = _collect_field_text_values(
-                        bureaus_branches, "date_opened"
+                    dofd_per_bureau = _normalize_per_bureau(
+                        _section_per_bureau(display_payload.get("dofd"))
                     )
-                    date_opened_per_bureau = _normalize_per_bureau(date_opened_values_raw)
 
-                    closed_date_values_raw = _collect_field_text_values(
-                        bureaus_branches, "closed_date"
+                    high_balance_per_bureau = _normalize_per_bureau(
+                        _section_per_bureau(display_payload.get("high_balance"))
                     )
-                    closed_date_per_bureau = _normalize_per_bureau(closed_date_values_raw)
+
+                    limit_per_bureau = _normalize_per_bureau(
+                        _section_per_bureau(display_payload.get("limit"))
+                    )
+
+                    remarks_per_bureau = _normalize_per_bureau(
+                        _section_per_bureau(display_payload.get("remarks"))
+                    )
 
                     date_reported_values_raw = _collect_field_text_values(
                         bureaus_branches, "date_reported"
@@ -2704,9 +3041,9 @@ def generate_frontend_packs_for_run(
                         ):
                             reported_bureaus.append(bureau)
                     if not reported_bureaus:
-                        reported_bureaus = [
-                            bureau for bureau in _BUREAU_ORDER if bureau in bureaus_branches
-                        ]
+                        for bureau, payload in bureaus_payload.items():
+                            if bureau in _BUREAU_ORDER and isinstance(payload, Mapping):
+                                reported_bureaus.append(bureau)
 
                     bureau_summary = _prepare_bureau_payload_from_flat(
                         account_number_values=account_number_per_bureau,
@@ -2717,81 +3054,64 @@ def generate_frontend_packs_for_run(
                         reported_bureaus=reported_bureaus,
                     )
 
-                    holder_name, holder_name_resolver = _derive_holder_name_from_meta(
-                        meta_payload, account_id
+                    meta_holder_name, meta_holder_resolver = _resolve_meta_holder_name(
+                        meta_payload
                     )
-                    display_holder_name = _coerce_display_text(holder_name)
-                    display_holder_name_resolver = holder_name_resolver
-                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
-                        reported_creditor_values = _collect_field_text_values(
-                            bureaus_branches, "reported_creditor"
-                        )
-                        bureau_value = None
-                        bureau_source = None
-                        for bureau in _BUREAU_ORDER:
-                            candidate = reported_creditor_values.get(bureau)
-                            if _has_meaningful_text(candidate, treat_unknown=True):
-                                bureau_value = candidate
-                                bureau_source = bureau
-                                break
-                        if not bureau_value and reported_creditor_values:
-                            bureau_source, bureau_value = next(
-                                iter(reported_creditor_values.items())
-                            )
-                        if bureau_value:
-                            display_holder_name = bureau_value
-                            display_holder_name_resolver = (
-                                f"bureaus.{bureau_source}.reported_creditor"
-                                if bureau_source
-                                else "bureaus.reported_creditor"
-                            )
-                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                    meta_holder_text = _coerce_display_text(meta_holder_name)
+
+                    display_holder_name = _coerce_display_text(
+                        display_payload.get("holder_name")
+                    )
+                    if _has_meaningful_text(meta_holder_text, treat_unknown=True):
+                        display_holder_name = meta_holder_text
+                        display_holder_name_resolver = meta_holder_resolver
+                    elif _has_meaningful_text(display_holder_name, treat_unknown=True):
+                        display_holder_name_resolver = "bureaus"
+                    else:
                         display_holder_name = "Unknown"
                         display_holder_name_resolver = "default"
 
-                    holder_name = display_holder_name or None
+                    holder_name = (
+                        display_holder_name
+                        if _has_meaningful_text(display_holder_name, treat_unknown=True)
+                        else None
+                    )
 
-                    creditor_name_value = holder_name
+                    display_primary_issue = _coerce_display_text(
+                        display_payload.get("primary_issue") or primary_issue
+                    )
+                    if not display_primary_issue:
+                        display_primary_issue = "unknown"
+
+                    primary_issue = display_primary_issue or "unknown"
+
+                    creditor_name_value = display_holder_name
 
                     account_type_value = (
                         account_type_consensus
                         if _has_meaningful_text(account_type_consensus, treat_unknown=True)
-                        else _extract_bureaus_majority_value(bureaus_payload, "account_type")
+                        else None
                     )
-                    if _has_meaningful_text(account_type_value, treat_unknown=True):
-                        account_type_consensus = account_type_value
-                    else:
-                        account_type_value = None
-
                     status_value = (
                         status_consensus
                         if _has_meaningful_text(status_consensus, treat_unknown=True)
-                        else _extract_bureaus_majority_value(bureaus_payload, "account_status")
+                        else None
                     )
+
+                    if _has_meaningful_text(account_type_value, treat_unknown=True):
+                        account_type_consensus = account_type_value
                     if _has_meaningful_text(status_value, treat_unknown=True):
                         status_consensus = status_value
-                    else:
-                        status_value = None
-
-                    display_payload = build_display_payload(
-                        holder_name=display_holder_name,
-                        primary_issue=display_primary_issue,
-                        account_number_per_bureau=account_number_per_bureau,
-                        account_number_consensus=account_number_consensus,
-                        account_type_per_bureau=account_type_per_bureau,
-                        account_type_consensus=account_type_consensus,
-                        status_per_bureau=status_per_bureau,
-                        status_consensus=status_consensus,
-                        balance_per_bureau=balance_per_bureau,
-                        date_opened_per_bureau=date_opened_per_bureau,
-                        closed_date_per_bureau=closed_date_per_bureau,
-                    )
 
                     field_resolvers = {
                         "holder_name": display_holder_name_resolver,
                         "creditor_name": display_holder_name_resolver,
-                        "account_type": "bureaus.consensus" if account_type_value else "missing",
-                        "status": "bureaus.consensus" if status_value else "missing",
+                        "account_type": "bureaus.consensus"
+                        if account_type_value
+                        else "missing",
+                        "status": "bureaus.consensus"
+                        if status_value
+                        else "missing",
                     }
 
                 else:
@@ -2863,6 +3183,35 @@ def generate_frontend_packs_for_run(
                         fields_flat_payload, "date_reported"
                     )
                     date_reported_per_bureau = _normalize_per_bureau(date_reported_values_raw)
+                    last_payment_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "last_payment"
+                    )
+                    last_payment_per_bureau = _normalize_per_bureau(last_payment_values_raw)
+
+                    dofd_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "date_of_first_delinquency"
+                    )
+                    if not dofd_values_raw:
+                        dofd_values_raw = _collect_flat_field_per_bureau(
+                            fields_flat_payload, "date_of_last_activity"
+                        )
+                    dofd_per_bureau = _normalize_per_bureau(dofd_values_raw)
+
+                    high_balance_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "high_balance"
+                    )
+                    high_balance_per_bureau = _normalize_per_bureau(high_balance_values_raw)
+
+                    limit_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "credit_limit"
+                    )
+                    limit_per_bureau = _normalize_per_bureau(limit_values_raw)
+
+                    remarks_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "creditor_remarks"
+                    )
+                    remarks_per_bureau = _normalize_per_bureau(remarks_values_raw)
+
 
                     reported_bureaus = _determine_reported_bureaus(summary, fields_flat_payload)
                     bureau_summary = _prepare_bureau_payload_from_flat(
@@ -3056,6 +3405,11 @@ def generate_frontend_packs_for_run(
                         balance_per_bureau=balance_per_bureau,
                         date_opened_per_bureau=date_opened_per_bureau,
                         closed_date_per_bureau=closed_date_per_bureau,
+                        high_balance_per_bureau=high_balance_per_bureau,
+                        limit_per_bureau=limit_per_bureau,
+                        remarks_per_bureau=remarks_per_bureau,
+                        last_payment_per_bureau=last_payment_per_bureau,
+                        dofd_per_bureau=dofd_per_bureau,
                     )
 
                 def _format_field_value(value: Any) -> str:
@@ -3176,6 +3530,11 @@ def generate_frontend_packs_for_run(
                         balance_per_bureau=balance_per_bureau,
                         date_opened_per_bureau=date_opened_per_bureau,
                         closed_date_per_bureau=closed_date_per_bureau,
+                        last_payment_per_bureau=last_payment_per_bureau,
+                        dofd_per_bureau=dofd_per_bureau,
+                        high_balance_per_bureau=high_balance_per_bureau,
+                        limit_per_bureau=limit_per_bureau,
+                        remarks_per_bureau=remarks_per_bureau,
                     )
 
                     full_payload = _ensure_full_pack_payload()

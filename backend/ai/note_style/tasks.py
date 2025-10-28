@@ -108,6 +108,13 @@ def note_style_prepare_and_send_task(
     with redis_lock(lock_key) as acquired:
         if not acquired:
             logger.info("NOTE_STYLE_LOCK_SKIP sid=%s phase=prepare", sid_text)
+            log_structured_event(
+                "NOTE_STYLE_LOCK_SKIP",
+                logger=log,
+                task="prepare_and_send",
+                sid=sid_text,
+                runs_root=runs_root,
+            )
             return {"sid": sid_text, "skipped": "locked"}
 
         status = runs.get_stage_status(
@@ -116,6 +123,14 @@ def note_style_prepare_and_send_task(
         if status and is_terminal_status(status):
             logger.info(
                 "NOTE_STYLE_TERMINAL_SKIP sid=%s status=%s", sid_text, status
+            )
+            log_structured_event(
+                "NOTE_STYLE_TERMINAL_SKIP",
+                logger=log,
+                task="prepare_and_send",
+                sid=sid_text,
+                runs_root=runs_root,
+                status=status,
             )
             return {"sid": sid_text, "skipped": "terminal", "status": status}
 
@@ -262,6 +277,13 @@ def note_style_send_sid_task(
     with redis_lock(lock_key) as acquired:
         if not acquired:
             logger.info("NOTE_STYLE_LOCK_SKIP sid=%s phase=send", sid_text)
+            log_structured_event(
+                "NOTE_STYLE_LOCK_SKIP",
+                logger=log,
+                task="send_sid",
+                sid=sid_text,
+                runs_root=runs_root,
+            )
             return {"sid": sid_text, "skipped": "locked"}
 
         status = runs.get_stage_status(
@@ -271,10 +293,25 @@ def note_style_send_sid_task(
             logger.info(
                 "NOTE_STYLE_TERMINAL_SKIP sid=%s status=%s", sid_text, status
             )
+            log_structured_event(
+                "NOTE_STYLE_TERMINAL_SKIP",
+                logger=log,
+                task="send_sid",
+                sid=sid_text,
+                runs_root=runs_root,
+                status=status,
+            )
             return {"sid": sid_text, "skipped": "terminal", "status": status}
 
         if runs.all_note_style_results_terminal(sid_text, runs_root=runs_root):
             logger.info("NOTE_STYLE_ALREADY_TERMINAL sid=%s", sid_text)
+            log_structured_event(
+                "NOTE_STYLE_ALREADY_TERMINAL",
+                logger=log,
+                task="send_sid",
+                sid=sid_text,
+                runs_root=runs_root,
+            )
             return {"sid": sid_text, "skipped": "already_terminal"}
 
         start = time.monotonic()

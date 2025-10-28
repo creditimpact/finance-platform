@@ -69,13 +69,40 @@ LEGACY_MARKER_FILENAME = "auto_ai_pipeline_in_progress.json"
 logger = logging.getLogger(__name__)
 
 
-def _maybe_autobuild_review(sid: str) -> None:
-    """Kick off Frontend/Review packs build after validation has run."""
+def _maybe_autobuild_review(
+    sid: str,
+    *,
+    already_triggered: bool = False,
+    source: str = "validation",
+) -> bool:
+    """Kick off Frontend/Review packs build after validation has run.
+
+    Returns ``True`` when a build was enqueued during this invocation.
+    """
+
+    if already_triggered:
+        logger.info(
+            "REVIEW_AUTO: skip enqueue sid=%s source=%s reason=already_triggered",
+            sid,
+            source,
+        )
+        return False
+
     if os.getenv("GENERATE_FRONTEND_ON_VALIDATION", "1") != "1":
-        logger.info("REVIEW_AUTO: skip enqueue sid=%s reason=env_disabled", sid)
-        return
+        logger.info(
+            "REVIEW_AUTO: skip enqueue sid=%s source=%s reason=env_disabled",
+            sid,
+            source,
+        )
+        return False
+
     enqueue_generate_frontend_packs(sid)
-    logger.info("REVIEW_AUTO: queued_generate_frontend_packs sid=%s", sid)
+    logger.info(
+        "REVIEW_AUTO: queued_generate_frontend_packs sid=%s source=%s",
+        sid,
+        source,
+    )
+    return True
 
 
 _PAIR_TAG_BY_DECISION: dict[str, str] = {
@@ -1161,8 +1188,13 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
         "send",
         metrics={"packs": int(payload.get("validation_packs", 0) or 0)},
     )
-    _maybe_autobuild_review(sid)
-    logger.info("REVIEW_AUTO: post_validation_complete sid=%s", sid)
+    if _maybe_autobuild_review(
+        sid,
+        already_triggered=bool(payload.get("review_autobuild_queued")),
+        source="validation_send",
+    ):
+        payload["review_autobuild_queued"] = True
+    logger.info("REVIEW_AUTO: post_validation_send sid=%s", sid)
     return payload
 
 
@@ -1225,6 +1257,12 @@ def validation_compact(self, prev: Mapping[str, object] | None) -> dict[str, obj
         "compact",
         metrics={"compacted": True},
     )
+    if _maybe_autobuild_review(
+        sid,
+        already_triggered=bool(payload.get("review_autobuild_queued")),
+        source="validation_compact",
+    ):
+        payload["review_autobuild_queued"] = True
     return payload
 
 

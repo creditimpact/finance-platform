@@ -1315,11 +1315,35 @@ def build_stage_pack_doc(
     status: str | None,
     display_payload: Mapping[str, Any],
     bureau_summary: Mapping[str, Any],
+    account_number_per_bureau: Mapping[str, Any] | None = None,
+    account_number_consensus: str | None = None,
+    account_type_per_bureau: Mapping[str, Any] | None = None,
+    account_type_consensus: str | None = None,
+    status_per_bureau: Mapping[str, Any] | None = None,
+    status_consensus: str | None = None,
+    balance_per_bureau: Mapping[str, Any] | None = None,
+    date_opened_per_bureau: Mapping[str, Any] | None = None,
+    closed_date_per_bureau: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     display = _build_compact_display(
         holder_name=holder_name,
         primary_issue=primary_issue,
         display_payload=display_payload,
+    )
+
+    _enrich_stage_display(
+        display,
+        holder_name=holder_name,
+        account_number_per_bureau=account_number_per_bureau,
+        account_number_consensus=account_number_consensus,
+        account_type_per_bureau=account_type_per_bureau,
+        account_type_consensus=account_type_consensus,
+        status_per_bureau=status_per_bureau,
+        status_consensus=status_consensus,
+        balance_per_bureau=balance_per_bureau,
+        date_opened_per_bureau=date_opened_per_bureau,
+        closed_date_per_bureau=closed_date_per_bureau,
+        bureau_summary=bureau_summary,
     )
 
     payload: dict[str, Any] = {
@@ -1363,6 +1387,149 @@ def build_stage_pack_doc(
         ]
 
     return payload
+
+
+def _enrich_stage_display(
+    display: Mapping[str, Any] | None,
+    *,
+    holder_name: str | None = None,
+    account_number_per_bureau: Mapping[str, Any] | None = None,
+    account_number_consensus: str | None = None,
+    account_type_per_bureau: Mapping[str, Any] | None = None,
+    account_type_consensus: str | None = None,
+    status_per_bureau: Mapping[str, Any] | None = None,
+    status_consensus: str | None = None,
+    balance_per_bureau: Mapping[str, Any] | None = None,
+    date_opened_per_bureau: Mapping[str, Any] | None = None,
+    closed_date_per_bureau: Mapping[str, Any] | None = None,
+    bureau_summary: Mapping[str, Any] | None = None,
+) -> None:
+    if not isinstance(display, dict):
+        return
+
+    def _ensure_section(key: str) -> dict[str, Any]:
+        section = display.get(key)
+        if isinstance(section, dict):
+            return section
+        if isinstance(section, Mapping):
+            converted = dict(section)
+            display[key] = converted
+            return converted
+        converted: dict[str, Any] = {}
+        display[key] = converted
+        return converted
+
+    def _ensure_per_bureau(section: dict[str, Any]) -> dict[str, Any]:
+        per_bureau = section.get("per_bureau")
+        if isinstance(per_bureau, dict):
+            return per_bureau
+        if isinstance(per_bureau, Mapping):
+            converted = dict(per_bureau)
+            section["per_bureau"] = converted
+            return converted
+        converted = {}
+        section["per_bureau"] = converted
+        return converted
+
+    def _apply_per_bureau(
+        key: str,
+        values: Mapping[str, Any] | None,
+        *,
+        consensus: str | None = None,
+        fill_missing_from_consensus: bool = False,
+    ) -> None:
+        section = _ensure_section(key)
+        per_bureau_section = _ensure_per_bureau(section)
+
+        if isinstance(values, Mapping):
+            for bureau, raw_value in values.items():
+                if not isinstance(bureau, str):
+                    continue
+                text_value = _coerce_display_text(raw_value)
+                if not _has_meaningful_text(text_value, treat_unknown=True):
+                    continue
+                per_bureau_section[bureau] = text_value
+
+        if consensus is not None:
+            if _has_meaningful_text(consensus, treat_unknown=True):
+                consensus_text = _coerce_display_text(consensus)
+                section["consensus"] = consensus_text
+                if fill_missing_from_consensus:
+                    for bureau in _BUREAU_ORDER:
+                        existing = per_bureau_section.get(bureau)
+                        if _has_meaningful_text(existing, treat_unknown=True):
+                            continue
+                        per_bureau_section[bureau] = consensus_text
+            elif section.get("consensus") is not None and not _has_meaningful_text(
+                section.get("consensus"), treat_unknown=True
+            ):
+                section.pop("consensus", None)
+
+    def _apply_date_mapping(key: str, values: Mapping[str, Any] | None) -> None:
+        section = _ensure_section(key)
+        if isinstance(values, Mapping):
+            for bureau, raw_value in values.items():
+                if not isinstance(bureau, str):
+                    continue
+                text_value = _coerce_display_text(raw_value)
+                if not _has_meaningful_text(text_value, treat_unknown=True):
+                    continue
+                section[bureau] = text_value
+
+    if _has_meaningful_text(holder_name, treat_unknown=True):
+        display["holder_name"] = _coerce_display_text(holder_name)
+
+    _apply_per_bureau(
+        "account_number",
+        account_number_per_bureau,
+        consensus=account_number_consensus,
+        fill_missing_from_consensus=True,
+    )
+    _apply_per_bureau(
+        "account_type",
+        account_type_per_bureau,
+        consensus=account_type_consensus,
+        fill_missing_from_consensus=True,
+    )
+    _apply_per_bureau(
+        "status",
+        status_per_bureau,
+        consensus=status_consensus,
+        fill_missing_from_consensus=True,
+    )
+
+    balance_source = balance_per_bureau
+    dates_payload: Mapping[str, Any] | None = None
+    if isinstance(bureau_summary, Mapping):
+        balance_payload = bureau_summary.get("balance_owed")
+        if isinstance(balance_payload, Mapping):
+            per_bureau_payload = balance_payload.get("per_bureau")
+            if balance_source is None and isinstance(per_bureau_payload, Mapping):
+                balance_source = per_bureau_payload
+        dates_payload_candidate = bureau_summary.get("dates")
+        if isinstance(dates_payload_candidate, Mapping):
+            dates_payload = dates_payload_candidate
+
+    _apply_per_bureau(
+        "balance_owed",
+        balance_source,
+        fill_missing_from_consensus=False,
+    )
+
+    date_opened_source: Mapping[str, Any] | None = date_opened_per_bureau
+    closed_date_source: Mapping[str, Any] | None = closed_date_per_bureau
+    if dates_payload is not None:
+        if date_opened_source is None:
+            candidate = dates_payload.get("date_opened")
+            if isinstance(candidate, Mapping):
+                date_opened_source = candidate
+        if closed_date_source is None:
+            candidate = dates_payload.get("closed_date")
+            if isinstance(candidate, Mapping):
+                closed_date_source = candidate
+
+    _apply_date_mapping("date_opened", date_opened_source)
+    _apply_date_mapping("closed_date", closed_date_source)
 
 
 def _has_meaningful_text(value: Any, *, treat_unknown: bool = False) -> bool:
@@ -2388,6 +2555,15 @@ def generate_frontend_packs_for_run(
                         status=status_value,
                         display_payload=display_payload,
                         bureau_summary=bureau_summary,
+                        account_number_per_bureau=account_number_per_bureau,
+                        account_number_consensus=account_number_consensus,
+                        account_type_per_bureau=account_type_per_bureau,
+                        account_type_consensus=account_type_consensus,
+                        status_per_bureau=status_per_bureau,
+                        status_consensus=status_consensus,
+                        balance_per_bureau=balance_per_bureau,
+                        date_opened_per_bureau=date_opened_per_bureau,
+                        closed_date_per_bureau=closed_date_per_bureau,
                     )
 
                 account_filename = _safe_account_dirname(account_id, account_dir.name)

@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Literal, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Literal, Mapping, Optional, Sequence, Tuple
 
 from backend import config
 from backend.core.ai.paths import ensure_note_style_paths
@@ -29,7 +29,15 @@ from backend.validation.index_schema import load_validation_index
 
 from backend.frontend.packs.config import load_frontend_stage_config
 
-StageStatus = Literal["success", "error", "built", "published"]
+StageStatus = Literal[
+    "success",
+    "error",
+    "built",
+    "published",
+    "in_progress",
+    "empty",
+    "pending",
+]
 RunState = Literal[
     "INIT",
     "VALIDATING",
@@ -154,7 +162,10 @@ _STAGE_STATUS_PRIORITY: dict[str, int] = {
     "error": 100,
     "published": 90,
     "success": 80,
-    "built": 10,
+    "in_progress": 50,
+    "built": 40,
+    "empty": 30,
+    "pending": 20,
 }
 
 
@@ -1200,31 +1211,49 @@ def _apply_note_style_stage_promotion(
     results_override: tuple[int, int, int] | None = None,
     allow_partial_success: bool = False,
 ) -> tuple[bool, bool, dict[str, int]]:
-    if results_override is None:
-        total, completed, failed, _ready = _note_style_results_progress(run_dir)
-    else:
-        total, completed, failed = results_override
-    total_value = max(total, 0)
-    completed_value = max(min(completed, total_value), 0)
-    failed_value = max(failed, 0)
-    terminal_value = max(min(completed_value + failed_value, total_value), 0)
+    snapshot = _note_style_snapshot_for_run(run_dir)
+
+    packs_expected = set(snapshot.packs_expected)
+    packs_built = set(snapshot.packs_built)
+    packs_completed = set(snapshot.packs_completed)
+    packs_failed = set(snapshot.packs_failed)
+
+    total_value = len(packs_expected)
+    completed_value = len(packs_expected & packs_completed)
+    failed_value = len(packs_expected & packs_failed)
+    terminal_value = completed_value + failed_value
     empty_ok = total_value == 0
 
-    stage_terminal = total_value == 0 or terminal_value >= total_value
+    if results_override is not None:
+        override_total, override_completed, override_failed = results_override
+        override_total = max(override_total, 0)
+        override_completed = max(min(override_completed, override_total), 0)
+        override_failed = max(min(override_failed, override_total - override_completed), 0)
+        total_value = max(total_value, override_total)
+        completed_value = max(completed_value, override_completed)
+        failed_value = max(failed_value, override_failed)
+        terminal_value = min(completed_value + failed_value, total_value)
+
+    built_complete = packs_expected.issubset(packs_built) if packs_expected else False
+
+    if empty_ok:
+        status_value = "empty"
+    elif not built_complete:
+        status_value = "pending"
+    elif terminal_value == 0:
+        status_value = "built"
+    elif terminal_value < total_value:
+        status_value = "in_progress"
+    elif failed_value > 0 and completed_value == 0:
+        status_value = "error"
+    else:
+        status_value = "success"
+
+    stage_terminal = status_value in {"success", "error", "empty"}
 
     stages = _ensure_stages_dict(data)
     existing = stages.get("note_style") if isinstance(stages, Mapping) else None
     previous_status = _stage_status(stages, "note_style")
-
-    if stage_terminal:
-        if failed_value > 0 and completed_value == 0:
-            status_value = "error"
-        else:
-            status_value = "success"
-    elif allow_partial_success and completed_value > 0:
-        status_value = "success"
-    else:
-        status_value = "built"
 
     metrics_payload = {"packs_total": total_value}
     results_payload = {
@@ -1319,7 +1348,10 @@ def _apply_note_style_stage_promotion(
         ):
             update_required = False
 
-    promoted = status_value == "success" and previous_status != "success"
+    promoted = (
+        status_value in {"success", "empty"}
+        and previous_status != status_value
+    )
     log_context = {
         "total": total_value,
         "completed": completed_value,
@@ -1469,60 +1501,12 @@ def _note_style_index_status_mapping(run_dir: Path) -> dict[str, str]:
 
 
 def _note_style_counts_from_results_dir(run_dir: Path) -> Tuple[int, int, int]:
-    try:
-        paths = ensure_note_style_paths(run_dir.parent, run_dir.name, create=False)
-        results_dir = paths.results_dir
-    except Exception:
-        results_dir = (run_dir / config.NOTE_STYLE_RESULTS_DIR).resolve()
+    snapshot = _note_style_snapshot_for_run(run_dir)
 
-    index_statuses = _note_style_index_status_mapping(run_dir)
-
-    completed = 0
-    failed = 0
-    total = 0
-
-    for path in _iter_note_style_result_files(results_dir):
-        account_key = _normalize_note_style_result_account(path.name)
-        normalized_status = ""
-        if account_key:
-            normalized_status = index_statuses.get(account_key, "").strip().lower()
-
-        if normalized_status in {"skipped", "skipped_low_signal"}:
-            continue
-
-        if normalized_status in {"failed", "error"}:
-            failed += 1
-            total += 1
-            continue
-
-        if normalized_status in {"completed", "success"}:
-            completed += 1
-            total += 1
-            continue
-
-        status = _infer_note_style_result_status(path)
-        if status == "failed":
-            failed += 1
-            total += 1
-            continue
-        if status == "completed":
-            completed += 1
-            total += 1
-            continue
-
-        if account_key:
-            fallback_status = index_statuses.get(account_key, "").strip().lower()
-            if fallback_status in {"failed", "error"}:
-                failed += 1
-                total += 1
-                continue
-            if fallback_status in {"completed", "success"}:
-                completed += 1
-                total += 1
-                continue
-
-        if "result" in path.name.lower():
-            total += 1
+    packs_expected = set(snapshot.packs_expected)
+    total = len(packs_expected)
+    completed = len(packs_expected & set(snapshot.packs_completed))
+    failed = len(packs_expected & set(snapshot.packs_failed))
 
     return (total, completed, failed)
 
@@ -1871,67 +1855,16 @@ def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
 
 def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
     """Return (total, completed, failed, ready) for note_style results."""
+    snapshot = _note_style_snapshot_for_run(run_dir)
 
-    try:
-        paths = ensure_note_style_paths(run_dir.parent, run_dir.name, create=False)
-        index_path = paths.index_file
-    except Exception:
-        index_path = run_dir / "ai_packs" / "note_style" / "index.json"
-    document = _load_json_mapping(index_path)
-    if not isinstance(document, Mapping):
-        return (0, 0, 0, False)
-
-    entries: Sequence[Mapping[str, Any]] = ()
-    packs_payload = document.get("packs")
-    if isinstance(packs_payload, Sequence):
-        entries = [entry for entry in packs_payload if isinstance(entry, Mapping)]
-    else:
-        items_payload = document.get("items")
-        if isinstance(items_payload, Sequence):
-            entries = [entry for entry in items_payload if isinstance(entry, Mapping)]
-
-    total = 0
-    completed = 0
-    failed = 0
-    totals_payload = document.get("totals") if isinstance(document, Mapping) else None
-    packs_total_hint = None
-    if isinstance(totals_payload, Mapping):
-        packs_total_hint = _coerce_int(totals_payload.get("packs_total")) or _coerce_int(
-            totals_payload.get("total")
-        )
-
-    for entry in entries:
-        raw_status = entry.get("status")
-        status = _normalize_terminal_status(
-            raw_status, stage="note_style", run_dir=run_dir
-        )
-        if isinstance(raw_status, str) and raw_status.strip().lower() == "built":
-            status = "built"
-        if status is None or status == "skipped":
-            continue
-        total += 1
-        if status == "completed":
-            completed += 1
-        elif status == "failed":
-            failed += 1
-
-    if entries:
-        if packs_total_hint is not None and packs_total_hint > total:
-            total = packs_total_hint
-    else:
-        if isinstance(totals_payload, Mapping):
-            total = packs_total_hint or 0
-            completed = _coerce_int(totals_payload.get("completed")) or 0
-            failed = _coerce_int(totals_payload.get("failed")) or 0
-        else:
-            return (0, 0, 0, True)
-
-    if total == 0:
-        return (0, 0, failed or 0, True)
-
+    packs_expected = set(snapshot.packs_expected)
+    total = len(packs_expected)
+    completed = len(packs_expected & set(snapshot.packs_completed))
+    failed = len(packs_expected & set(snapshot.packs_failed))
     terminal = completed + failed
-    ready = terminal >= total
-    return (total, completed, failed or 0, ready)
+    ready = total == 0 or terminal >= total
+
+    return (total, completed, failed, ready)
 
 
 def _validation_stage_ready(
@@ -2872,3 +2805,14 @@ __all__ = [
     "refresh_frontend_stage_from_responses",
     "reconcile_umbrella_barriers",
 ]
+if TYPE_CHECKING:
+    from backend.ai.note_style.io import NoteStyleSnapshot
+
+
+def _note_style_snapshot_for_run(run_dir: Path) -> "NoteStyleSnapshot":
+    from backend.ai.note_style.io import note_style_snapshot
+
+    sid_text = run_dir.name
+    runs_root_path = run_dir.parent
+    return note_style_snapshot(sid_text, runs_root=runs_root_path)
+

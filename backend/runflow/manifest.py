@@ -569,6 +569,7 @@ def update_note_style_stage_status(
     runs_root: Optional[Path | str] = None,
     built: Optional[bool] = None,
     sent: Optional[bool] = None,
+    state: Optional[str] = None,
     completed_at: Optional[str] = None,
 ) -> RunManifest:
     """Update the note_style stage status fields and persist the manifest."""
@@ -600,6 +601,11 @@ def update_note_style_stage_status(
         changed |= _assign(status_payload, "sent", sent_value)
         if isinstance(stage_status, dict):
             changed |= _assign(stage_status, "sent", sent_value)
+    if state is not None:
+        normalized_state = str(state).strip() or None
+        changed |= _assign(status_payload, "state", normalized_state)
+        if isinstance(stage_status, dict):
+            changed |= _assign(stage_status, "state", normalized_state)
     if completed_at is not None:
         completed_value = str(completed_at).strip() if completed_at is not None else ""
         if not completed_value:

@@ -359,15 +359,13 @@ def _load_note_style_index_statuses(base_dir: Path) -> dict[str, str]:
 def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
     """Return aggregate counters for note_style stage artifacts."""
 
-    snapshot = _note_style_snapshot_for_counts(base_dir)
+    from backend.ai.note_style.io import note_style_stage_view
 
-    packs_expected = set(snapshot.packs_expected)
-    packs_completed = set(snapshot.packs_completed)
-    packs_failed = set(snapshot.packs_failed)
+    view = note_style_stage_view(base_dir.name, runs_root=base_dir.parent)
 
-    total = len(packs_expected)
-    completed = len(packs_expected & packs_completed)
-    failed = len(packs_expected & packs_failed)
+    total = view.total_expected
+    completed = view.completed_total
+    failed = view.failed_total
 
     return {
         "packs_total": total,
@@ -436,10 +434,4 @@ __all__ = [
 ]
 if TYPE_CHECKING:
     from backend.ai.note_style.io import NoteStyleSnapshot
-
-
-def _note_style_snapshot_for_counts(base_dir: Path) -> "NoteStyleSnapshot":
-    from backend.ai.note_style.io import note_style_snapshot
-
-    return note_style_snapshot(base_dir.name, runs_root=base_dir.parent)
 

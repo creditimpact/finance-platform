@@ -431,6 +431,7 @@ class RunManifest:
             "sent": False,
             "failed": False,
             "completed_at": None,
+            "state": None,
         }
         return defaults
 

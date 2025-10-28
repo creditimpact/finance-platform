@@ -176,8 +176,8 @@ def _ensure_frontend_queue_configuration() -> None:
         for task_name, queue_name in targeted_routes.items():
             existing = routes_config.get(task_name)
             if isinstance(existing, dict):
-                existing.setdefault("queue", queue_name)
-                existing.setdefault("routing_key", queue_name)
+                existing["queue"] = queue_name
+                existing["routing_key"] = queue_name
             elif existing is None:
                 routes_config[task_name] = {
                     "queue": queue_name,
@@ -196,8 +196,8 @@ def _ensure_frontend_queue_configuration() -> None:
                     continue
                 value = entry.get(task_name)
                 if isinstance(value, dict):
-                    value.setdefault("queue", queue_name)
-                    value.setdefault("routing_key", queue_name)
+                    value["queue"] = queue_name
+                    value["routing_key"] = queue_name
                     applied = True
                     break
             if not applied:

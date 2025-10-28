@@ -39,6 +39,28 @@ def test_frontend_queue_registered(monkeypatch):
     assert validation_route.get("routing_key") == "validation"
 
 
+def test_frontend_queue_route_overrides_existing_routes(monkeypatch):
+    monkeypatch.setenv("CELERY_FRONTEND_QUEUE", "frontend")
+
+    import backend.api.tasks as tasks_module
+
+    # Pretend a previous configuration mapped the task to a different queue.
+    tasks_module.app.conf.task_routes = {
+        "backend.api.tasks.generate_frontend_packs_task": {
+            "queue": "celery",
+            "routing_key": "celery",
+        }
+    }
+
+    tasks_module._ensure_frontend_queue_configuration()
+
+    routes = tasks_module._flatten_task_routes(tasks_module.app.conf.task_routes)
+    frontend_route = routes.get("backend.api.tasks.generate_frontend_packs_task")
+    assert frontend_route is not None
+    assert frontend_route.get("queue") == "frontend"
+    assert frontend_route.get("routing_key") == "frontend"
+
+
 def test_generate_frontend_task_logs_receipt(monkeypatch, caplog):
     monkeypatch.setenv("CELERY_FRONTEND_QUEUE", "frontend")
 

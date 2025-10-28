@@ -15,6 +15,7 @@ from backend.ai.manifest import ensure_note_style_section
 from backend.ai.note_style import prepare_and_send
 from backend.ai.note_style_logging import (
     append_note_style_warning,
+    log_note_style_decision,
     log_structured_event,
 )
 from backend.ai.note_style.io import note_style_snapshot, note_style_stage_view
@@ -59,6 +60,10 @@ def _stage_view(
     snapshot=None,
 ):
     return note_style_stage_view(sid, runs_root=runs_root, snapshot=snapshot)
+
+
+def _terminal_mismatch(view) -> bool:
+    return view.total_expected > view.terminal_total
 
 
 def _resolve_runs_root(runs_root: str | Path | None) -> Path:
@@ -122,46 +127,55 @@ def note_style_prepare_and_send_task(
         pending_total = len(view.pending_results)
 
         if view.is_terminal:
-            expected_total = len(snapshot.packs_expected)
-            terminal_total = len(
-                (snapshot.packs_completed | snapshot.packs_failed)
-                & snapshot.packs_expected
-            )
-            if expected_total and terminal_total < expected_total:
+            mismatch = _terminal_mismatch(view)
+            if mismatch:
                 logger.warning(
                     "NOTE_STYLE_TERMINAL_MISMATCH sid=%s state=%s expected=%s terminal=%s",
                     sid_text,
                     view.state,
-                    expected_total,
-                    terminal_total,
+                    view.total_expected,
+                    view.terminal_total,
                 )
-                log_structured_event(
+                log_note_style_decision(
                     "NOTE_STYLE_TERMINAL_MISMATCH",
                     logger=log,
+                    level=logging.WARNING,
                     task="prepare_and_send",
                     sid=sid_text,
                     runs_root=runs_root,
-                    state=view.state,
-                    expected=expected_total,
-                    terminal=terminal_total,
+                    view=view,
+                    reason="terminal_mismatch",
+                    terminal_mismatch=True,
+                    terminal_accounts=view.terminal_total,
                 )
             else:
                 logger.info(
                     "NOTE_STYLE_TERMINAL_SKIP sid=%s state=%s", sid_text, view.state
                 )
-                log_structured_event(
+                log_note_style_decision(
                     "NOTE_STYLE_TERMINAL_SKIP",
                     logger=log,
                     task="prepare_and_send",
                     sid=sid_text,
                     runs_root=runs_root,
-                    status=view.state,
+                    view=view,
+                    reason="terminal",
+                    terminal_mismatch=False,
                 )
                 return {"sid": sid_text, "skipped": "terminal", "state": view.state}
 
         if not view.has_expected:
             log.info(
                 "NOTE_STYLE_AUTO: skip_send sid=%s reason=no_note_style_packs", sid_text
+            )
+            log_note_style_decision(
+                "NOTE_STYLE_PREPARE_SKIP",
+                logger=log,
+                task="prepare_and_send",
+                sid=sid_text,
+                runs_root=runs_root,
+                view=view,
+                reason="no_note_style_packs",
             )
             return {
                 "sid": sid_text,
@@ -179,14 +193,14 @@ def note_style_prepare_and_send_task(
                 pending_total,
                 view.state,
             )
-            log_structured_event(
+            log_note_style_decision(
                 "NOTE_STYLE_PREPARE_SKIP",
                 logger=log,
                 task="prepare_and_send",
                 sid=sid_text,
                 runs_root=runs_root,
+                view=view,
                 reason=reason,
-                state=view.state,
                 pending=pending_total,
             )
             return {"sid": sid_text, "skipped": reason, "state": view.state}
@@ -337,27 +351,53 @@ def note_style_send_sid_task(
         pending_total = len(view.pending_results)
 
         if view.is_terminal:
-            logger.info(
-                "NOTE_STYLE_TERMINAL_SKIP sid=%s state=%s", sid_text, view.state
-            )
-            log_structured_event(
-                "NOTE_STYLE_TERMINAL_SKIP",
-                logger=log,
-                task="send_sid",
-                sid=sid_text,
-                runs_root=runs_root,
-                status=view.state,
-            )
-            return {"sid": sid_text, "skipped": "terminal", "state": view.state}
+            mismatch = _terminal_mismatch(view)
+            if mismatch:
+                logger.warning(
+                    "NOTE_STYLE_TERMINAL_MISMATCH sid=%s state=%s expected=%s terminal=%s",
+                    sid_text,
+                    view.state,
+                    view.total_expected,
+                    view.terminal_total,
+                )
+                log_note_style_decision(
+                    "NOTE_STYLE_TERMINAL_MISMATCH",
+                    logger=log,
+                    level=logging.WARNING,
+                    task="send_sid",
+                    sid=sid_text,
+                    runs_root=runs_root,
+                    view=view,
+                    reason="terminal_mismatch",
+                    terminal_mismatch=True,
+                    terminal_accounts=view.terminal_total,
+                )
+            else:
+                logger.info(
+                    "NOTE_STYLE_TERMINAL_SKIP sid=%s state=%s", sid_text, view.state
+                )
+                log_note_style_decision(
+                    "NOTE_STYLE_TERMINAL_SKIP",
+                    logger=log,
+                    task="send_sid",
+                    sid=sid_text,
+                    runs_root=runs_root,
+                    view=view,
+                    reason="terminal",
+                    terminal_mismatch=False,
+                )
+                return {"sid": sid_text, "skipped": "terminal", "state": view.state}
 
         if not view.has_expected:
             logger.info("NOTE_STYLE_NO_PACKS sid=%s", sid_text)
-            log_structured_event(
+            log_note_style_decision(
                 "NOTE_STYLE_NO_PACKS",
                 logger=log,
                 task="send_sid",
                 sid=sid_text,
                 runs_root=runs_root,
+                view=view,
+                reason="no_packs",
             )
             return {"sid": sid_text, "skipped": "no_packs"}
 
@@ -370,14 +410,14 @@ def note_style_send_sid_task(
                 pending_total,
                 view.state,
             )
-            log_structured_event(
+            log_note_style_decision(
                 "NOTE_STYLE_SEND_SKIP",
                 logger=log,
                 task="send_sid",
                 sid=sid_text,
                 runs_root=runs_root,
+                view=view,
                 reason=reason,
-                state=view.state,
                 pending=pending_total,
             )
             return {"sid": sid_text, "skipped": reason, "state": view.state}

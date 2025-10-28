@@ -5,16 +5,22 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, TYPE_CHECKING
 
 from backend import config
 from backend.pipeline.runs import RunManifest
 from backend.runflow.counters import note_style_stage_counts
+from backend.ai.note_style_logging import log_note_style_decision
 
 log = logging.getLogger(__name__)
 
 
-def _collect_note_style_metrics(run_dir_path: Path) -> tuple[int | None, int | None]:
+if TYPE_CHECKING:  # pragma: no cover - typing helpers
+    from backend.ai.note_style.io import NoteStyleStageView
+
+def _collect_note_style_metrics(
+    run_dir_path: Path,
+) -> tuple[tuple[int | None, int | None], "NoteStyleStageView" | None]:
     from backend.ai.note_style.io import note_style_stage_view
 
     try:
@@ -25,11 +31,11 @@ def _collect_note_style_metrics(run_dir_path: Path) -> tuple[int | None, int | N
             run_dir_path,
             exc_info=True,
         )
-        return (None, None)
+        return ((None, None), None)
 
     packs_total = view.total_expected
     if packs_total == 0:
-        return (0, 0)
+        return ((0, 0), view)
 
     terminal_total = view.completed_total + view.failed_total
     if terminal_total == 0:
@@ -37,7 +43,7 @@ def _collect_note_style_metrics(run_dir_path: Path) -> tuple[int | None, int | N
     else:
         terminal_value = terminal_total
 
-    return (packs_total, terminal_value)
+    return ((packs_total, terminal_value), view)
 
 
 def _log_autosend_decision(
@@ -47,6 +53,7 @@ def _log_autosend_decision(
     sent: bool | None,
     built: int | None,
     terminal: int | None,
+    view: "NoteStyleStageView" | None = None,
     level: int = logging.INFO,
     error_code: str | None = None,
     error_type: str | None = None,
@@ -64,6 +71,36 @@ def _log_autosend_decision(
     if error_type:
         message += f" error.type={error_type}"
     log.log(level, message)
+
+    if view is not None:
+        decided_status = view.state
+        packs_expected = view.total_expected
+        packs_built = view.built_total
+        packs_completed = view.completed_total
+        packs_failed = view.failed_total
+    else:
+        decided_status = None
+        packs_expected = built if built is not None else 0
+        packs_built = built if built is not None else 0
+        packs_completed = terminal if terminal is not None else 0
+        packs_failed = 0
+
+    log_note_style_decision(
+        "NOTE_STYLE_AUTOSEND_DECISION",
+        logger=log,
+        level=level,
+        sid=sid,
+        reason=reason,
+        decided_status=decided_status,
+        view=view,
+        packs_expected=packs_expected,
+        packs_built=packs_built,
+        packs_completed=packs_completed,
+        packs_failed=packs_failed,
+        sent=sent,
+        error_code=error_code,
+        error_type=error_type,
+    )
 
 
 def _stage_completed(status: Mapping[str, object] | None) -> bool:
@@ -126,12 +163,17 @@ def schedule_note_style_after_validation(
     runs_root_path = run_dir_path.parent
 
     metrics_cache: tuple[int | None, int | None] | None = None
+    view_cache: "NoteStyleStageView" | None = None
 
     def _metrics() -> tuple[int | None, int | None]:
-        nonlocal metrics_cache
+        nonlocal metrics_cache, view_cache
         if metrics_cache is None:
-            metrics_cache = _collect_note_style_metrics(run_dir_path)
+            metrics_cache, view_cache = _collect_note_style_metrics(run_dir_path)
         return metrics_cache
+
+    def _view() -> "NoteStyleStageView" | None:
+        _metrics()
+        return view_cache
 
     if not config.NOTE_STYLE_ENABLED:
         built_total, terminal_total = _metrics()
@@ -141,6 +183,7 @@ def schedule_note_style_after_validation(
             sent=None,
             built=built_total,
             terminal=terminal_total,
+            view=_view(),
         )
         return
 
@@ -152,6 +195,7 @@ def schedule_note_style_after_validation(
             sent=None,
             built=built_total,
             terminal=terminal_total,
+            view=_view(),
         )
         return
 
@@ -163,6 +207,7 @@ def schedule_note_style_after_validation(
             sent=None,
             built=built_total,
             terminal=terminal_total,
+            view=_view(),
         )
         return
 
@@ -174,6 +219,7 @@ def schedule_note_style_after_validation(
             sent=None,
             built=built_total,
             terminal=terminal_total,
+            view=_view(),
         )
         return
 
@@ -190,6 +236,7 @@ def schedule_note_style_after_validation(
             level=logging.ERROR,
             error_code="manifest_load",
             error_type=type(exc).__name__,
+            view=_view(),
         )
         log.debug(
             "NOTE_STYLE_AUTOSEND_MANIFEST_LOAD_FAILED sid=%s path=%s",
@@ -204,6 +251,7 @@ def schedule_note_style_after_validation(
     validation_status = manifest.get_ai_stage_status("validation")
     note_style_status = manifest.get_ai_stage_status("note_style")
     view = note_style_stage_view(sid_text, runs_root=runs_root_path)
+    view_cache = view
     metrics_cache = (
         view.total_expected,
         (view.completed_total + view.failed_total)
@@ -221,6 +269,7 @@ def schedule_note_style_after_validation(
             sent=sent_flag,
             built=built_total,
             terminal=terminal_total,
+            view=view,
         )
         return
 
@@ -232,6 +281,7 @@ def schedule_note_style_after_validation(
             sent=sent_flag,
             built=built_total,
             terminal=terminal_total,
+            view=view,
         )
         return
 
@@ -246,6 +296,7 @@ def schedule_note_style_after_validation(
             sent=sent_flag,
             built=built_total,
             terminal=terminal_total,
+            view=view,
         )
         return
 
@@ -257,6 +308,7 @@ def schedule_note_style_after_validation(
             sent=sent_flag,
             built=built_total,
             terminal=terminal_total,
+            view=view,
         )
         return
 
@@ -275,6 +327,7 @@ def schedule_note_style_after_validation(
             level=logging.ERROR,
             error_code="path_resolve",
             error_type=type(exc).__name__,
+            view=view,
         )
         log.debug(
             "NOTE_STYLE_STAGE_PATH_RESOLVE_FAILED sid=%s runs_root=%s",
@@ -299,6 +352,7 @@ def schedule_note_style_after_validation(
             level=logging.ERROR,
             error_code="task_import",
             error_type=type(exc).__name__,
+            view=view,
         )
         log.warning(
             "NOTE_STYLE_AUTOSEND_IMPORT_FAILED sid=%s", sid_text, exc_info=True
@@ -329,6 +383,7 @@ def schedule_note_style_after_validation(
             level=logging.ERROR,
             error_code="schedule",
             error_type=type(exc).__name__,
+            view=view,
         )
         log.warning(
             "NOTE_STYLE_AUTOSEND_SCHEDULE_FAILED sid=%s packs=%s",
@@ -345,6 +400,7 @@ def schedule_note_style_after_validation(
         sent=sent_flag,
         built=built_total,
         terminal=terminal_total,
+        view=view,
     )
     log.info(
         "NOTE_STYLE_AUTOSEND_AFTER_VALIDATION sid=%s packs=%s",

@@ -26,6 +26,7 @@ from backend.runflow.counters import (
 )
 from backend.runflow.umbrella import schedule_note_style_after_validation
 from backend.validation.index_schema import load_validation_index
+from backend.ai.note_style_logging import log_note_style_decision
 
 from backend.frontend.packs.config import load_frontend_stage_config
 
@@ -1219,6 +1220,7 @@ def _apply_note_style_stage_promotion(
     packs_failed = set(snapshot.packs_failed)
 
     total_value = len(packs_expected)
+    built_value = len(packs_expected & packs_built)
     completed_value = len(packs_expected & packs_completed)
     failed_value = len(packs_expected & packs_failed)
     terminal_value = completed_value + failed_value
@@ -1375,6 +1377,19 @@ def _apply_note_style_stage_promotion(
         "sent": sent_value,
         "completed_at": completed_at_value,
     }
+
+    log_note_style_decision(
+        "NOTE_STYLE_STAGE_STATUS_WRITE",
+        logger=log,
+        sid=run_dir.name,
+        runs_root=run_dir.parent,
+        reason="apply_note_style_stage_promotion",
+        decided_status=status_value,
+        packs_expected=total_value,
+        packs_built=built_value,
+        packs_completed=completed_value,
+        packs_failed=failed_value,
+    )
 
     stages["note_style"] = stage_payload
     return (True, promoted, log_context)

@@ -6,7 +6,10 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing helpers
+    from backend.ai.note_style.io import NoteStyleStageView
 
 
 log = logging.getLogger(__name__)
@@ -72,4 +75,55 @@ def log_structured_event(
     target_logger.log(level, serialized)
 
 
-__all__ = ["append_note_style_warning", "log_structured_event"]
+def log_note_style_decision(
+    event: str,
+    *,
+    reason: str,
+    decided_status: str | None = None,
+    logger: logging.Logger | None = None,
+    level: int = logging.INFO,
+    sid: str | None = None,
+    runs_root: Any | None = None,
+    view: "NoteStyleStageView" | None = None,
+    packs_expected: int | None = None,
+    packs_built: int | None = None,
+    packs_completed: int | None = None,
+    packs_failed: int | None = None,
+    terminal_mismatch: bool | None = None,
+    **extra: Any,
+) -> None:
+    """Emit a structured decision log for note_style state transitions."""
+
+    if view is not None:
+        packs_expected = view.total_expected
+        packs_built = view.built_total
+        packs_completed = view.completed_total
+        packs_failed = view.failed_total
+        decided_status = decided_status or view.state
+
+    payload: dict[str, Any] = {
+        "reason": reason,
+        "decided_status": decided_status or "unknown",
+        "packs_expected": int(packs_expected or 0),
+        "packs_built": int(packs_built or 0),
+        "packs_completed": int(packs_completed or 0),
+        "packs_failed": int(packs_failed or 0),
+    }
+
+    if sid is not None:
+        payload["sid"] = sid
+    if runs_root is not None:
+        payload["runs_root"] = runs_root
+    if terminal_mismatch is not None:
+        payload["terminal_mismatch"] = bool(terminal_mismatch)
+
+    payload.update(extra)
+
+    log_structured_event(event, level=level, logger=logger, **payload)
+
+
+__all__ = [
+    "append_note_style_warning",
+    "log_note_style_decision",
+    "log_structured_event",
+]

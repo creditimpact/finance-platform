@@ -353,6 +353,79 @@ def test_note_style_manifest_registered_before_pack_build(tmp_path: Path) -> Non
     assert status_payload["sent"] is False
     assert status_payload["completed_at"] is None
 
+
+def test_note_style_stage_marks_built_after_all_packs(tmp_path: Path) -> None:
+    sid = "SID-BUILT-GATE"
+    accounts = ["acct-1", "acct-2", "acct-3"]
+    run_dir = tmp_path / sid
+    responses_dir = run_dir / "frontend" / "review" / "responses"
+
+    manifest_accounts: dict[str, dict[str, str]] = {}
+
+    for account in accounts:
+        account_dir = run_dir / "cases" / "accounts" / account
+        account_dir.mkdir(parents=True, exist_ok=True)
+
+        meta_payload = {"heading_guess": f"Creditor {account}"}
+        bureaus_payload = {
+            "experian": {"reported_creditor": f"Creditor {account}"}
+        }
+        tags_payload = [{"kind": "issue", "type": "dispute"}]
+
+        (account_dir / "meta.json").write_text(
+            json.dumps(meta_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (account_dir / "bureaus.json").write_text(
+            json.dumps(bureaus_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (account_dir / "tags.json").write_text(
+            json.dumps(tags_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        manifest_accounts[account] = {
+            "dir": f"cases/accounts/{account}",
+            "meta": "meta.json",
+            "bureaus": "bureaus.json",
+            "tags": "tags.json",
+        }
+
+        _write_response(
+            responses_dir / f"{account}.result.json",
+            {"answers": {"explain": f"Note for {account}"}},
+        )
+
+    manifest_payload = {
+        "artifacts": {"cases": {"accounts": manifest_accounts}},
+    }
+
+    manifest_path = run_dir / "manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    for account in accounts[:2]:
+        result = build_note_style_pack_for_account(sid, account, runs_root=tmp_path)
+        assert result["status"] == "completed"
+
+    runflow_path = run_dir / "runflow.json"
+    stage_payload = json.loads(runflow_path.read_text(encoding="utf-8"))["stages"][
+        "note_style"
+    ]
+    assert stage_payload["status"] == "pending"
+    metrics_payload = stage_payload.get("metrics") or {}
+    assert metrics_payload.get("packs_total") == len(accounts)
+
+    result = build_note_style_pack_for_account(sid, accounts[2], runs_root=tmp_path)
+    assert result["status"] == "completed"
+
+    stage_payload = json.loads(runflow_path.read_text(encoding="utf-8"))["stages"][
+        "note_style"
+    ]
+    assert stage_payload["status"] == "built"
+    metrics_payload = stage_payload.get("metrics") or {}
+    assert metrics_payload.get("packs_total") == len(accounts)
+
 def test_note_style_stage_uses_manifest_account_paths(tmp_path: Path) -> None:
     sid = "SIDMAN"
     account_id = "idx-007"
@@ -594,7 +667,7 @@ def test_prepare_and_send_without_responses_sets_empty_ok(tmp_path: Path) -> Non
     runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
     stage_payload = runflow_payload["stages"]["note_style"]
 
-    assert stage_payload["status"] == "success"
+    assert stage_payload["status"] == "empty"
     assert stage_payload["empty_ok"] is True
     assert stage_payload["metrics"]["packs_total"] == 0
     assert stage_payload["results"]["results_total"] == 0

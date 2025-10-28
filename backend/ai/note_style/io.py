@@ -7,7 +7,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from backend.core.ai.paths import (
     NoteStylePaths,
@@ -28,6 +28,85 @@ class NoteStyleSnapshot:
     packs_built: set[str]
     packs_completed: set[str]
     packs_failed: set[str]
+
+
+_NOTE_VALUE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("note",),
+    ("note_text",),
+    ("explain",),
+    ("explanation",),
+    ("data", "explain"),
+    ("answers", "explain"),
+    ("answers", "explanation"),
+    ("answers", "note"),
+    ("answers", "notes"),
+    ("answers", "customer_note"),
+)
+
+
+def _extract_note_text(payload: object) -> str:
+    if payload is None:
+        return ""
+
+    if isinstance(payload, str):
+        return payload.strip()
+
+    if isinstance(payload, Mapping):
+        for path in _NOTE_VALUE_PATHS:
+            current: object = payload
+            for key in path:
+                if not isinstance(current, Mapping):
+                    break
+                current = current.get(key)
+            else:
+                text = _extract_note_text(current)
+                if text:
+                    return text
+
+        for value in payload.values():
+            text = _extract_note_text(value)
+            if text:
+                return text
+
+        return ""
+
+    if isinstance(payload, Iterable) and not isinstance(payload, (bytes, bytearray)):
+        for item in payload:
+            text = _extract_note_text(item)
+            if text:
+                return text
+
+    return ""
+
+
+def _discover_response_accounts(responses_dir: Path) -> set[str]:
+    discovered: set[str] = set()
+
+    try:
+        entries = list(responses_dir.glob("*.result.json"))
+    except FileNotFoundError:
+        return discovered
+    except NotADirectoryError:
+        return discovered
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+
+        payload = _load_json_mapping(entry)
+        if not isinstance(payload, Mapping):
+            continue
+
+        note_text = _extract_note_text(payload)
+        if not note_text.strip():
+            continue
+
+        account_id = entry.stem.replace(".result", "")
+        normalized = normalize_note_style_account_id(account_id)
+        if normalized:
+            discovered.add(normalized)
+
+    return discovered
 
 
 def _resolve_runs_root(runs_root: Path | str | None) -> Path:
@@ -220,6 +299,9 @@ def note_style_snapshot(
     pack_files = _gather_pack_files(packs_dir)
     packs_completed, packs_failed = _collect_result_sets(results_dir)
 
+    responses_dir = runs_root_path / sid_text / "frontend" / "review" / "responses"
+    response_accounts = _discover_response_accounts(responses_dir)
+
     if not expected_map:
         if pack_files:
             expected_map = {account: path for account, path in pack_files.items()}
@@ -227,6 +309,8 @@ def note_style_snapshot(
             expected_map = {account: None for account in packs_completed | packs_failed}
 
     packs_expected = set(expected_map.keys())
+    if response_accounts:
+        packs_expected.update(response_accounts)
     packs_built: set[str] = set()
 
     for account, pack_path in expected_map.items():

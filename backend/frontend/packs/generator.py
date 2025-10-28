@@ -3098,6 +3098,22 @@ def generate_frontend_packs_for_run(
                         _section_per_bureau(display_payload.get("remarks"))
                     )
 
+                    holder_values: dict[str, str] = {}
+                    for holder_key in (
+                        "creditor_name",
+                        "creditor",
+                        "furnisher_name",
+                        "furnisher",
+                        "name",
+                    ):
+                        values = _collect_bureau_field_map(bureaus_branches, holder_key)
+                        if not values:
+                            continue
+                        for bureau, value in values.items():
+                            holder_values.setdefault(bureau, value)
+
+                    holder_per_bureau = _normalize_per_bureau(holder_values)
+
                     date_reported_values_raw = _collect_field_text_values(
                         bureaus_branches, "date_reported"
                     )
@@ -3111,7 +3127,7 @@ def generate_frontend_packs_for_run(
                         high_balance_per_bureau,
                         limit_per_bureau,
                         remarks_per_bureau,
-                        opened_per_bureau,
+                        date_opened_per_bureau,
                         closed_date_per_bureau,
                         last_payment_per_bureau,
                         dofd_per_bureau,

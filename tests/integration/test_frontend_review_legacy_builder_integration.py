@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
 
 
@@ -32,11 +34,14 @@ def _build_fields_flat(**fields: object) -> dict:
     return flat
 
 
-def test_generate_frontend_packs_full_pipeline(tmp_path: Path) -> None:
-    runs_root = tmp_path / "runs"
-    sid = "SID-LEGACY-123"
-    account_id = "idx-001"
-    account_dir = runs_root / sid / "cases" / "accounts" / "42"
+def _seed_sample_account(
+    runs_root: Path,
+    *,
+    sid: str,
+    account_id: str,
+    account_dir_name: str = "42",
+) -> None:
+    account_dir = runs_root / sid / "cases" / "accounts" / account_dir_name
 
     meta_payload = {"heading_guess": "Example Furnisher"}
 
@@ -118,6 +123,13 @@ def test_generate_frontend_packs_full_pipeline(tmp_path: Path) -> None:
     _write_json(account_dir / "tags.json", tags_payload)
     _write_json(account_dir / "bureaus.json", bureaus_payload)
 
+
+def test_generate_frontend_packs_full_pipeline(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID-LEGACY-123"
+    account_id = "idx-001"
+    _seed_sample_account(runs_root, sid=sid, account_id=account_id, account_dir_name="42")
+
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
     assert result["status"] == "success"
     assert result["packs_count"] == 1
@@ -161,3 +173,56 @@ def test_generate_frontend_packs_full_pipeline(tmp_path: Path) -> None:
     assert any(entry["account_id"] == account_id for entry in pack_entries)
     packs_index = manifest_payload["packs_index"]
     assert {entry["file"] for entry in packs_index} == {"packs/idx-001.json"}
+
+
+def test_generate_frontend_packs_stage_payload_full_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID-LEGACY-FULL"
+    account_id = "idx-002"
+    account_dir_name = "7"
+
+    _seed_sample_account(
+        runs_root,
+        sid=sid,
+        account_id=account_id,
+        account_dir_name=account_dir_name,
+    )
+
+    monkeypatch.setenv("FRONTEND_STAGE_PAYLOAD", "full")
+    monkeypatch.delenv("FRONTEND_PACKS_DEBUG_MIRROR", raising=False)
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    assert result["status"] == "success"
+    assert result["packs_count"] == 1
+
+    pack_path = runs_root / sid / "frontend" / "review" / "packs" / f"{account_id}.json"
+    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+
+    assert pack_payload["sid"] == sid
+    assert pack_payload["account_id"] == account_id
+
+    pointers = pack_payload.get("pointers")
+    assert isinstance(pointers, dict)
+    assert pointers["summary"] == f"cases/accounts/{account_dir_name}/summary.json"
+    assert pointers["flat"].endswith("fields_flat.json")
+
+    display = pack_payload["display"]
+    assert display["account_type"]["consensus"] == "Credit Card"
+    assert display["status"]["consensus"] == "Open"
+
+    questions = pack_payload.get("questions")
+    assert isinstance(questions, list)
+    assert any(question.get("id") == "ownership" for question in questions)
+
+    debug_pack_path = (
+        runs_root
+        / sid
+        / "frontend"
+        / "review"
+        / "debug"
+        / f"{account_id}.full.json"
+    )
+    assert not debug_pack_path.exists()

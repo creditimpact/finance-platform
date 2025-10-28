@@ -26,6 +26,7 @@ from backend.core.ai.paths import (
 from backend.core.paths import normalize_worker_path
 from backend.core.services.ai_client import get_ai_client
 from backend.runflow.manifest import resolve_note_style_stage_paths
+from backend.pipeline import runs as pipeline_runs
 
 
 log = logging.getLogger(__name__)
@@ -1276,6 +1277,31 @@ def send_note_style_packs_for_sid(
                 continue
             account_paths = _account_paths_for_candidate(paths, account_id, candidate)
 
+            normalized_account_id = account_paths.account_id
+            if pipeline_runs.account_result_ready(
+                sid,
+                normalized_account_id,
+                runs_root=runs_root_path,
+            ):
+                result_relative = _relativize(account_paths.result_file, paths.base)
+                display_account = account_id or normalized_account_id
+                log.info(
+                    "STYLE_SEND_SKIP_EXISTING sid=%s account_id=%s result=%s reason=%s",
+                    sid,
+                    display_account,
+                    result_relative,
+                    "terminal_result",
+                )
+                log_structured_event(
+                    "NOTE_STYLE_SEND_SKIPPED",
+                    logger=log,
+                    sid=sid,
+                    account_id=display_account,
+                    reason="terminal_result",
+                    result_path=result_relative,
+                )
+                continue
+
             log.info(
                 "NOTE_STYLE_SENDING sid=%s account_id=%s file=%s",
                 sid,
@@ -1350,6 +1376,30 @@ def send_note_style_pack_for_account(
     client = get_ai_client()
 
     for pack_payload in pack_records:
+        normalized_account_id = account_paths.account_id
+        if pipeline_runs.account_result_ready(
+            sid,
+            normalized_account_id,
+            runs_root=runs_root_path,
+        ):
+            result_relative = _relativize(account_paths.result_file, paths.base)
+            display_account = account_id or normalized_account_id
+            log.info(
+                "STYLE_SEND_SKIP_EXISTING sid=%s account_id=%s result=%s reason=%s",
+                sid,
+                display_account,
+                result_relative,
+                "terminal_result",
+            )
+            log_structured_event(
+                "NOTE_STYLE_SEND_SKIPPED",
+                logger=log,
+                sid=sid,
+                account_id=display_account,
+                reason="terminal_result",
+                result_path=result_relative,
+            )
+            continue
         if _send_pack_payload(
             sid=sid,
             account_id=account_id,

@@ -296,7 +296,7 @@ def test_generate_frontend_packs_writes_full_stage_payload(
 
 
 def test_generate_frontend_packs_preserves_existing_when_placeholder_payload(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     runs_root = tmp_path / "runs"
     sid = "SPLACE"
@@ -319,11 +319,15 @@ def test_generate_frontend_packs_preserves_existing_when_placeholder_payload(
 
     original_snapshot = json.loads(stage_pack_path.read_text(encoding="utf-8"))
 
-    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="backend.frontend.packs.generator"):
+        result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
     updated_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
     assert updated_payload == original_snapshot
     assert result["packs_count"] == 1
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("PACKGEN_SKIP_EMPTY_OVERWRITE" in message for message in messages)
 def test_generate_frontend_packs_logs_when_flat_missing(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

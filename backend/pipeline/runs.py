@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Mapping
-import json, os, glob, shutil, time
+import json, os, glob, shutil, time, uuid
 
 from backend.core.ai.paths import (
     MergePaths,
@@ -233,12 +233,19 @@ class RunManifest:
 
     def save(self) -> "RunManifest":
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
+        tmp = self.path.with_name(f"{self.path.name}.tmp.{uuid.uuid4().hex}")
         self._upgrade_ai_packs_structure()
         self._mirror_ai_to_legacy_artifacts()
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(self.data, fh, ensure_ascii=False, indent=2)
-        safe_replace(tmp, self.path)
+        try:
+            with tmp.open("w", encoding="utf-8") as fh:
+                json.dump(self.data, fh, ensure_ascii=False, indent=2)
+            safe_replace(tmp, self.path)
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except FileNotFoundError:
+                pass
         return self
 
     def _upgrade_ai_packs_structure(self) -> None:

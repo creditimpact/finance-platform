@@ -212,16 +212,19 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path: Path) -> None:
         "experian": "XXXX1234",
         "equifax": "--",
     }
+    assert display_block["account_number"]["consensus"] == "****1234"
     assert display_block["account_type"]["per_bureau"] == {
         "transunion": "Credit Card",
         "experian": "Credit Card",
         "equifax": "--",
     }
+    assert display_block["account_type"]["consensus"] == "Credit Card"
     assert display_block["status"]["per_bureau"] == {
         "transunion": "Closed",
         "experian": "Closed",
         "equifax": "--",
     }
+    assert display_block["status"]["consensus"] == "Closed"
     assert display_block["balance_owed"]["per_bureau"]["transunion"] == "$100"
     assert display_block["date_opened"]["transunion"] == "2023-01-01"
     assert display_block["closed_date"]["transunion"] == "2023-02-01"
@@ -238,6 +241,89 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path: Path) -> None:
     assert result["empty_ok"] is False
 
 
+def test_generate_frontend_packs_writes_full_stage_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SFULL"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    summary_payload = {
+        "account_id": "acct-1",
+        "holder_name": "Full Case",
+        "labels": {
+            "creditor": "Sample Creditor",
+            "account_type": {"normalized": "Auto Loan"},
+            "status": {"normalized": "Closed"},
+        },
+    }
+    flat_payload = _build_fields_flat(
+        account_number_display={"transunion": "****0001"},
+        balance_owed={"transunion": "$0"},
+        account_status={"transunion": "Closed"},
+        account_type={"transunion": "Auto Loan"},
+    )
+    flat_payload["holder_name"] = "Full Case"
+    tags_payload = [{"kind": "issue", "type": "wrong_account"}]
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "fields_flat.json", flat_payload)
+    _write_json(account_dir / "tags.json", tags_payload)
+
+    monkeypatch.setenv("FRONTEND_STAGE_PAYLOAD", "full")
+    monkeypatch.setenv("FRONTEND_PACKS_DEBUG_MIRROR", "0")
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    stage_pack_path, stage_pack_payload = _read_stage_pack(runs_root, sid, "acct-1")
+
+    assert stage_pack_payload["sid"] == sid
+    assert stage_pack_payload["creditor_name"] == "Sample Creditor"
+    assert stage_pack_payload["account_type"] == "Auto Loan"
+    assert stage_pack_payload["status"] == "Closed"
+    pointers = stage_pack_payload["pointers"]
+    assert pointers["summary"].endswith("cases/accounts/1/summary.json")
+    assert pointers["tags"].endswith("cases/accounts/1/tags.json")
+    assert pointers["flat"].endswith("cases/accounts/1/fields_flat.json")
+    assert stage_pack_payload["display"]["account_type"]["consensus"] == "Auto Loan"
+    assert stage_pack_payload["questions"]
+    assert stage_pack_payload["claim_field_links"] == CLAIM_FIELD_LINK_MAP
+
+    debug_dir = runs_root / sid / "frontend" / "review" / "debug"
+    debug_files = list(debug_dir.glob("*.full.json")) if debug_dir.exists() else []
+    assert not debug_files
+
+    assert result["packs_count"] == 1
+
+
+def test_generate_frontend_packs_preserves_existing_when_placeholder_payload(
+    tmp_path: Path,
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SPLACE"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    summary_payload = {"account_id": "acct-1", "holder_name": ""}
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "fields_flat.json", {})
+    _write_json(account_dir / "tags.json", [])
+
+    stage_pack_path = (
+        runs_root / sid / "frontend" / "review" / "packs" / "acct-1.json"
+    )
+    original_stage_payload = {
+        "account_id": "acct-1",
+        "holder_name": "Saved Holder",
+        "display": {"holder_name": "Saved Holder"},
+    }
+    _write_json(stage_pack_path, original_stage_payload)
+
+    original_snapshot = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    updated_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+    assert updated_payload == original_snapshot
+    assert result["packs_count"] == 1
 def test_generate_frontend_packs_logs_when_flat_missing(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

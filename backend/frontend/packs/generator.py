@@ -52,6 +52,10 @@ _BUREAU_ORDER: tuple[str, ...] = ("transunion", "experian", "equifax")
 
 _DISPLAY_SCHEMA_VERSION = "1.2"
 
+_STAGE_PAYLOAD_MODE_MINIMAL = "minimal"
+_STAGE_PAYLOAD_MODE_FULL = "full"
+_STAGE_PAYLOAD_MODES: set[str] = {_STAGE_PAYLOAD_MODE_MINIMAL, _STAGE_PAYLOAD_MODE_FULL}
+
 
 _QUESTION_SET = [
     {"id": "ownership", "prompt": "Do you own this account?"},
@@ -143,6 +147,21 @@ def _frontend_packs_lean_enabled() -> bool:
 def _frontend_packs_debug_mirror_enabled() -> bool:
     value = os.getenv("FRONTEND_PACKS_DEBUG_MIRROR", "0")
     return value not in {"0", "false", "False"}
+
+
+def _resolve_stage_payload_mode() -> str:
+    value = os.getenv("FRONTEND_STAGE_PAYLOAD", _STAGE_PAYLOAD_MODE_MINIMAL)
+    if not value:
+        return _STAGE_PAYLOAD_MODE_MINIMAL
+
+    normalized = value.strip().lower()
+    if normalized not in _STAGE_PAYLOAD_MODES:
+        log.warning(
+            "FRONTEND_STAGE_PAYLOAD_INVALID value=%s", value,
+        )
+        return _STAGE_PAYLOAD_MODE_MINIMAL
+
+    return normalized
 
 
 def _frontend_review_create_empty_index_enabled() -> bool:
@@ -1074,13 +1093,19 @@ def _build_compact_display(
     primary_issue: str | None,
     display_payload: Mapping[str, Any],
 ) -> dict[str, Any]:
-    def _per_bureau_only(source: Mapping[str, Any] | None) -> dict[str, Any]:
-        per_bureau: Mapping[str, Any] | None = None
+    def _copy_account_section(
+        source: Mapping[str, Any] | None, *, include_consensus: bool
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"per_bureau": {}}
         if isinstance(source, Mapping):
             per_bureau = source.get("per_bureau")
-        if isinstance(per_bureau, Mapping):
-            return {"per_bureau": dict(per_bureau)}
-        return {"per_bureau": {}}
+            if isinstance(per_bureau, Mapping):
+                payload["per_bureau"] = dict(per_bureau)
+            if include_consensus:
+                consensus = source.get("consensus")
+                if consensus is not None:
+                    payload["consensus"] = consensus if isinstance(consensus, str) else str(consensus)
+        return payload
 
     def _bureau_dates(source: Mapping[str, Any] | None) -> dict[str, Any]:
         return dict(source) if isinstance(source, Mapping) else {}
@@ -1091,10 +1116,18 @@ def _build_compact_display(
         ),
         "holder_name": holder_name,
         "primary_issue": primary_issue,
-        "account_number": _per_bureau_only(display_payload.get("account_number")),
-        "account_type": _per_bureau_only(display_payload.get("account_type")),
-        "status": _per_bureau_only(display_payload.get("status")),
-        "balance_owed": _per_bureau_only(display_payload.get("balance_owed")),
+        "account_number": _copy_account_section(
+            display_payload.get("account_number"), include_consensus=True
+        ),
+        "account_type": _copy_account_section(
+            display_payload.get("account_type"), include_consensus=True
+        ),
+        "status": _copy_account_section(
+            display_payload.get("status"), include_consensus=True
+        ),
+        "balance_owed": _copy_account_section(
+            display_payload.get("balance_owed"), include_consensus=False
+        ),
         "date_opened": _bureau_dates(display_payload.get("date_opened")),
         "closed_date": _bureau_dates(display_payload.get("closed_date")),
     }
@@ -1182,6 +1215,94 @@ def build_stage_pack_doc(
         "display": display,
         "claim_field_links": _claim_field_links_payload(),
     }
+
+
+def _has_meaningful_text(value: Any, *, treat_unknown: bool = False) -> bool:
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return False
+        if normalized == "--":
+            return False
+        if treat_unknown and normalized.lower() == "unknown":
+            return False
+        return True
+    return value is not None
+
+
+def _mapping_has_meaningful_values(
+    mapping: Mapping[str, Any] | None, *, treat_unknown: bool = False
+) -> bool:
+    if not isinstance(mapping, Mapping):
+        return False
+    for value in mapping.values():
+        if _has_meaningful_text(value, treat_unknown=treat_unknown):
+            return True
+    return False
+
+
+def _has_meaningful_display(display: Mapping[str, Any] | None) -> bool:
+    if not isinstance(display, Mapping):
+        return False
+
+    if _has_meaningful_text(display.get("holder_name"), treat_unknown=True):
+        return True
+    if _has_meaningful_text(display.get("primary_issue"), treat_unknown=True):
+        return True
+
+    account_number = display.get("account_number")
+    if isinstance(account_number, Mapping):
+        if _has_meaningful_text(account_number.get("consensus")):
+            return True
+        if _mapping_has_meaningful_values(account_number.get("per_bureau")):
+            return True
+
+    account_type = display.get("account_type")
+    if isinstance(account_type, Mapping):
+        if _has_meaningful_text(account_type.get("consensus"), treat_unknown=True):
+            return True
+        if _mapping_has_meaningful_values(account_type.get("per_bureau"), treat_unknown=True):
+            return True
+
+    status = display.get("status")
+    if isinstance(status, Mapping):
+        if _has_meaningful_text(status.get("consensus"), treat_unknown=True):
+            return True
+        if _mapping_has_meaningful_values(status.get("per_bureau"), treat_unknown=True):
+            return True
+
+    balance = display.get("balance_owed")
+    if isinstance(balance, Mapping) and _mapping_has_meaningful_values(
+        balance.get("per_bureau")
+    ):
+        return True
+
+    if _mapping_has_meaningful_values(display.get("date_opened")):
+        return True
+    if _mapping_has_meaningful_values(display.get("closed_date")):
+        return True
+
+    return False
+
+
+def _stage_payload_has_meaningful_data(payload: Mapping[str, Any] | None) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+
+    if _has_meaningful_text(payload.get("holder_name"), treat_unknown=True):
+        return True
+    if _has_meaningful_text(payload.get("primary_issue"), treat_unknown=True):
+        return True
+
+    for key in ("creditor_name", "account_type", "status"):
+        if _has_meaningful_text(payload.get(key), treat_unknown=True):
+            return True
+
+    display_payload = payload.get("display")
+    if _has_meaningful_display(display_payload):
+        return True
+
+    return False
 
 
 def _safe_account_dirname(account_id: str, fallback: str) -> str:
@@ -1623,6 +1744,8 @@ def generate_frontend_packs_for_run(
     
             lean_enabled = _frontend_packs_lean_enabled()
             debug_mirror_enabled = _frontend_packs_debug_mirror_enabled()
+            stage_payload_mode = _resolve_stage_payload_mode()
+            stage_payload_full = stage_payload_mode == _STAGE_PAYLOAD_MODE_FULL
     
             if not account_dirs:
                 manifest_payload = _build_stage_manifest(
@@ -1922,7 +2045,10 @@ def generate_frontend_packs_for_run(
                 }
     
                 full_pack_payload: dict[str, Any] | None = None
-                if debug_mirror_enabled or not lean_enabled:
+                need_full_payload = (
+                    debug_mirror_enabled or not lean_enabled or stage_payload_full
+                )
+                if need_full_payload:
                     full_pack_payload = build_pack_doc(
                         sid=sid,
                         account_id=account_id,
@@ -1936,27 +2062,43 @@ def generate_frontend_packs_for_run(
                         pointers=pointers,
                         issues=issues if issues else None,
                     )
-    
-                stage_pack_payload = build_stage_pack_doc(
-                    account_id=account_id,
-                    holder_name=display_holder_name,
-                    primary_issue=display_primary_issue,
-                    display_payload=display_payload,
-                )
-    
+
+                if stage_payload_full and full_pack_payload is not None:
+                    stage_pack_payload = dict(full_pack_payload)
+                else:
+                    stage_pack_payload = build_stage_pack_doc(
+                        account_id=account_id,
+                        holder_name=display_holder_name,
+                        primary_issue=display_primary_issue,
+                        display_payload=display_payload,
+                    )
+
                 account_filename = _safe_account_dirname(account_id, account_dir.name)
                 stage_pack_path = stage_packs_dir / f"{account_filename}.json"
-    
+
                 existing_stage_pack: Mapping[str, Any] | None = None
                 if stage_pack_path.exists():
                     existing_payload = _load_json_payload(stage_pack_path)
                     if isinstance(existing_payload, Mapping):
                         existing_stage_pack = existing_payload
-    
+
                 stage_pack_payload["questions"] = _resolve_stage_pack_questions(
                     existing_pack=existing_stage_pack,
                     question_set=_QUESTION_SET,
                 )
+
+                if (
+                    existing_stage_pack is not None
+                    and not _stage_payload_has_meaningful_data(stage_pack_payload)
+                ):
+                    log.info(
+                        "FRONTEND_STAGE_SKIP_PLACEHOLDER sid=%s account=%s",
+                        sid,
+                        account_id,
+                    )
+                    unchanged_docs += 1
+                    pack_count += 1
+                    continue
 
                 log.info(
                     "writing pack sid=%s (acct=%s, type=%s, status=%s)",

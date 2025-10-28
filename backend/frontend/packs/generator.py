@@ -200,6 +200,10 @@ def _frontend_use_bureaus_only_enabled() -> bool:
     return _env_flag_enabled("FRONTEND_USE_BUREAUS_JSON_ONLY", False)
 
 
+def _frontend_warn_bureaus_conflict_enabled() -> bool:
+    return _env_flag_enabled("FRONTEND_WARN_BUREAUS_CONFLICT", False)
+
+
 def _resolve_stage_payload_mode() -> str:
     value = os.getenv("FRONTEND_STAGE_PAYLOAD", _STAGE_PAYLOAD_MODE_MINIMAL)
     if not value:
@@ -967,6 +971,14 @@ def build_display_from_bureaus(
     meta: Mapping[str, Any] | None,
     tags: Any,
 ) -> dict[str, Any]:
+    """Build a display payload sourced entirely from bureau artifacts.
+
+    When :func:`_frontend_use_bureaus_only_enabled` is active this becomes the
+    canonical path for assembling review pack display data.  The legacy
+    ``fields_flat``/``summary`` pipeline continues to exist as a fallback, but
+    the values returned here should be treated as the source of truth whenever
+    ``bureaus.json`` is available.
+    """
     bureaus_branches: dict[str, Mapping[str, Any]] = {
         bureau: payload
         for bureau, payload in bureaus.items()
@@ -1344,6 +1356,13 @@ def _prepare_bureau_payload_from_flat(
     date_reported_values: Mapping[str, str],
     reported_bureaus: Iterable[str],
 ) -> dict[str, Any]:
+    """Normalise bureau details for downstream pack payloads.
+
+    Despite the historical name this helper now operates on *any* normalized
+    per-bureau mappings.  Both the legacy ``fields_flat`` pipeline and the
+    bureaus-only feature flag reuse this function to produce ``bureau_summary``
+    payloads.
+    """
     badges = [
         dict(_BUREAU_BADGES[bureau])
         for bureau in reported_bureaus
@@ -1371,6 +1390,69 @@ def _prepare_bureau_payload_from_flat(
         },
         "bureau_badges": badges,
     }
+
+
+def _per_bureau_conflict(
+    existing: Mapping[str, Any] | None,
+    candidate: Mapping[str, Any] | None,
+) -> bool:
+    for bureau in _BUREAU_ORDER:
+        existing_value = _coerce_display_text(
+            existing.get(bureau) if isinstance(existing, Mapping) else None
+        )
+        candidate_value = _coerce_display_text(
+            candidate.get(bureau) if isinstance(candidate, Mapping) else None
+        )
+        if not _has_meaningful_text(candidate_value, treat_unknown=True):
+            continue
+        if not _has_meaningful_text(existing_value, treat_unknown=True):
+            return True
+        if existing_value != candidate_value:
+            return True
+    return False
+
+
+def _maybe_warn_bureaus_conflict(
+    *,
+    sid: str,
+    account_id: str,
+    account_dir: Path,
+    per_bureau_snapshot: Mapping[str, Mapping[str, Any] | None],
+) -> None:
+    if not _frontend_warn_bureaus_conflict_enabled():
+        return
+
+    bureaus_path = account_dir / "bureaus.json"
+    bureaus_payload = _load_json(bureaus_path)
+    if not isinstance(bureaus_payload, Mapping):
+        return
+
+    display_from_bureaus = build_display_from_bureaus(bureaus_payload, None, None)
+
+    def _section_per_bureau(section: Any) -> Mapping[str, Any]:
+        if isinstance(section, Mapping):
+            per = section.get("per_bureau")
+            if isinstance(per, Mapping):
+                return per
+            return section
+        return {}
+
+    conflicts: list[str] = []
+    for field_name, existing_values in per_bureau_snapshot.items():
+        display_section = display_from_bureaus.get(field_name)
+        candidate_values = _section_per_bureau(display_section)
+        if not candidate_values:
+            continue
+        if _per_bureau_conflict(existing_values, candidate_values):
+            conflicts.append(field_name)
+
+    if conflicts:
+        log.warning(
+            "FRONTEND_PACK_BUREAUS_CONFLICT sid=%s account=%s fields=%s",
+            sid,
+            account_id,
+            ",".join(sorted(conflicts)),
+        )
 
 
 def _stringify_flat_value(value: Any) -> str | None:
@@ -3322,6 +3404,27 @@ def generate_frontend_packs_for_run(
                         fields_flat_payload, "creditor_remarks"
                     )
                     remarks_per_bureau = _normalize_per_bureau(remarks_values_raw)
+
+                    _maybe_warn_bureaus_conflict(
+                        sid=sid,
+                        account_id=account_id,
+                        account_dir=account_dir,
+                        per_bureau_snapshot={
+                            "account_number": account_number_per_bureau,
+                            "account_type": account_type_per_bureau,
+                            "status": status_per_bureau,
+                            "balance": balance_per_bureau,
+                            "balance_owed": balance_per_bureau,
+                            "opened": date_opened_per_bureau,
+                            "date_opened": date_opened_per_bureau,
+                            "closed_date": closed_date_per_bureau,
+                            "last_payment": last_payment_per_bureau,
+                            "dofd": dofd_per_bureau,
+                            "high_balance": high_balance_per_bureau,
+                            "limit": limit_per_bureau,
+                            "remarks": remarks_per_bureau,
+                        },
+                    )
 
 
                     reported_bureaus = _determine_reported_bureaus(summary, fields_flat_payload)

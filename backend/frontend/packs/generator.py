@@ -616,6 +616,10 @@ def _enrich_stage_payload_with_full(
         merged["claim_field_links"] = dict(full_payload["claim_field_links"])
         changed = True
 
+    if "pointers" not in merged and isinstance(full_payload.get("pointers"), Mapping):
+        merged["pointers"] = dict(full_payload["pointers"])
+        changed = True
+
     return merged, changed
 
 
@@ -1734,6 +1738,7 @@ def build_stage_pack_doc(
     status: str | None,
     display_payload: Mapping[str, Any],
     bureau_summary: Mapping[str, Any],
+    pointers: Mapping[str, str] | None = None,
     account_number_per_bureau: Mapping[str, Any] | None = None,
     account_number_consensus: str | None = None,
     account_type_per_bureau: Mapping[str, Any] | None = None,
@@ -1785,6 +1790,9 @@ def build_stage_pack_doc(
         "display": display,
         "claim_field_links": _claim_field_links_payload(),
     }
+
+    if isinstance(pointers, Mapping):
+        payload["pointers"] = dict(pointers)
 
     last4_payload = bureau_summary.get("last4") if isinstance(bureau_summary, Mapping) else None
     if isinstance(last4_payload, Mapping):
@@ -3557,6 +3565,7 @@ def generate_frontend_packs_for_run(
                         status=status_value,
                         display_payload=display_payload,
                         bureau_summary=bureau_summary,
+                        pointers=pointers,
                         account_number_per_bureau=account_number_per_bureau,
                         account_number_consensus=account_number_consensus,
                         account_type_per_bureau=account_type_per_bureau,

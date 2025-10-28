@@ -1214,17 +1214,22 @@ def _apply_note_style_stage_promotion(
 ) -> tuple[bool, bool, dict[str, int]]:
     snapshot = _note_style_snapshot_for_run(run_dir)
 
-    packs_expected = set(snapshot.packs_expected)
-    packs_built = set(snapshot.packs_built)
-    packs_completed = set(snapshot.packs_completed)
-    packs_failed = set(snapshot.packs_failed)
+    from backend.ai.note_style.io import note_style_stage_view
 
-    total_value = len(packs_expected)
-    built_value = len(packs_expected & packs_built)
-    completed_value = len(packs_expected & packs_completed)
-    failed_value = len(packs_expected & packs_failed)
-    terminal_value = completed_value + failed_value
+    view = note_style_stage_view(
+        run_dir.name,
+        runs_root=run_dir.parent,
+        snapshot=snapshot,
+    )
+
+    total_value = view.total_expected
+    built_value = view.built_total
+    completed_value = view.completed_total
+    failed_value = view.failed_total
+    terminal_value = view.terminal_total
     empty_ok = total_value == 0
+    status_value = view.state
+    stage_terminal = view.is_terminal
 
     if results_override is not None:
         override_total, override_completed, override_failed = results_override
@@ -1235,21 +1240,6 @@ def _apply_note_style_stage_promotion(
         completed_value = max(completed_value, override_completed)
         failed_value = max(failed_value, override_failed)
         terminal_value = min(completed_value + failed_value, total_value)
-
-    built_complete = packs_expected.issubset(packs_built) if packs_expected else False
-
-    if empty_ok:
-        status_value = "empty"
-    elif not built_complete:
-        status_value = "pending"
-    elif terminal_value == 0:
-        status_value = "built"
-    elif terminal_value < total_value:
-        status_value = "in_progress"
-    else:
-        status_value = "success"
-
-    stage_terminal = status_value in {"success", "empty"}
 
     stages = _ensure_stages_dict(data)
     existing = stages.get("note_style") if isinstance(stages, Mapping) else None

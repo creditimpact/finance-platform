@@ -45,8 +45,10 @@ def redis_lock(key: str, ttl: int = 120):
         if acquired:
             try:
                 redis.delete(key)
-    except Exception:  # pragma: no cover - defensive logging
-        logger.warning("NOTE_STYLE_LOCK_RELEASE_FAILED key=%s", key, exc_info=True)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "NOTE_STYLE_LOCK_RELEASE_FAILED key=%s", key, exc_info=True
+                )
 
 
 def _stage_snapshot(sid: str, runs_root: str | Path | None = None):

@@ -901,7 +901,7 @@ def _send_pack_payload(
             skip_reason,
         )
         log_structured_event(
-            "NOTE_STYLE_SEND_SKIPPED",
+            "NOTE_STYLE_SKIP_EXISTING",
             logger=log,
             sid=sid,
             account_id=account_id,
@@ -1293,7 +1293,7 @@ def send_note_style_packs_for_sid(
                     "terminal_result",
                 )
                 log_structured_event(
-                    "NOTE_STYLE_SEND_SKIPPED",
+                    "NOTE_STYLE_SKIP_EXISTING",
                     logger=log,
                     sid=sid,
                     account_id=display_account,
@@ -1392,7 +1392,7 @@ def send_note_style_pack_for_account(
                 "terminal_result",
             )
             log_structured_event(
-                "NOTE_STYLE_SEND_SKIPPED",
+                "NOTE_STYLE_SKIP_EXISTING",
                 logger=log,
                 sid=sid,
                 account_id=display_account,

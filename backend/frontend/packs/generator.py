@@ -50,6 +50,12 @@ _BUREAU_BADGES: Mapping[str, Mapping[str, str]] = {
 
 _BUREAU_ORDER: tuple[str, ...] = ("transunion", "experian", "equifax")
 
+_BUREAU_SHORT_CODES: Mapping[str, str] = {
+    "transunion": "tu",
+    "experian": "ex",
+    "equifax": "eq",
+}
+
 _DISPLAY_SCHEMA_VERSION = "1.3"
 
 _STAGE_PAYLOAD_MODE_MINIMAL = "minimal"
@@ -1521,6 +1527,35 @@ def _normalize_per_bureau(source: Mapping[str, Any] | None) -> dict[str, str]:
             value = None
         normalized[bureau] = value if value else "--"
     return normalized
+
+
+def _count_filled_fields_per_bureau(
+    *per_bureau_sources: Mapping[str, Any] | None,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for bureau in _BUREAU_ORDER:
+        short_code = _BUREAU_SHORT_CODES.get(bureau, bureau)
+        counts[short_code] = 0
+
+    for source in per_bureau_sources:
+        if not isinstance(source, Mapping):
+            continue
+        for bureau, raw_value in source.items():
+            short_code = _BUREAU_SHORT_CODES.get(bureau)
+            if short_code is None:
+                continue
+            text_value = _coerce_display_text(raw_value)
+            if not _has_meaningful_text(text_value, treat_unknown=True):
+                continue
+            counts[short_code] = counts.get(short_code, 0) + 1
+
+    ordered_counts = {
+        _BUREAU_SHORT_CODES[bureau]: counts.get(_BUREAU_SHORT_CODES[bureau], 0)
+        for bureau in _BUREAU_ORDER
+        if bureau in _BUREAU_SHORT_CODES
+    }
+
+    return ordered_counts
 
 
 def _normalize_consensus_text(value: Any) -> str:
@@ -3068,6 +3103,22 @@ def generate_frontend_packs_for_run(
                     )
                     date_reported_per_bureau = _normalize_per_bureau(date_reported_values_raw)
 
+                    fields_filled_counts = _count_filled_fields_per_bureau(
+                        account_number_per_bureau,
+                        account_type_per_bureau,
+                        status_per_bureau,
+                        balance_per_bureau,
+                        high_balance_per_bureau,
+                        limit_per_bureau,
+                        remarks_per_bureau,
+                        opened_per_bureau,
+                        closed_date_per_bureau,
+                        last_payment_per_bureau,
+                        dofd_per_bureau,
+                        date_reported_per_bureau,
+                        holder_per_bureau,
+                    )
+
                     reported_bureaus: list[str] = []
                     for bureau in _BUREAU_ORDER:
                         branch = bureaus_branches.get(bureau)
@@ -3515,6 +3566,14 @@ def generate_frontend_packs_for_run(
 
                     if summary_path.exists():
                         pointers["summary"] = f"{relative_account_dir}/summary.json"
+
+                    log.info(
+                        "PACK_BUILD_SOURCE=bureaus_only sid=%s account=%s fields_filled: %s pointers: %s",
+                        sid,
+                        account_id,
+                        fields_filled_counts,
+                        pointers,
+                    )
                 else:
                     pointers = {
                         "summary": f"{relative_account_dir}/summary.json",

@@ -5,13 +5,11 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 import json, os, glob, shutil, logging
 import tempfile
-
 from backend.core.ai.paths import (
     MergePaths,
     ensure_merge_paths,
     merge_paths_from_any,
     normalize_note_style_account_id,
-    note_style_result_filename,
 )
 
 RUNS_ROOT_ENV = "RUNS_ROOT"                 # optional override
@@ -39,6 +37,14 @@ def _env_flag_enabled(name: str, default: bool) -> bool:
 
 def _new_sid_upload_only_enabled() -> bool:
     return _env_flag_enabled("RUNFLOW_NEW_SID_ON_UPLOAD_ONLY", False)
+
+
+def _note_style_stage_snapshot(
+    sid: str, runs_root: Path | str | None = None
+):
+    from backend.ai.note_style.io import note_style_snapshot
+
+    return note_style_snapshot(sid, runs_root=runs_root)
 
 
 def get_runs_root() -> Path:
@@ -1302,34 +1308,9 @@ def account_result_ready(
     normalized_account = normalize_note_style_account_id(acc_id)
     if not normalized_account:
         return False
-
-    runs_root_path = _resolve_optional_runs_root(runs_root)
-    results_dir = (
-        runs_root_path
-        / sid_text
-        / "ai_packs"
-        / "note_style"
-        / "results"
-    )
-
-    filename_candidates = {
-        note_style_result_filename(normalized_account),
-        f"acc_{normalized_account}.result",
-    }
-
-    for filename in filename_candidates:
-        candidate_path = results_dir / filename
-        if not candidate_path.exists():
-            continue
-        try:
-            with candidate_path.open("r", encoding="utf-8") as handle:
-                json.load(handle)
-        except Exception:
-            continue
-        else:
-            return True
-
-    return False
+    snapshot = _note_style_stage_snapshot(sid_text, runs_root=runs_root)
+    terminal_accounts = snapshot.packs_completed | snapshot.packs_failed
+    return normalized_account in terminal_accounts
 
 
 def all_note_style_results_terminal(
@@ -1340,87 +1321,10 @@ def all_note_style_results_terminal(
     sid_text = str(sid or "").strip()
     if not sid_text:
         return False
-
-    runs_root_path = _resolve_optional_runs_root(runs_root)
-    stage_root = runs_root_path / sid_text / "ai_packs" / "note_style"
-    index_path = stage_root / "index.json"
-    results_dir = stage_root / "results"
-
-    expected_accounts: list[str] = []
-    packs_total: int | None = None
-
-    if index_path.exists():
-        try:
-            with index_path.open("r", encoding="utf-8") as handle:
-                index_payload = json.load(handle)
-        except Exception:
-            index_payload = None
-        if isinstance(index_payload, Mapping):
-            packs_payload = index_payload.get("packs")
-            if isinstance(packs_payload, list):
-                for entry in packs_payload:
-                    if not isinstance(entry, Mapping):
-                        continue
-                    account_value = entry.get("account_id")
-                    normalized = normalize_note_style_account_id(account_value)
-                    if normalized:
-                        expected_accounts.append(normalized)
-            totals_payload = index_payload.get("totals")
-            if isinstance(totals_payload, Mapping):
-                packs_total = (
-                    _coerce_int(totals_payload.get("packs_total"))
-                    or _coerce_int(totals_payload.get("results_total"))
-                )
-
-    if packs_total is not None and packs_total <= 0:
+    snapshot = _note_style_stage_snapshot(sid_text, runs_root=runs_root)
+    if not snapshot.packs_expected:
         return True
 
-    unique_expected: list[str] = []
-    seen: set[str] = set()
-    for account in expected_accounts:
-        if account not in seen:
-            seen.add(account)
-            unique_expected.append(account)
-
-    if unique_expected:
-        for account in unique_expected:
-            if not account_result_ready(
-                sid_text, account, runs_root=runs_root_path
-            ):
-                return False
-        return True
-
-    discovered_accounts: list[str] = []
-    if results_dir.is_dir():
-        for candidate in sorted(results_dir.glob("acc_*")):
-            if not candidate.is_file():
-                continue
-            name = candidate.name
-            if not name.startswith("acc_"):
-                continue
-            remainder = name[len("acc_"):]
-            if not remainder:
-                continue
-            account_piece = remainder.split(".", 1)[0]
-            normalized = normalize_note_style_account_id(account_piece)
-            if normalized:
-                discovered_accounts.append(normalized)
-
-    if discovered_accounts:
-        unique_discovered: list[str] = []
-        seen_discovered: set[str] = set()
-        for account in discovered_accounts:
-            if account in seen_discovered:
-                continue
-            seen_discovered.add(account)
-            unique_discovered.append(account)
-
-        for account in unique_discovered:
-            if not account_result_ready(
-                sid_text, account, runs_root=runs_root_path
-            ):
-                return False
-        return True
-
-    return False
+    terminal_accounts = snapshot.packs_completed | snapshot.packs_failed
+    return snapshot.packs_expected.issubset(terminal_accounts)
 

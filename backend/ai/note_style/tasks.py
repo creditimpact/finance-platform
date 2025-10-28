@@ -17,6 +17,7 @@ from backend.ai.note_style_logging import (
     append_note_style_warning,
     log_structured_event,
 )
+from backend.ai.note_style.io import note_style_snapshot
 from backend.ai.note_style_results import record_note_style_failure
 from backend.ai.note_style_sender import (
     send_note_style_pack_for_account,
@@ -55,11 +56,8 @@ def is_terminal_status(status: str) -> bool:
 def _note_style_has_packs(
     sid: str, runs_root: str | Path | None = None
 ) -> bool:
-    runs_root_path = _resolve_runs_root(runs_root)
-    base = runs_root_path / sid / "ai_packs" / "note_style" / "packs"
-    if not base.is_dir():
-        return False
-    return any(child.suffix == ".jsonl" for child in base.iterdir())
+    snapshot = note_style_snapshot(sid, runs_root=runs_root)
+    return bool(snapshot.packs_built)
 
 
 def _resolve_runs_root(runs_root: str | Path | None) -> Path:

@@ -1,0 +1,253 @@
+"""Filesystem helpers for inspecting note_style stage artifacts."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping
+
+from backend.core.ai.paths import (
+    NoteStylePaths,
+    ensure_note_style_paths,
+    note_style_pack_filename,
+    normalize_note_style_account_id,
+)
+
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class NoteStyleSnapshot:
+    """Represents the current on-disk state of the note_style stage."""
+
+    packs_expected: set[str]
+    packs_built: set[str]
+    packs_completed: set[str]
+    packs_failed: set[str]
+
+
+def _resolve_runs_root(runs_root: Path | str | None) -> Path:
+    if runs_root is None:
+        env_value = os.getenv("RUNS_ROOT")
+        return Path(env_value) if env_value else Path("runs")
+    return Path(runs_root)
+
+
+def _coerce_stage_paths(sid: str, runs_root: Path) -> NoteStylePaths | None:
+    try:
+        return ensure_note_style_paths(runs_root, sid, create=False)
+    except Exception:  # pragma: no cover - defensive logging
+        log.debug(
+            "NOTE_STYLE_SNAPSHOT_FALLBACK sid=%s runs_root=%s", sid, runs_root, exc_info=True
+        )
+    return None
+
+
+def _load_json_mapping(path: Path) -> Mapping[str, object] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:  # pragma: no cover - defensive logging
+        log.debug("NOTE_STYLE_SNAPSHOT_READ_FAILED path=%s", path, exc_info=True)
+        return None
+
+    text = raw.strip()
+    if not text:
+        return None
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        for line in raw.splitlines():
+            line_text = line.strip()
+            if not line_text:
+                continue
+            try:
+                payload = json.loads(line_text)
+            except json.JSONDecodeError:
+                continue
+            else:
+                break
+        else:
+            return None
+
+    if isinstance(payload, Mapping):
+        return payload
+    return None
+
+
+def _normalize_pack_name(name: str) -> str | None:
+    if not name.startswith("acc_"):
+        return None
+    remainder = name[len("acc_") :]
+    if not remainder:
+        return None
+    account_piece = remainder.split(".", 1)[0]
+    normalized = normalize_note_style_account_id(account_piece)
+    return normalized or None
+
+
+def _resolve_index_entries(
+    *,
+    index_payload: Mapping[str, object] | None,
+    stage_base: Path,
+) -> dict[str, Path | None]:
+    if not isinstance(index_payload, Mapping):
+        return {}
+
+    packs_payload = index_payload.get("packs")
+    if not isinstance(packs_payload, list):
+        packs_payload = index_payload.get("items") if isinstance(index_payload, Mapping) else None
+    if not isinstance(packs_payload, list):
+        return {}
+
+    resolved: dict[str, Path | None] = {}
+    for entry in packs_payload:
+        if not isinstance(entry, Mapping):
+            continue
+        account_value = entry.get("account_id") or entry.get("account")
+        normalized = normalize_note_style_account_id(account_value)
+        if not normalized:
+            continue
+        pack_value = entry.get("pack_path") or entry.get("pack")
+        pack_path: Path | None = None
+        if isinstance(pack_value, str) and pack_value.strip():
+            candidate = Path(pack_value)
+            pack_path = (stage_base / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+        resolved.setdefault(normalized, pack_path)
+    return resolved
+
+
+def _gather_pack_files(packs_dir: Path) -> dict[str, Path]:
+    results: dict[str, Path] = {}
+    try:
+        entries = list(packs_dir.iterdir())
+    except FileNotFoundError:
+        return results
+    except NotADirectoryError:
+        return results
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        normalized = _normalize_pack_name(entry.name)
+        if not normalized:
+            continue
+        results.setdefault(normalized, entry.resolve())
+    return results
+
+
+def _payload_indicates_failure(payload: Mapping[str, object]) -> bool:
+    status_value = payload.get("status")
+    if isinstance(status_value, str) and status_value.strip().lower() in {"failed", "error"}:
+        return True
+
+    error_value = payload.get("error")
+    if isinstance(error_value, Mapping):
+        return bool(error_value)
+    if isinstance(error_value, str):
+        return bool(error_value.strip())
+    if error_value not in (None, "", {}):
+        return True
+    return False
+
+
+def _collect_result_sets(results_dir: Path) -> tuple[set[str], set[str]]:
+    completed: set[str] = set()
+    failed: set[str] = set()
+
+    try:
+        entries = list(results_dir.iterdir())
+    except FileNotFoundError:
+        return completed, failed
+    except NotADirectoryError:
+        return completed, failed
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        if ".tmp" in entry.name:
+            continue
+        normalized = _normalize_pack_name(entry.name)
+        if not normalized:
+            continue
+        payload = _load_json_mapping(entry)
+        if not isinstance(payload, Mapping):
+            continue
+        if _payload_indicates_failure(payload):
+            failed.add(normalized)
+        else:
+            completed.add(normalized)
+    return completed, failed
+
+
+def note_style_snapshot(
+    sid: str,
+    *,
+    runs_root: Path | str | None = None,
+) -> NoteStyleSnapshot:
+    """Return a consistent snapshot of note_style packs and results for ``sid``."""
+
+    sid_text = str(sid or "").strip()
+    if not sid_text:
+        return NoteStyleSnapshot(set(), set(), set(), set())
+
+    runs_root_path = _resolve_runs_root(runs_root)
+    paths = _coerce_stage_paths(sid_text, runs_root_path)
+
+    if paths is None:
+        stage_base = (runs_root_path / sid_text / "ai_packs" / "note_style").resolve()
+        packs_dir = stage_base / "packs"
+        results_dir = stage_base / "results"
+        index_file = stage_base / "index.json"
+    else:
+        stage_base = paths.base
+        packs_dir = paths.packs_dir
+        results_dir = paths.results_dir
+        index_file = paths.index_file
+
+    index_payload = _load_json_mapping(index_file)
+    expected_map: dict[str, Path | None] = _resolve_index_entries(
+        index_payload=index_payload,
+        stage_base=stage_base,
+    )
+
+    pack_files = _gather_pack_files(packs_dir)
+    packs_completed, packs_failed = _collect_result_sets(results_dir)
+
+    if not expected_map:
+        if pack_files:
+            expected_map = {account: path for account, path in pack_files.items()}
+        elif packs_completed or packs_failed:
+            expected_map = {account: None for account in packs_completed | packs_failed}
+
+    packs_expected = set(expected_map.keys())
+    packs_built: set[str] = set()
+
+    for account, pack_path in expected_map.items():
+        candidate = pack_path
+        if candidate is None:
+            candidate = packs_dir / note_style_pack_filename(account)
+        try:
+            exists = candidate.is_file()
+        except OSError:  # pragma: no cover - defensive logging
+            exists = False
+        if exists:
+            packs_built.add(account)
+
+    packs_built.update(pack_files.keys())
+
+    return NoteStyleSnapshot(
+        packs_expected=packs_expected,
+        packs_built=packs_built,
+        packs_completed=packs_completed,
+        packs_failed=packs_failed,
+    )
+
+
+__all__ = ["NoteStyleSnapshot", "note_style_snapshot"]

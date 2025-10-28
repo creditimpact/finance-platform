@@ -641,6 +641,8 @@ def _enqueue_frontend_build(sid: str, *, run_dir: Path | None) -> bool:
             return False
         _FRONTEND_ENQUEUED.add(sid)
 
+    log.info("enqueue frontend build sid=%s run_dir=%s", sid, run_dir)
+
     def _cleanup_marker() -> None:
         if not marker_written:
             _FRONTEND_ENQUEUED.discard(sid)

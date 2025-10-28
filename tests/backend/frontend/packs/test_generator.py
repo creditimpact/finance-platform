@@ -198,6 +198,64 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path: Path) -> None:
     assert stage_pack_payload["account_type"] == "Credit Card"
     assert stage_pack_payload["status"] == "Closed"
     assert stage_pack_payload["questions"] == list(generator_module._QUESTION_SET)
+
+
+def test_generate_frontend_packs_bureaus_only_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SBUREAUS"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    summary_payload = {"account_id": "acct-1"}
+    meta_payload = {"heading_guess": "Bureau Furnisher"}
+    bureaus_payload = {
+        "transunion": {
+            "account_number_display": "****1234",
+            "account_type": "Credit Card",
+            "account_status": "Open",
+            "balance_owed": "$100",
+            "date_opened": "2023-01-01",
+            "closed_date": "2023-03-01",
+        },
+        "experian": {
+            "account_number_display": "XXXX1234",
+            "account_type": "Credit Card",
+            "account_status": "Open",
+            "balance_owed": "$100",
+            "date_opened": "2023-02-01",
+            "closed_date": "2023-03-02",
+        },
+    }
+    tags_payload = [{"kind": "issue", "type": "wrong_account"}]
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "meta.json", meta_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+    _write_json(account_dir / "tags.json", tags_payload)
+
+    monkeypatch.setenv("FRONTEND_USE_BUREAUS_JSON_ONLY", "1")
+    monkeypatch.setenv("FRONTEND_STAGE_PAYLOAD", "full")
+    monkeypatch.setenv("FRONTEND_PACKS_DEBUG_MIRROR", "0")
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    stage_pack_path, stage_pack_payload = _read_stage_pack(runs_root, sid, "acct-1")
+    assert stage_pack_payload["holder_name"] == "Bureau Furnisher"
+    assert stage_pack_payload["creditor_name"] == "Bureau Furnisher"
+    pointers = stage_pack_payload["pointers"]
+    assert "bureaus" in pointers and pointers["bureaus"].endswith("bureaus.json")
+    assert "meta" in pointers and pointers["meta"].endswith("meta.json")
+    assert "flat" not in pointers
+
+    display = stage_pack_payload["display"]
+    assert display["account_number"]["per_bureau"]["transunion"] == "****1234"
+    assert display["account_number"]["per_bureau"]["experian"] == "XXXX1234"
+    assert display["account_type"]["per_bureau"]["transunion"] == "Credit Card"
+    assert display["status"]["per_bureau"]["transunion"] == "Open"
+    assert display["balance_owed"]["per_bureau"]["transunion"] == "$100"
+
+    assert result["packs_count"] == 1
     assert stage_pack_payload["claim_field_links"] == CLAIM_FIELD_LINK_MAP
     last4_payload = stage_pack_payload["last4"]
     assert last4_payload["display"] == "****1234"
@@ -206,39 +264,24 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path: Path) -> None:
     assert balance_block["per_bureau"]["transunion"] == "$100"
     dates_block = stage_pack_payload["dates"]
     assert dates_block["date_opened"]["transunion"] == "2023-01-01"
-    assert dates_block["closed_date"]["transunion"] == "2023-02-01"
+    assert dates_block["closed_date"]["transunion"] == "2023-03-01"
     badges = stage_pack_payload["bureau_badges"]
     assert any(badge["id"] == "transunion" for badge in badges)
     display_block = stage_pack_payload["display"]
-    assert display_block["holder_name"] == "Sample Creditor"
+    assert display_block["holder_name"] == "Bureau Furnisher"
     assert display_block["primary_issue"] == "wrong_account"
-    assert display_block["account_number"]["per_bureau"] == {
-        "transunion": "****1234",
-        "experian": "XXXX1234",
-        "equifax": "****1234",
-    }
     assert display_block["account_number"]["consensus"] == "****1234"
-    assert display_block["account_type"]["per_bureau"] == {
-        "transunion": "Credit Card",
-        "experian": "Credit Card",
-        "equifax": "Credit Card",
-    }
     assert display_block["account_type"]["consensus"] == "Credit Card"
-    assert display_block["status"]["per_bureau"] == {
-        "transunion": "Closed",
-        "experian": "Closed",
-        "equifax": "Closed",
-    }
-    assert display_block["status"]["consensus"] == "Closed"
+    assert display_block["status"]["consensus"] == "Open"
     assert display_block["balance_owed"]["per_bureau"]["transunion"] == "$100"
     assert display_block["date_opened"]["transunion"] == "2023-01-01"
-    assert display_block["closed_date"]["transunion"] == "2023-02-01"
+    assert display_block["closed_date"]["transunion"] == "2023-03-01"
 
     result_path = runs_root / sid / "frontend" / "review" / "index.json"
     assert result_path.exists()
 
     manifest_entry = json.loads(result_path.read_text(encoding="utf-8"))["packs"][0]
-    assert manifest_entry["display"]["holder_name"] == "Sample Creditor"
+    assert manifest_entry["display"]["holder_name"] == "Bureau Furnisher"
     assert manifest_entry["display"]["primary_issue"] == "wrong_account"
 
     assert result["status"] == "success"
@@ -333,7 +376,10 @@ def test_generate_frontend_packs_preserves_existing_when_placeholder_payload(
     assert updated_payload["display"]["holder_name"] == original_snapshot["display"]["holder_name"]
     assert result["packs_count"] == 1
     messages = [record.getMessage() for record in caplog.records]
-    assert any("PACKGEN_PRESERVED_FIELDS" in message for message in messages)
+    assert any(
+        "PACKGEN_PRESERVED_FIELDS" in message or "PACKGEN_SKIP_EMPTY_OVERWRITE" in message
+        for message in messages
+    )
 
 
 def test_generate_frontend_packs_respects_idempotent_lock(

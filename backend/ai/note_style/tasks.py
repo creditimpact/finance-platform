@@ -50,7 +50,7 @@ def redis_lock(key: str, ttl: int = 120):
 
 
 def is_terminal_status(status: str) -> bool:
-    return status in {"success", "completed", "error", "failed"}
+    return status in {"success", "completed", "error", "failed", "empty"}
 
 
 def _note_style_has_packs(

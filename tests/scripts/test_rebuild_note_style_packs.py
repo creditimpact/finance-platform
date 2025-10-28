@@ -30,6 +30,25 @@ def test_rebuild_note_style_builds_from_responses(tmp_path: Path) -> None:
     _write_json(account_dir / "bureaus.json", {"experian": {"reported_creditor": "Bank"}})
     _write_json(account_dir / "tags.json", [])
 
+    manifest_payload = {
+        "artifacts": {
+            "cases": {
+                "accounts": {
+                    account_id: {
+                        "dir": f"cases/accounts/{account_id}",
+                        "meta": "meta.json",
+                        "bureaus": "bureaus.json",
+                        "tags": "tags.json",
+                        "summary": "summary.json",
+                    }
+                }
+            }
+        }
+    }
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
     module._process_sid(sid, tmp_path)
 
     paths = ensure_note_style_paths(tmp_path, sid, create=False)
@@ -56,6 +75,6 @@ def test_rebuild_note_style_marks_empty_success(tmp_path: Path) -> None:
     runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
     stage_payload = runflow_payload["stages"]["note_style"]
 
-    assert stage_payload["status"] == "success"
+    assert stage_payload["status"] == "empty"
     assert stage_payload["empty_ok"] is True
     assert stage_payload["metrics"]["packs_total"] == 0

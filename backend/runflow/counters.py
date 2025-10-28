@@ -7,6 +7,8 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import json
 
+from typing import TYPE_CHECKING
+
 from backend.core.ai.paths import ensure_note_style_paths
 from backend.frontend.packs.config import load_frontend_stage_config
 
@@ -357,122 +359,15 @@ def _load_note_style_index_statuses(base_dir: Path) -> dict[str, str]:
 def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
     """Return aggregate counters for note_style stage artifacts."""
 
-    try:
-        paths = ensure_note_style_paths(base_dir.parent, base_dir.name, create=False)
-        results_dir = paths.results_dir
-        packs_dir = paths.packs_dir
-    except Exception:
-        results_dir = base_dir / "ai_packs" / "note_style" / "results"
-        packs_dir = base_dir / "ai_packs" / "note_style" / "packs"
-    try:
-        entries = list(results_dir.iterdir())
-    except FileNotFoundError:
-        entries = []
-    except NotADirectoryError:
-        entries = []
+    snapshot = _note_style_snapshot_for_counts(base_dir)
 
-    index_statuses = _load_note_style_index_statuses(base_dir)
+    packs_expected = set(snapshot.packs_expected)
+    packs_completed = set(snapshot.packs_completed)
+    packs_failed = set(snapshot.packs_failed)
 
-    total = 0
-    completed = 0
-    failed = 0
-    accounted: set[str] = set()
-
-    for path in entries:
-        if not path.is_file():
-            continue
-        normalized_name = _normalize_entry_text(path.name).lower()
-        if normalized_name.endswith(".tmp"):
-            continue
-        if not (normalized_name.endswith(".json") or normalized_name.endswith(".jsonl")):
-            continue
-
-        account_key = _normalize_note_style_result_name(path.name)
-        if account_key:
-            accounted.add(account_key)
-        normalized_status = ""
-        if account_key:
-            normalized_status = _normalize_entry_text(
-                index_statuses.get(account_key, "")
-            ).lower()
-
-        if normalized_status in {"skipped", "skipped_low_signal"}:
-            continue
-
-        if normalized_status in {"failed", "error"}:
-            failed += 1
-            total += 1
-            continue
-
-        if normalized_status in {"completed", "success"}:
-            completed += 1
-            total += 1
-            continue
-
-        payload = _load_document(path)
-        status_value = ""
-        if isinstance(payload, Mapping):
-            status_value = _normalize_entry_text(payload.get("status")).lower()
-
-        if status_value in {"failed", "error"}:
-            failed += 1
-            total += 1
-            continue
-
-        if status_value in {"completed", "success"}:
-            completed += 1
-            total += 1
-            continue
-
-        error_payload = payload.get("error") if isinstance(payload, Mapping) else None
-        if error_payload not in (None, "", {}):
-            failed += 1
-            total += 1
-            continue
-
-        analysis_payload = (
-            payload.get("analysis") if isinstance(payload, Mapping) else None
-        )
-        if isinstance(analysis_payload, Mapping) and analysis_payload:
-            completed += 1
-            total += 1
-            continue
-
-        if "result" in normalized_name:
-            total += 1
-
-    try:
-        pack_entries = list(packs_dir.iterdir())
-    except FileNotFoundError:
-        pack_entries = []
-    except NotADirectoryError:
-        pack_entries = []
-
-    for pack_path in pack_entries:
-        if not pack_path.is_file():
-            continue
-        account_key = _normalize_note_style_result_name(pack_path.name)
-        if not account_key or account_key in accounted:
-            continue
-        normalized_status = _normalize_entry_text(index_statuses.get(account_key, "")).lower()
-        if normalized_status in {"skipped", "skipped_low_signal"}:
-            accounted.add(account_key)
-            continue
-        if normalized_status in {"failed", "error"}:
-            failed += 1
-            total += 1
-            accounted.add(account_key)
-            continue
-        if normalized_status in {"completed", "success"}:
-            completed += 1
-            total += 1
-            accounted.add(account_key)
-            continue
-        accounted.add(account_key)
-        total += 1
-
-    if total == 0:
-        return {"packs_total": 0, "packs_completed": 0, "packs_failed": 0}
+    total = len(packs_expected)
+    completed = len(packs_expected & packs_completed)
+    failed = len(packs_expected & packs_failed)
 
     return {
         "packs_total": total,
@@ -539,3 +434,12 @@ __all__ = [
     "validation_packs_count",
     "validation_findings_count",
 ]
+if TYPE_CHECKING:
+    from backend.ai.note_style.io import NoteStyleSnapshot
+
+
+def _note_style_snapshot_for_counts(base_dir: Path) -> "NoteStyleSnapshot":
+    from backend.ai.note_style.io import note_style_snapshot
+
+    return note_style_snapshot(base_dir.name, runs_root=base_dir.parent)
+

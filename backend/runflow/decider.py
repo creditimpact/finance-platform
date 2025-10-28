@@ -1244,12 +1244,10 @@ def _apply_note_style_stage_promotion(
         status_value = "built"
     elif terminal_value < total_value:
         status_value = "in_progress"
-    elif failed_value > 0 and completed_value == 0:
-        status_value = "error"
     else:
         status_value = "success"
 
-    stage_terminal = status_value in {"success", "error", "empty"}
+    stage_terminal = status_value in {"success", "empty"}
 
     stages = _ensure_stages_dict(data)
     existing = stages.get("note_style") if isinstance(stages, Mapping) else None

@@ -143,7 +143,7 @@ def ingest_note_style_result(
         update_index=False,
     )
 
-    _, totals, _, analysis_valid = complete_note_style_result(
+    _, totals, _, result_valid, _ = complete_note_style_result(
         sid,
         account_id,
         runs_root=runs_root,
@@ -155,7 +155,7 @@ def ingest_note_style_result(
     results_failed = int(totals.get("failed", 0)) if totals else 0
     results_count = results_completed + results_failed
 
-    if analysis_valid and results_count > 0:
+    if result_valid and results_count > 0:
         try:
             view = note_style_stage_view(sid, runs_root=runs_root)
             if view.is_terminal:

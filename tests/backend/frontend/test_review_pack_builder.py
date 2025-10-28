@@ -6,17 +6,21 @@ from pathlib import Path
 import pytest
 
 from backend.frontend.review_pack_builder import build_review_packs
-from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest
 
 
-def test_build_review_packs_delegates_to_generator(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+class _ManifestStub:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+
+def test_build_review_packs_delegates_to_generator(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
     sid = "SID-700"
-    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
 
-    manifest = RunManifest.for_sid(sid)
+    manifest_path = runs_root / sid / "manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.touch()
+    manifest = _ManifestStub(manifest_path)
 
     calls: list[dict[str, object]] = []
 
@@ -26,17 +30,15 @@ def test_build_review_packs_delegates_to_generator(
         calls.append({"sid": sid_value, "runs_root": runs_root, "force": force})
         return {"status": "success", "packs_count": 3}
 
-    monkeypatch.setattr(
-        "backend.frontend.review_pack_builder.generate_frontend_packs_for_run",
-        _fake_generate,
-    )
-
-    result = build_review_packs(sid, manifest)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "backend.frontend.review_pack_builder.generate_frontend_packs_for_run",
+            _fake_generate,
+        )
+        result = build_review_packs(sid, manifest)
 
     assert result == {"status": "success", "packs_count": 3}
-    assert calls == [
-        {"sid": sid, "runs_root": runs_root.resolve(), "force": True},
-    ]
+    assert calls == [{"sid": sid, "runs_root": runs_root.resolve(), "force": True}]
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -44,12 +46,9 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_build_review_packs_generates_stage_packs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_review_packs_generates_stage_packs(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
     sid = "SID-701"
-    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
 
     account_dir = runs_root / sid / "cases" / "accounts" / "idx-001"
     summary_payload = {
@@ -96,7 +95,10 @@ def test_build_review_packs_generates_stage_packs(
     _write_json(account_dir / "fields_flat.json", fields_flat_payload)
     _write_json(account_dir / "tags.json", tags_payload)
 
-    manifest = RunManifest.for_sid(sid)
+    manifest_path = runs_root / sid / "manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text("{}", encoding="utf-8")
+    manifest = _ManifestStub(manifest_path)
 
     result = build_review_packs(sid, manifest)
 

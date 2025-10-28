@@ -215,19 +215,19 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path: Path) -> None:
     assert display_block["account_number"]["per_bureau"] == {
         "transunion": "****1234",
         "experian": "XXXX1234",
-        "equifax": "--",
+        "equifax": "****1234",
     }
     assert display_block["account_number"]["consensus"] == "****1234"
     assert display_block["account_type"]["per_bureau"] == {
         "transunion": "Credit Card",
         "experian": "Credit Card",
-        "equifax": "--",
+        "equifax": "Credit Card",
     }
     assert display_block["account_type"]["consensus"] == "Credit Card"
     assert display_block["status"]["per_bureau"] == {
         "transunion": "Closed",
         "experian": "Closed",
-        "equifax": "--",
+        "equifax": "Closed",
     }
     assert display_block["status"]["consensus"] == "Closed"
     assert display_block["balance_owed"]["per_bureau"]["transunion"] == "$100"

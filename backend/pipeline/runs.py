@@ -59,13 +59,18 @@ def safe_replace(src: str | Path, dst: str | Path, retries: int = 5, delay: floa
     def _handle_missing_source(context: str) -> bool:
         if src_path.exists():
             return False
+        if os.name == "nt":
+            logger.warning(
+                "MANIFEST_TMP_MISSING src=%s dst=%s context=%s",
+                src_path,
+                dst_path,
+                context,
+            )
+            return True
         message = (
             f"safe_replace: source {src_path} missing while {context} {dst_path}; "
             "skipping replace"
         )
-        if os.name == "nt":
-            logger.warning(message)
-            return True
         raise FileNotFoundError(message)
 
     if _handle_missing_source("preparing to replace"):
@@ -73,6 +78,22 @@ def safe_replace(src: str | Path, dst: str | Path, retries: int = 5, delay: floa
 
     src_str = str(src_path)
     dst_str = str(dst_path)
+
+    try:
+        with src_path.open("rb") as handle:
+            handle.flush()
+            os.fsync(handle.fileno())
+    except FileNotFoundError:
+        if _handle_missing_source("fsync"):
+            return
+        raise
+    except OSError:  # pragma: no cover - defensive logging
+        logger.warning(
+            "MANIFEST_TMP_FSYNC_FAILED src=%s dst=%s",
+            src_path,
+            dst_path,
+            exc_info=True,
+        )
 
     for i in range(retries):
         if _handle_missing_source("pre-retry check"):

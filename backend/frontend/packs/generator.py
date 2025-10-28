@@ -196,8 +196,6 @@ def _resolve_stage_payload_mode() -> str:
         return _STAGE_PAYLOAD_MODE_MINIMAL
 
     normalized = value.strip().lower()
-    if normalized == _STAGE_PAYLOAD_MODE_LEGACY:
-        return _STAGE_PAYLOAD_MODE_FULL
     if normalized not in _STAGE_PAYLOAD_MODES:
         log.warning(
             "FRONTEND_STAGE_PAYLOAD_INVALID value=%s", value,
@@ -1663,6 +1661,166 @@ def _stage_payload_has_meaningful_data(payload: Mapping[str, Any] | None) -> boo
     return False
 
 
+def _preserve_stage_display_values(
+    existing: Mapping[str, Any] | None,
+    candidate: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    if not isinstance(existing, Mapping):
+        if isinstance(candidate, dict):
+            return candidate, False
+        if isinstance(candidate, Mapping):
+            return dict(candidate), False
+        return {}, False
+
+    if isinstance(candidate, dict):
+        merged: dict[str, Any] = candidate
+    elif isinstance(candidate, Mapping):
+        merged = dict(candidate)
+    else:
+        merged = {}
+
+    changed = False
+
+    def _preserve_text(key: str, *, treat_unknown: bool = True) -> None:
+        nonlocal changed
+        existing_value = existing.get(key)
+        if not _has_meaningful_text(existing_value, treat_unknown=treat_unknown):
+            return
+        candidate_value = merged.get(key)
+        if _has_meaningful_text(candidate_value, treat_unknown=treat_unknown):
+            return
+        merged[key] = existing_value
+        changed = True
+
+    def _ensure_dict(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, Mapping):
+            return dict(value)
+        return {}
+
+    def _preserve_section(
+        key: str,
+        *,
+        treat_unknown: bool = True,
+        include_consensus: bool = True,
+    ) -> None:
+        nonlocal changed
+        existing_section = existing.get(key)
+        if not isinstance(existing_section, Mapping):
+            return
+
+        candidate_section = merged.get(key)
+        if not isinstance(candidate_section, dict):
+            candidate_section = _ensure_dict(candidate_section)
+            merged[key] = candidate_section
+
+        if include_consensus:
+            existing_consensus = existing_section.get("consensus")
+            if _has_meaningful_text(existing_consensus, treat_unknown=treat_unknown):
+                candidate_consensus = candidate_section.get("consensus")
+                if not _has_meaningful_text(
+                    candidate_consensus, treat_unknown=treat_unknown
+                ):
+                    candidate_section["consensus"] = existing_consensus
+                    changed = True
+
+        existing_per = existing_section.get("per_bureau")
+        if isinstance(existing_per, Mapping):
+            candidate_per = candidate_section.get("per_bureau")
+            if not isinstance(candidate_per, dict):
+                candidate_per = _ensure_dict(candidate_per)
+                candidate_section["per_bureau"] = candidate_per
+            for bureau, raw_value in existing_per.items():
+                if not isinstance(bureau, str):
+                    continue
+                if not _has_meaningful_text(raw_value, treat_unknown=treat_unknown):
+                    continue
+                candidate_value = candidate_per.get(bureau)
+                if _has_meaningful_text(candidate_value, treat_unknown=treat_unknown):
+                    continue
+                candidate_per[bureau] = raw_value
+                changed = True
+
+    def _preserve_date_mapping(key: str) -> None:
+        nonlocal changed
+        existing_section = existing.get(key)
+        if not isinstance(existing_section, Mapping):
+            return
+
+        candidate_section = merged.get(key)
+        if not isinstance(candidate_section, dict):
+            candidate_section = _ensure_dict(candidate_section)
+            merged[key] = candidate_section
+
+        for bureau, raw_value in existing_section.items():
+            if not isinstance(bureau, str):
+                continue
+            if not _has_meaningful_text(raw_value, treat_unknown=True):
+                continue
+            candidate_value = candidate_section.get(bureau)
+            if _has_meaningful_text(candidate_value, treat_unknown=True):
+                continue
+            candidate_section[bureau] = raw_value
+            changed = True
+
+    if not merged.get("display_version") and existing.get("display_version"):
+        merged["display_version"] = existing["display_version"]
+        changed = True
+
+    _preserve_text("holder_name")
+    _preserve_text("primary_issue")
+    _preserve_section("account_number", treat_unknown=False)
+    _preserve_section("account_type", treat_unknown=True)
+    _preserve_section("status", treat_unknown=True)
+    _preserve_section("balance_owed", treat_unknown=False, include_consensus=False)
+    _preserve_date_mapping("date_opened")
+    _preserve_date_mapping("closed_date")
+
+    return merged, changed
+
+
+def _preserve_stage_pack_payload(
+    existing: Mapping[str, Any] | None,
+    candidate: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], set[str]]:
+    if isinstance(candidate, dict):
+        merged: dict[str, Any] = candidate
+    elif isinstance(candidate, Mapping):
+        merged = dict(candidate)
+    else:
+        merged = {}
+
+    if not isinstance(existing, Mapping):
+        return merged, set()
+
+    preserved_fields: set[str] = set()
+
+    def _preserve_text(key: str, *, treat_unknown: bool = True) -> None:
+        existing_value = existing.get(key)
+        if not _has_meaningful_text(existing_value, treat_unknown=treat_unknown):
+            return
+        candidate_value = merged.get(key)
+        if _has_meaningful_text(candidate_value, treat_unknown=treat_unknown):
+            return
+        merged[key] = existing_value
+        preserved_fields.add(key)
+
+    for field_name in ("holder_name", "primary_issue", "creditor_name", "account_type", "status"):
+        _preserve_text(field_name, treat_unknown=True)
+
+    display_candidate = merged.get("display")
+    display_merged, display_changed = _preserve_stage_display_values(
+        existing.get("display"), display_candidate
+    )
+    if display_changed or (display_candidate is None and isinstance(display_merged, dict)):
+        merged["display"] = display_merged
+    if display_changed:
+        preserved_fields.add("display")
+
+    return merged, preserved_fields
+
+
 def _safe_account_dirname(account_id: str, fallback: str) -> str:
     account_id = account_id.strip()
     if not account_id:
@@ -2106,7 +2264,10 @@ def generate_frontend_packs_for_run(
             lean_enabled = _frontend_packs_lean_enabled()
             debug_mirror_enabled = _frontend_packs_debug_mirror_enabled()
             stage_payload_mode = _resolve_stage_payload_mode()
-            stage_payload_full = stage_payload_mode == _STAGE_PAYLOAD_MODE_FULL
+            stage_payload_full = stage_payload_mode in {
+                _STAGE_PAYLOAD_MODE_FULL,
+                _STAGE_PAYLOAD_MODE_LEGACY,
+            }
     
             if not account_dirs:
                 manifest_payload = _build_stage_manifest(
@@ -2637,6 +2798,17 @@ def generate_frontend_packs_for_run(
                     existing_payload = _load_json_payload(stage_pack_path)
                     if isinstance(existing_payload, Mapping):
                         existing_stage_pack = existing_payload
+
+                stage_pack_payload, preserved_fields = _preserve_stage_pack_payload(
+                    existing_stage_pack, stage_pack_payload
+                )
+                if preserved_fields:
+                    log.info(
+                        "PACKGEN_PRESERVED_FIELDS sid=%s account=%s fields=%s",
+                        sid,
+                        account_id,
+                        ",".join(sorted(preserved_fields)),
+                    )
 
                 stage_pack_payload["questions"] = _resolve_stage_pack_questions(
                     existing_pack=existing_stage_pack,

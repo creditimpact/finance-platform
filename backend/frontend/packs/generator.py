@@ -2525,26 +2525,34 @@ def generate_frontend_packs_for_run(
                 }
     
                 full_pack_payload: dict[str, Any] | None = None
+
+                def _ensure_full_pack_payload() -> dict[str, Any] | None:
+                    nonlocal full_pack_payload
+                    if full_pack_payload is None:
+                        full_pack_payload = build_pack_doc(
+                            sid=sid,
+                            account_id=account_id,
+                            creditor_name=creditor_name_value,
+                            account_type=account_type_value,
+                            status=status_value,
+                            bureau_summary=bureau_summary,
+                            holder_name=holder_name,
+                            primary_issue=primary_issue,
+                            display_payload=display_payload,
+                            pointers=pointers,
+                            issues=issues if issues else None,
+                        )
+                    return full_pack_payload
+
                 need_full_payload = (
                     debug_mirror_enabled or not lean_enabled or stage_payload_full
                 )
                 if need_full_payload:
-                    full_pack_payload = build_pack_doc(
-                        sid=sid,
-                        account_id=account_id,
-                        creditor_name=creditor_name_value,
-                        account_type=account_type_value,
-                        status=status_value,
-                        bureau_summary=bureau_summary,
-                        holder_name=holder_name,
-                        primary_issue=primary_issue,
-                        display_payload=display_payload,
-                        pointers=pointers,
-                        issues=issues if issues else None,
-                    )
+                    _ensure_full_pack_payload()
 
-                if stage_payload_full and full_pack_payload is not None:
-                    stage_pack_payload = dict(full_pack_payload)
+                if stage_payload_full:
+                    full_payload = _ensure_full_pack_payload()
+                    stage_pack_payload = dict(full_payload) if full_payload is not None else {}
                 else:
                     stage_pack_payload = build_stage_pack_doc(
                         account_id=account_id,
@@ -2565,6 +2573,18 @@ def generate_frontend_packs_for_run(
                         date_opened_per_bureau=date_opened_per_bureau,
                         closed_date_per_bureau=closed_date_per_bureau,
                     )
+
+                    if not _has_meaningful_display(stage_pack_payload.get("display")):
+                        full_payload = _ensure_full_pack_payload()
+                        if full_payload is not None and _has_meaningful_display(
+                            full_payload.get("display")
+                        ):
+                            stage_pack_payload = dict(full_payload)
+                            log.info(
+                                "PACKGEN_FAILSAFE_USED_FULL sid=%s account=%s",
+                                sid,
+                                account_id,
+                            )
 
                 account_filename = _safe_account_dirname(account_id, account_dir.name)
                 stage_pack_path = stage_packs_dir / f"{account_filename}.json"

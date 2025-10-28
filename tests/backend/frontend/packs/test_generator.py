@@ -200,6 +200,118 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path: Path) -> None:
     assert stage_pack_payload["questions"] == list(generator_module._QUESTION_SET)
 
 
+def test_bureaus_only_display_builds_from_bureaus(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FRONTEND_USE_BUREAUS_JSON_ONLY", "1")
+
+    runs_root = tmp_path / "runs"
+    sid = "BO-001"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    bureaus_payload = {
+        "transunion": {
+            "account_number_display": "****1111",
+            "account_type": "Credit Card",
+            "account_status": "Open",
+            "balance_owed": "$100",
+            "date_opened": "2020-01-01",
+            "last_payment": "2023-03-01",
+            "date_of_first_delinquency": "2022-06-01",
+            "high_balance": "$200",
+            "credit_limit": "$500",
+            "creditor_remarks": "On time",
+        },
+        "experian": {
+            "account_number_display": "1111****",
+            "account_type": "Credit Card",
+            "account_status": "Open",
+            "balance_owed": "$150",
+            "date_opened": "2020-01-02",
+            "last_payment": "2023-03-05",
+            "date_of_last_activity": "2022-07-15",
+            "high_balance": "$220",
+            "credit_limit": "$550",
+            "creditor_remarks": "Updated",
+        },
+        "equifax": {
+            "account_status": "Closed",
+            "balance_owed": "$0",
+        },
+    }
+
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+    _write_json(account_dir / "meta.json", {"heading_guess": "Example Bank"})
+    _write_json(account_dir / "tags.json", [{"kind": "issue", "type": "wrong_account"}])
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    assert result["packs_count"] == 1
+
+    stage_pack_path = (
+        runs_root
+        / sid
+        / "frontend"
+        / "review"
+        / "packs"
+        / "1.json"
+    )
+    stage_pack_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+    display = stage_pack_payload["display"]
+
+    assert display["holder_name"] == "Example Bank"
+    assert display["primary_issue"] == "wrong_account"
+    assert display["account_number"]["per_bureau"]["transunion"] == "****1111"
+    assert display["account_number"]["per_bureau"]["equifax"] == "--"
+    assert display["balance"]["per_bureau"]["experian"] == "$150"
+    assert display["balance_owed"]["per_bureau"]["transunion"] == "$100"
+    assert display["high_balance"]["per_bureau"]["transunion"] == "$200"
+    assert display["limit"]["per_bureau"]["experian"] == "$550"
+    assert display["remarks"]["per_bureau"]["transunion"] == "On time"
+    assert display["opened"]["transunion"] == "2020-01-01"
+    assert display["last_payment"]["experian"] == "2023-03-05"
+    assert display["dofd"]["experian"] == "2022-07-15"
+
+
+def test_bureaus_only_display_uses_fallbacks(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FRONTEND_USE_BUREAUS_JSON_ONLY", "1")
+
+    runs_root = tmp_path / "runs"
+    sid = "BO-DOFD"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    bureaus_payload = {
+        "transunion": {
+            "account_number_display": "****2222",
+            "account_type": "Collection",
+            "payment_status": "Collection/Chargeoff",
+            "balance_owed": "$250",
+            "date_of_last_activity": "2021-12-15",
+        }
+    }
+
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+    _write_json(account_dir / "meta.json", {"heading_guess": "Fallback Bank"})
+    _write_json(account_dir / "tags.json", [{"kind": "issue", "type": "wrong_account"}])
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    assert result["packs_count"] == 1
+
+    stage_pack_path = (
+        runs_root
+        / sid
+        / "frontend"
+        / "review"
+        / "packs"
+        / "1.json"
+    )
+    stage_pack_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+    display = stage_pack_payload["display"]
+
+    status_block = display["status"]
+    assert status_block["per_bureau"]["transunion"] == "Collection"
+    assert status_block["consensus"] == "Collection"
+    assert display["dofd"]["transunion"] == "2021-12-15"
+    assert display["balance_owed"]["per_bureau"].get("experian", "--") == "--"
+
+
 def test_generate_frontend_packs_bureaus_only_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

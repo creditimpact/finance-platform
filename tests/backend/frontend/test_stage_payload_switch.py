@@ -193,10 +193,78 @@ def test_stage_payload_skip_empty_overwrite_guard(
 
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="backend.frontend.packs.generator"):
-        result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+        result = generate_frontend_packs_for_run(sid, runs_root=runs_root, force=True)
 
     assert result["packs_count"] == 1
-    assert json.loads(stage_pack_path.read_text(encoding="utf-8")) == existing_payload
+
+    updated_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+
+    for key in ("holder_name", "primary_issue", "creditor_name", "account_type", "status"):
+        assert updated_payload[key] == existing_payload[key]
+
+    assert updated_payload["display"]["account_number"]["consensus"] == "****7007"
 
     messages = [record.getMessage() for record in caplog.records]
-    assert any("PACKGEN_SKIP_EMPTY_OVERWRITE" in message for message in messages)
+    assert any("PACKGEN_PRESERVED_FIELDS" in message for message in messages)
+
+
+def test_stage_payload_preserves_existing_fields_on_partial_degrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SIDKEEP"
+    account_id = "idx-007"
+
+    account_dir = _seed_account(
+        runs_root,
+        sid=sid,
+        account_dir_name="idx-007",
+        account_id=account_id,
+        creditor_name="Preserved Creditor",
+    )
+
+    monkeypatch.setenv("FRONTEND_STAGE_PAYLOAD", "minimal")
+
+    generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    stage_pack_path = (
+        runs_root / sid / "frontend" / "review" / "packs" / f"{account_id}.json"
+    )
+    existing_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+
+    summary_payload = {
+        "account_id": account_id,
+        "holder_name": "",
+        "labels": {
+            "creditor": "Preserved Creditor",
+            "status": {"normalized": "Closed"},
+        },
+    }
+    flat_payload = _build_fields_flat(
+        account_number_display={
+            "transunion": "****7007",
+            "experian": "****7007",
+        },
+        account_status={"transunion": "Closed", "experian": "Closed"},
+    )
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "fields_flat.json", flat_payload)
+    _write_json(account_dir / "tags.json", [{"kind": "issue", "type": "wrong_account"}])
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="backend.frontend.packs.generator"):
+        generate_frontend_packs_for_run(sid, runs_root=runs_root, force=True)
+
+    updated_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+
+    assert updated_payload["account_type"] == existing_payload["account_type"]
+    assert (
+        updated_payload["display"]["account_type"]["consensus"]
+        == existing_payload["display"]["account_type"]["consensus"]
+    )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("PACKGEN_PRESERVED_FIELDS" in message for message in messages)

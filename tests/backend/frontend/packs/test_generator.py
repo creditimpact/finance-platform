@@ -326,13 +326,14 @@ def test_generate_frontend_packs_preserves_existing_when_placeholder_payload(
 
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="backend.frontend.packs.generator"):
-        result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+        result = generate_frontend_packs_for_run(sid, runs_root=runs_root, force=True)
 
     updated_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
-    assert updated_payload == original_snapshot
+    assert updated_payload["holder_name"] == original_snapshot["holder_name"]
+    assert updated_payload["display"]["holder_name"] == original_snapshot["display"]["holder_name"]
     assert result["packs_count"] == 1
     messages = [record.getMessage() for record in caplog.records]
-    assert any("PACKGEN_SKIP_EMPTY_OVERWRITE" in message for message in messages)
+    assert any("PACKGEN_PRESERVED_FIELDS" in message for message in messages)
 
 
 def test_generate_frontend_packs_respects_idempotent_lock(

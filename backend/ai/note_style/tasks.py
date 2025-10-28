@@ -17,7 +17,7 @@ from backend.ai.note_style_logging import (
     append_note_style_warning,
     log_structured_event,
 )
-from backend.ai.note_style.io import note_style_stage_view
+from backend.ai.note_style.io import note_style_snapshot, note_style_stage_view
 from backend.ai.note_style_results import record_note_style_failure
 from backend.ai.note_style_sender import (
     send_note_style_pack_for_account,
@@ -48,10 +48,17 @@ def redis_lock(key: str, ttl: int = 120):
         logger.warning("NOTE_STYLE_LOCK_RELEASE_FAILED key=%s", key, exc_info=True)
 
 
+def _stage_snapshot(sid: str, runs_root: str | Path | None = None):
+    return note_style_snapshot(sid, runs_root=runs_root)
+
+
 def _stage_view(
-    sid: str, runs_root: str | Path | None = None
+    sid: str,
+    runs_root: str | Path | None = None,
+    *,
+    snapshot=None,
 ):
-    return note_style_stage_view(sid, runs_root=runs_root)
+    return note_style_stage_view(sid, runs_root=runs_root, snapshot=snapshot)
 
 
 def _resolve_runs_root(runs_root: str | Path | None) -> Path:
@@ -109,23 +116,48 @@ def note_style_prepare_and_send_task(
             )
             return {"sid": sid_text, "skipped": "locked"}
 
-        view = _stage_view(sid_text, runs_root=runs_root)
+        snapshot = _stage_snapshot(sid_text, runs_root=runs_root)
+        view = _stage_view(sid_text, runs_root=runs_root, snapshot=snapshot)
         ready_accounts = view.ready_to_send
         pending_total = len(view.pending_results)
 
         if view.is_terminal:
-            logger.info(
-                "NOTE_STYLE_TERMINAL_SKIP sid=%s state=%s", sid_text, view.state
+            expected_total = len(snapshot.packs_expected)
+            terminal_total = len(
+                (snapshot.packs_completed | snapshot.packs_failed)
+                & snapshot.packs_expected
             )
-            log_structured_event(
-                "NOTE_STYLE_TERMINAL_SKIP",
-                logger=log,
-                task="prepare_and_send",
-                sid=sid_text,
-                runs_root=runs_root,
-                status=view.state,
-            )
-            return {"sid": sid_text, "skipped": "terminal", "state": view.state}
+            if expected_total and terminal_total < expected_total:
+                logger.warning(
+                    "NOTE_STYLE_TERMINAL_MISMATCH sid=%s state=%s expected=%s terminal=%s",
+                    sid_text,
+                    view.state,
+                    expected_total,
+                    terminal_total,
+                )
+                log_structured_event(
+                    "NOTE_STYLE_TERMINAL_MISMATCH",
+                    logger=log,
+                    task="prepare_and_send",
+                    sid=sid_text,
+                    runs_root=runs_root,
+                    state=view.state,
+                    expected=expected_total,
+                    terminal=terminal_total,
+                )
+            else:
+                logger.info(
+                    "NOTE_STYLE_TERMINAL_SKIP sid=%s state=%s", sid_text, view.state
+                )
+                log_structured_event(
+                    "NOTE_STYLE_TERMINAL_SKIP",
+                    logger=log,
+                    task="prepare_and_send",
+                    sid=sid_text,
+                    runs_root=runs_root,
+                    status=view.state,
+                )
+                return {"sid": sid_text, "skipped": "terminal", "state": view.state}
 
         if not view.has_expected:
             log.info(

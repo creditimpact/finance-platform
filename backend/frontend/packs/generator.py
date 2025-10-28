@@ -190,6 +190,10 @@ def _frontend_packs_debug_mirror_enabled() -> bool:
     return value not in {"0", "false", "False"}
 
 
+def _frontend_use_bureaus_only_enabled() -> bool:
+    return _env_flag_enabled("FRONTEND_USE_BUREAUS_JSON_ONLY", False)
+
+
 def _resolve_stage_payload_mode() -> str:
     value = os.getenv("FRONTEND_STAGE_PAYLOAD", _STAGE_PAYLOAD_MODE_MINIMAL)
     if not value:
@@ -863,6 +867,21 @@ def _collect_field_text_values(
     return values
 
 
+def _extract_bureaus_majority_value(
+    bureaus_payload: Mapping[str, Any], field: str
+) -> str | None:
+    if not isinstance(bureaus_payload, Mapping):
+        return None
+
+    majority = bureaus_payload.get("majority_values")
+    if isinstance(majority, Mapping):
+        candidate = _extract_text(majority.get(field))
+        if candidate:
+            return candidate
+
+    return None
+
+
 def _resolve_account_number_consensus(per_bureau: Mapping[str, str]) -> str:
     duplicates = set()
     ordered_values: list[str] = []
@@ -1012,6 +1031,25 @@ def _derive_holder_name_from_summary(
             return text, resolver
 
     return None, "missing"
+
+
+def _derive_holder_name_from_meta(
+    meta_payload: Mapping[str, Any] | None, account_id: str
+) -> tuple[str | None, str]:
+    if isinstance(meta_payload, Mapping):
+        for key in (
+            "heading_guess",
+            "name",
+            "furnisher_name",
+            "creditor_name",
+            "creditor",
+        ):
+            candidate = _extract_text(meta_payload.get(key))
+            if candidate:
+                return candidate, f"meta.{key}"
+
+    fallback = _extract_text(account_id)
+    return fallback, "account_id"
 
 
 def _extract_issue_tags(tags_path: Path) -> tuple[str | None, list[str]]:
@@ -1707,18 +1745,43 @@ def _stage_payload_has_meaningful_data(payload: Mapping[str, Any] | None) -> boo
     if not isinstance(payload, Mapping):
         return False
 
+    account_id = payload.get("account_id")
+
     if _has_meaningful_text(payload.get("holder_name"), treat_unknown=True):
-        return True
+        holder_name = str(payload.get("holder_name"))
+        if isinstance(account_id, str) and holder_name.strip() == account_id.strip():
+            pass
+        else:
+            return True
     if _has_meaningful_text(payload.get("primary_issue"), treat_unknown=True):
         return True
 
     for key in ("creditor_name", "account_type", "status"):
-        if _has_meaningful_text(payload.get(key), treat_unknown=True):
+        value = payload.get(key)
+        if _has_meaningful_text(value, treat_unknown=True):
+            if (
+                key == "creditor_name"
+                and isinstance(account_id, str)
+                and isinstance(value, str)
+                and value.strip() == account_id.strip()
+            ):
+                continue
             return True
 
     display_payload = payload.get("display")
-    if _has_meaningful_display(display_payload):
-        return True
+    if isinstance(display_payload, Mapping):
+        holder_display = display_payload.get("holder_name")
+        if (
+            isinstance(account_id, str)
+            and isinstance(holder_display, str)
+            and holder_display.strip() == account_id.strip()
+        ):
+            trimmed_display = dict(display_payload)
+            trimmed_display["holder_name"] = ""
+            if _has_meaningful_display(trimmed_display):
+                return True
+        elif _has_meaningful_display(display_payload):
+            return True
 
     return False
 
@@ -2480,33 +2543,30 @@ def generate_frontend_packs_for_run(
             skip_reasons = {"missing_summary": 0}
             write_errors: list[tuple[str, Exception]] = []
             pack_count = 0
-    
+
+            use_bureaus_only = _frontend_use_bureaus_only_enabled()
+
             for account_dir in account_dirs:
                 summary_path = account_dir / "summary.json"
                 summary = _load_json(summary_path)
                 if not summary:
-                    skipped_missing += 1
-                    skip_reasons["missing_summary"] = skip_reasons.get("missing_summary", 0) + 1
-                    log.warning(
-                        "FRONTEND_PACK_MISSING_SUMMARY sid=%s path=%s",
-                        sid,
-                        summary_path,
-                    )
-                    continue
-    
-                account_id = str(summary.get("account_id") or account_dir.name)
+                    if use_bureaus_only:
+                        summary = {}
+                        account_id = account_dir.name
+                    else:
+                        skipped_missing += 1
+                        skip_reasons["missing_summary"] = skip_reasons.get("missing_summary", 0) + 1
+                        log.warning(
+                            "FRONTEND_PACK_MISSING_SUMMARY sid=%s path=%s",
+                            sid,
+                            summary_path,
+                        )
+                        continue
+                else:
+                    account_id = str(summary.get("account_id") or account_dir.name)
+
                 current_account_id = account_id
-    
-                flat_path = account_dir / "fields_flat.json"
-                fields_flat_payload = _load_json(flat_path)
-                if fields_flat_payload is None:
-                    log.warning(
-                        "FRONTEND_PACK_MISSING_FLAT sid=%s account=%s path=%s",
-                        sid,
-                        account_id,
-                        flat_path,
-                    )
-    
+
                 tags_path = account_dir / "tags.json"
                 if not tags_path.exists():
                     log.warning(
@@ -2515,243 +2575,452 @@ def generate_frontend_packs_for_run(
                         account_id,
                         tags_path,
                     )
-    
-                labels = _extract_summary_labels(summary)
-                holder_name, holder_name_resolver = _derive_holder_name_from_summary(
-                    summary, fields_flat_payload
-                )
+
                 primary_issue, issues = _extract_issue_tags(tags_path)
                 if not primary_issue:
                     primary_issue = "unknown"
 
                 display_primary_issue = _coerce_display_text(primary_issue or "unknown")
-    
-                account_number_values_raw = _collect_flat_field_per_bureau(
-                    fields_flat_payload, "account_number_display"
-                )
-                account_number_per_bureau = _normalize_per_bureau(account_number_values_raw)
-                account_number_consensus = _resolve_account_number_consensus(
-                    account_number_per_bureau
-                )
-    
-                account_type_values_raw = _collect_flat_field_per_bureau(
-                    fields_flat_payload, "account_type"
-                )
-                account_type_per_bureau = _normalize_per_bureau(account_type_values_raw)
-                account_type_consensus = _resolve_majority_consensus(account_type_per_bureau)
-                if account_type_consensus == "--":
-                    fallback_account_type = labels.get("account_type") or _collect_flat_consensus(
+
+                if use_bureaus_only:
+                    bureaus_path = account_dir / "bureaus.json"
+                    bureaus_payload = _load_json(bureaus_path)
+                    if not isinstance(bureaus_payload, Mapping):
+                        log.warning(
+                            "FRONTEND_PACK_MISSING_BUREAUS sid=%s account=%s path=%s",
+                            sid,
+                            account_id,
+                            bureaus_path,
+                        )
+                        skip_reasons["missing_bureaus"] = skip_reasons.get("missing_bureaus", 0) + 1
+                        skipped_missing += 1
+                        continue
+
+                    meta_path = account_dir / "meta.json"
+                    meta_payload = _load_json(meta_path)
+
+                    bureaus_branches: dict[str, Mapping[str, Any]] = {
+                        bureau: payload
+                        for bureau, payload in bureaus_payload.items()
+                        if bureau in _BUREAU_BADGES and isinstance(payload, Mapping)
+                    }
+
+                    account_number_values_raw = _collect_field_text_values(
+                        bureaus_branches, "account_number_display"
+                    )
+                    if not account_number_values_raw:
+                        account_number_values_raw = _collect_field_text_values(
+                            bureaus_branches, "account_number"
+                        )
+                    account_number_per_bureau = _normalize_per_bureau(account_number_values_raw)
+                    account_number_consensus = _resolve_account_number_consensus(
+                        account_number_per_bureau
+                    )
+
+                    account_type_values_raw = _collect_field_text_values(
+                        bureaus_branches, "account_type"
+                    )
+                    account_type_per_bureau = _normalize_per_bureau(account_type_values_raw)
+                    account_type_consensus = _resolve_majority_consensus(
+                        account_type_per_bureau
+                    )
+
+                    status_values_raw = _collect_field_text_values(
+                        bureaus_branches, "account_status"
+                    )
+                    status_per_bureau = _normalize_per_bureau(status_values_raw)
+                    status_consensus = _resolve_majority_consensus(status_per_bureau)
+
+                    balance_values_raw = _collect_field_text_values(
+                        bureaus_branches, "balance_owed"
+                    )
+                    balance_per_bureau = _normalize_per_bureau(balance_values_raw)
+
+                    date_opened_values_raw = _collect_field_text_values(
+                        bureaus_branches, "date_opened"
+                    )
+                    date_opened_per_bureau = _normalize_per_bureau(date_opened_values_raw)
+
+                    closed_date_values_raw = _collect_field_text_values(
+                        bureaus_branches, "closed_date"
+                    )
+                    closed_date_per_bureau = _normalize_per_bureau(closed_date_values_raw)
+
+                    date_reported_values_raw = _collect_field_text_values(
+                        bureaus_branches, "date_reported"
+                    )
+                    date_reported_per_bureau = _normalize_per_bureau(date_reported_values_raw)
+
+                    reported_bureaus: list[str] = []
+                    for bureau in _BUREAU_ORDER:
+                        branch = bureaus_branches.get(bureau)
+                        if not isinstance(branch, Mapping):
+                            continue
+                        if any(
+                            _has_meaningful_text(branch.get(field), treat_unknown=True)
+                            for field in (
+                                "account_number_display",
+                                "account_number",
+                                "account_type",
+                                "account_status",
+                                "balance_owed",
+                            )
+                        ):
+                            reported_bureaus.append(bureau)
+                    if not reported_bureaus:
+                        reported_bureaus = [
+                            bureau for bureau in _BUREAU_ORDER if bureau in bureaus_branches
+                        ]
+
+                    bureau_summary = _prepare_bureau_payload_from_flat(
+                        account_number_values=account_number_per_bureau,
+                        balance_values=balance_per_bureau,
+                        date_opened_values=date_opened_per_bureau,
+                        closed_date_values=closed_date_per_bureau,
+                        date_reported_values=date_reported_per_bureau,
+                        reported_bureaus=reported_bureaus,
+                    )
+
+                    holder_name, holder_name_resolver = _derive_holder_name_from_meta(
+                        meta_payload, account_id
+                    )
+                    display_holder_name = _coerce_display_text(holder_name)
+                    display_holder_name_resolver = holder_name_resolver
+                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                        reported_creditor_values = _collect_field_text_values(
+                            bureaus_branches, "reported_creditor"
+                        )
+                        bureau_value = None
+                        bureau_source = None
+                        for bureau in _BUREAU_ORDER:
+                            candidate = reported_creditor_values.get(bureau)
+                            if _has_meaningful_text(candidate, treat_unknown=True):
+                                bureau_value = candidate
+                                bureau_source = bureau
+                                break
+                        if not bureau_value and reported_creditor_values:
+                            bureau_source, bureau_value = next(
+                                iter(reported_creditor_values.items())
+                            )
+                        if bureau_value:
+                            display_holder_name = bureau_value
+                            display_holder_name_resolver = (
+                                f"bureaus.{bureau_source}.reported_creditor"
+                                if bureau_source
+                                else "bureaus.reported_creditor"
+                            )
+                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                        display_holder_name = account_id
+                        display_holder_name_resolver = "account_id"
+
+                    holder_name = display_holder_name or None
+
+                    creditor_name_value = holder_name
+
+                    account_type_value = (
+                        account_type_consensus
+                        if _has_meaningful_text(account_type_consensus, treat_unknown=True)
+                        else _extract_bureaus_majority_value(bureaus_payload, "account_type")
+                    )
+                    if _has_meaningful_text(account_type_value, treat_unknown=True):
+                        account_type_consensus = account_type_value
+                    else:
+                        account_type_value = None
+
+                    status_value = (
+                        status_consensus
+                        if _has_meaningful_text(status_consensus, treat_unknown=True)
+                        else _extract_bureaus_majority_value(bureaus_payload, "account_status")
+                    )
+                    if _has_meaningful_text(status_value, treat_unknown=True):
+                        status_consensus = status_value
+                    else:
+                        status_value = None
+
+                    display_payload = build_display_payload(
+                        holder_name=display_holder_name,
+                        primary_issue=display_primary_issue,
+                        account_number_per_bureau=account_number_per_bureau,
+                        account_number_consensus=account_number_consensus,
+                        account_type_per_bureau=account_type_per_bureau,
+                        account_type_consensus=account_type_consensus,
+                        status_per_bureau=status_per_bureau,
+                        status_consensus=status_consensus,
+                        balance_per_bureau=balance_per_bureau,
+                        date_opened_per_bureau=date_opened_per_bureau,
+                        closed_date_per_bureau=closed_date_per_bureau,
+                    )
+
+                    field_resolvers = {
+                        "holder_name": display_holder_name_resolver,
+                        "creditor_name": display_holder_name_resolver,
+                        "account_type": "bureaus.consensus" if account_type_value else "missing",
+                        "status": "bureaus.consensus" if status_value else "missing",
+                    }
+
+                else:
+                    flat_path = account_dir / "fields_flat.json"
+                    fields_flat_payload = _load_json(flat_path)
+                    if fields_flat_payload is None:
+                        log.warning(
+                            "FRONTEND_PACK_MISSING_FLAT sid=%s account=%s path=%s",
+                            sid,
+                            account_id,
+                            flat_path,
+                        )
+
+                    labels = _extract_summary_labels(summary)
+                    holder_name, holder_name_resolver = _derive_holder_name_from_summary(
+                        summary, fields_flat_payload
+                    )
+
+                    account_number_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "account_number_display"
+                    )
+                    account_number_per_bureau = _normalize_per_bureau(account_number_values_raw)
+                    account_number_consensus = _resolve_account_number_consensus(
+                        account_number_per_bureau
+                    )
+
+                    account_type_values_raw = _collect_flat_field_per_bureau(
                         fields_flat_payload, "account_type"
                     )
-                    if fallback_account_type:
-                        account_type_consensus = fallback_account_type
-    
-                status_values_raw = _collect_flat_field_per_bureau(
-                    fields_flat_payload, "account_status"
-                )
-                status_per_bureau = _normalize_per_bureau(status_values_raw)
-                status_consensus = _resolve_majority_consensus(status_per_bureau)
-                if status_consensus == "--":
-                    fallback_status = labels.get("status") or _collect_flat_consensus(
-                        fields_flat_payload, "account_status"
+                    account_type_per_bureau = _normalize_per_bureau(account_type_values_raw)
+                    account_type_consensus = _resolve_majority_consensus(
+                        account_type_per_bureau
                     )
-                    if fallback_status:
-                        status_consensus = fallback_status
-    
-                balance_values_raw = _collect_flat_field_per_bureau(
-                    fields_flat_payload, "balance_owed"
-                )
-                balance_per_bureau = _normalize_per_bureau(balance_values_raw)
-    
-                date_opened_values_raw = _collect_flat_field_per_bureau(
-                    fields_flat_payload, "date_opened"
-                )
-                date_opened_per_bureau = _normalize_per_bureau(date_opened_values_raw)
-    
-                closed_date_values_raw = _collect_flat_field_per_bureau(
-                    fields_flat_payload, "closed_date"
-                )
-                closed_date_per_bureau = _normalize_per_bureau(closed_date_values_raw)
-
-                date_reported_values_raw = _collect_flat_field_per_bureau(
-                    fields_flat_payload, "date_reported"
-                )
-                date_reported_per_bureau = _normalize_per_bureau(date_reported_values_raw)
-
-                reported_bureaus = _determine_reported_bureaus(summary, fields_flat_payload)
-                bureau_summary = _prepare_bureau_payload_from_flat(
-                    account_number_values=account_number_per_bureau,
-                    balance_values=balance_per_bureau,
-                    date_opened_values=date_opened_per_bureau,
-                    closed_date_values=closed_date_per_bureau,
-                    date_reported_values=date_reported_per_bureau,
-                    reported_bureaus=reported_bureaus,
-                )
-
-                field_resolvers: dict[str, str] = {"holder_name": holder_name_resolver}
-
-                creditor_name_values_raw = _collect_flat_field_per_bureau(
-                    fields_flat_payload, "creditor_name"
-                )
-                creditor_name_consensus = _collect_flat_consensus(
-                    fields_flat_payload, "creditor_name"
-                )
-                display_holder_name = _coerce_display_text(creditor_name_consensus)
-                display_holder_name_resolver = "flat_consensus"
-                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
-                    label_creditor = _coerce_display_text(labels.get("creditor_name"))
-                    if _has_meaningful_text(label_creditor, treat_unknown=True):
-                        display_holder_name = label_creditor
-                        display_holder_name_resolver = "summary.labels.creditor"
-                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
-                    bureau_name_value = None
-                    bureau_resolver = None
-                    for bureau in _BUREAU_ORDER:
-                        raw_value = creditor_name_values_raw.get(bureau)
-                        text_value = _coerce_display_text(raw_value)
-                        if _has_meaningful_text(text_value, treat_unknown=True):
-                            bureau_name_value = text_value
-                            bureau_resolver = f"flat_bureau.{bureau}"
-                            break
-                    if bureau_name_value:
-                        display_holder_name = bureau_name_value
-                        display_holder_name_resolver = bureau_resolver or "flat_bureau"
-                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
-                    flat_creditor_value = _flat_lookup(fields_flat_payload, "creditor_name")
-                    flat_creditor_text = _coerce_display_text(
-                        _stringify_flat_value(flat_creditor_value)
-                    )
-                    if _has_meaningful_text(flat_creditor_text, treat_unknown=True):
-                        display_holder_name = flat_creditor_text
-                        display_holder_name_resolver = "fields_flat.creditor_name"
-                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
-                    summary_creditor = _coerce_display_text(summary.get("creditor_name"))
-                    if _has_meaningful_text(summary_creditor, treat_unknown=True):
-                        display_holder_name = summary_creditor
-                        display_holder_name_resolver = "summary.creditor_name"
-                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
-                    display_holder_name = "Unknown"
-                    display_holder_name_resolver = "default"
-
-                field_resolvers["holder_name"] = display_holder_name_resolver
-
-                creditor_name_value = labels.get("creditor_name")
-                creditor_name_resolver = "summary.labels.creditor"
-                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
-                    creditor_name_value = _stringify_flat_value(
-                        _flat_lookup(fields_flat_payload, "creditor_name")
-                    )
-                    creditor_name_resolver = "fields_flat.creditor_name"
-                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
-                    creditor_name_value = _extract_text(summary.get("creditor_name"))
-                    creditor_name_resolver = "summary.creditor_name"
-                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
-                    creditor_name_value = _collect_flat_consensus(
-                        fields_flat_payload, "creditor_name"
-                    )
-                    creditor_name_resolver = "flat_consensus"
-                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
-                    for bureau in _BUREAU_ORDER:
-                        candidate = creditor_name_values_raw.get(bureau)
-                        if _has_meaningful_text(candidate, treat_unknown=True):
-                            creditor_name_value = candidate
-                            creditor_name_resolver = f"flat_bureau.{bureau}"
-                            break
-                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
-                    creditor_name_value = display_holder_name
-                    creditor_name_resolver = display_holder_name_resolver
-
-                field_resolvers["creditor_name"] = creditor_name_resolver or "missing"
-
-                def _first_meaningful_from_mapping(
-                    values: Mapping[str, str]
-                ) -> tuple[str | None, str | None]:
-                    for bureau in _BUREAU_ORDER:
-                        candidate = values.get(bureau)
-                        if _has_meaningful_text(candidate, treat_unknown=True):
-                            return candidate, bureau
-                    for bureau, candidate in values.items():
-                        if _has_meaningful_text(candidate, treat_unknown=True):
-                            return candidate, bureau
-                    return None, None
-
-                account_type_value = None
-                account_type_resolver = "missing"
-                if _has_meaningful_text(account_type_consensus, treat_unknown=True):
-                    account_type_value = account_type_consensus
-                    account_type_resolver = "flat_bureau"
-                else:
-                    label_account_type = labels.get("account_type")
-                    if _has_meaningful_text(label_account_type, treat_unknown=True):
-                        account_type_value = label_account_type
-                        account_type_resolver = "summary.labels.account_type"
-                    else:
-                        consensus_account_type = _collect_flat_consensus(
+                    if account_type_consensus == "--":
+                        fallback_account_type = labels.get("account_type") or _collect_flat_consensus(
                             fields_flat_payload, "account_type"
                         )
-                        if _has_meaningful_text(consensus_account_type, treat_unknown=True):
-                            account_type_value = consensus_account_type
-                            account_type_resolver = "flat_consensus"
-                        else:
-                            bureau_value, bureau = _first_meaningful_from_mapping(
-                                account_type_per_bureau
-                            )
-                            if bureau_value:
-                                account_type_value = bureau_value
-                                account_type_resolver = (
-                                    f"flat_bureau.{bureau}" if bureau else "flat_bureau"
-                                )
+                        if fallback_account_type:
+                            account_type_consensus = fallback_account_type
 
-                field_resolvers["account_type"] = account_type_resolver
-
-                if _has_meaningful_text(account_type_value, treat_unknown=True):
-                    account_type_consensus = account_type_value
-
-                status_value = None
-                status_resolver = "missing"
-                if _has_meaningful_text(status_consensus, treat_unknown=True):
-                    status_value = status_consensus
-                    status_resolver = "flat_bureau"
-                else:
-                    label_status = labels.get("status")
-                    if _has_meaningful_text(label_status, treat_unknown=True):
-                        status_value = label_status
-                        status_resolver = "summary.labels.status"
-                    else:
-                        consensus_status = _collect_flat_consensus(
+                    status_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "account_status"
+                    )
+                    status_per_bureau = _normalize_per_bureau(status_values_raw)
+                    status_consensus = _resolve_majority_consensus(status_per_bureau)
+                    if status_consensus == "--":
+                        fallback_status = labels.get("status") or _collect_flat_consensus(
                             fields_flat_payload, "account_status"
                         )
-                        if _has_meaningful_text(consensus_status, treat_unknown=True):
-                            status_value = consensus_status
-                            status_resolver = "flat_consensus"
-                        else:
-                            bureau_value, bureau = _first_meaningful_from_mapping(
-                                status_per_bureau
+                        if fallback_status:
+                            status_consensus = fallback_status
+
+                    balance_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "balance_owed"
+                    )
+                    balance_per_bureau = _normalize_per_bureau(balance_values_raw)
+
+                    date_opened_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "date_opened"
+                    )
+                    date_opened_per_bureau = _normalize_per_bureau(date_opened_values_raw)
+
+                    closed_date_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "closed_date"
+                    )
+                    closed_date_per_bureau = _normalize_per_bureau(closed_date_values_raw)
+
+                    date_reported_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "date_reported"
+                    )
+                    date_reported_per_bureau = _normalize_per_bureau(date_reported_values_raw)
+
+                    reported_bureaus = _determine_reported_bureaus(summary, fields_flat_payload)
+                    bureau_summary = _prepare_bureau_payload_from_flat(
+                        account_number_values=account_number_per_bureau,
+                        balance_values=balance_per_bureau,
+                        date_opened_values=date_opened_per_bureau,
+                        closed_date_values=closed_date_per_bureau,
+                        date_reported_values=date_reported_per_bureau,
+                        reported_bureaus=reported_bureaus,
+                    )
+
+                    field_resolvers: dict[str, str] = {"holder_name": holder_name_resolver}
+
+                    creditor_name_values_raw = _collect_flat_field_per_bureau(
+                        fields_flat_payload, "creditor_name"
+                    )
+                    creditor_name_consensus = _collect_flat_consensus(
+                        fields_flat_payload, "creditor_name"
+                    )
+                    display_holder_name = _coerce_display_text(creditor_name_consensus)
+                    display_holder_name_resolver = "flat_consensus"
+                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                        label_creditor = _coerce_display_text(labels.get("creditor_name"))
+                        if _has_meaningful_text(label_creditor, treat_unknown=True):
+                            display_holder_name = label_creditor
+                            display_holder_name_resolver = "summary.labels.creditor"
+                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                        bureau_name_value = None
+                        bureau_resolver = None
+                        for bureau in _BUREAU_ORDER:
+                            raw_value = creditor_name_values_raw.get(bureau)
+                            text_value = _coerce_display_text(raw_value)
+                            if _has_meaningful_text(text_value, treat_unknown=True):
+                                bureau_name_value = text_value
+                                bureau_resolver = f"flat_bureau.{bureau}"
+                                break
+                        if bureau_name_value:
+                            display_holder_name = bureau_name_value
+                            display_holder_name_resolver = bureau_resolver or "flat_bureau"
+                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                        flat_creditor_value = _flat_lookup(fields_flat_payload, "creditor_name")
+                        flat_creditor_text = _coerce_display_text(
+                            _stringify_flat_value(flat_creditor_value)
+                        )
+                        if _has_meaningful_text(flat_creditor_text, treat_unknown=True):
+                            display_holder_name = flat_creditor_text
+                            display_holder_name_resolver = "flat_root"
+                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                        summary_creditor = _extract_text(summary.get("creditor_name"))
+                        if _has_meaningful_text(summary_creditor, treat_unknown=True):
+                            display_holder_name = summary_creditor
+                            display_holder_name_resolver = "summary.creditor_name"
+                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                        holder_name_text = _coerce_display_text(holder_name)
+                        if _has_meaningful_text(holder_name_text, treat_unknown=True):
+                            display_holder_name = holder_name_text
+                            display_holder_name_resolver = field_resolvers.get(
+                                "holder_name", "holder"
                             )
-                            if bureau_value:
-                                status_value = bureau_value
-                                status_resolver = (
-                                    f"flat_bureau.{bureau}" if bureau else "flat_bureau"
+                    if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                        display_holder_name = account_id
+                        display_holder_name_resolver = "account_id"
+
+                    holder_name = holder_name or display_holder_name
+                    if not _has_meaningful_text(holder_name, treat_unknown=True):
+                        holder_name = display_holder_name
+                    field_resolvers["holder_name"] = display_holder_name_resolver
+
+                    creditor_name_value = labels.get("creditor_name")
+                    if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                        if isinstance(fields_flat_payload, Mapping):
+                            creditor_name_value = _stringify_flat_value(
+                                fields_flat_payload.get("creditor_name")
+                            )
+                            creditor_name_resolver = "flat_root"
+                        else:
+                            creditor_name_value = None
+                            creditor_name_resolver = "missing"
+                    else:
+                        creditor_name_resolver = "summary.labels.creditor"
+                    if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                        creditor_name_value = _extract_text(summary.get("creditor_name"))
+                        creditor_name_resolver = "summary.creditor_name"
+                    if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                        creditor_name_value = _collect_flat_consensus(
+                            fields_flat_payload, "creditor_name"
+                        )
+                        creditor_name_resolver = "flat_consensus"
+                    if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                        for bureau in _BUREAU_ORDER:
+                            candidate = creditor_name_values_raw.get(bureau)
+                            if _has_meaningful_text(candidate, treat_unknown=True):
+                                creditor_name_value = candidate
+                                creditor_name_resolver = f"flat_bureau.{bureau}"
+                                break
+                    if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                        creditor_name_value = display_holder_name
+                        creditor_name_resolver = display_holder_name_resolver
+
+                    field_resolvers["creditor_name"] = creditor_name_resolver or "missing"
+
+                    def _first_meaningful_from_mapping(
+                        values: Mapping[str, str]
+                    ) -> tuple[str | None, str | None]:
+                        for bureau in _BUREAU_ORDER:
+                            candidate = values.get(bureau)
+                            if _has_meaningful_text(candidate, treat_unknown=True):
+                                return candidate, bureau
+                        for bureau, candidate in values.items():
+                            if _has_meaningful_text(candidate, treat_unknown=True):
+                                return candidate, bureau
+                        return None, None
+
+                    account_type_value = None
+                    account_type_resolver = "missing"
+                    if _has_meaningful_text(account_type_consensus, treat_unknown=True):
+                        account_type_value = account_type_consensus
+                        account_type_resolver = "flat_bureau"
+                    else:
+                        label_account_type = labels.get("account_type")
+                        if _has_meaningful_text(label_account_type, treat_unknown=True):
+                            account_type_value = label_account_type
+                            account_type_resolver = "summary.labels.account_type"
+                        else:
+                            consensus_account_type = _collect_flat_consensus(
+                                fields_flat_payload, "account_type"
+                            )
+                            if _has_meaningful_text(
+                                consensus_account_type, treat_unknown=True
+                            ):
+                                account_type_value = consensus_account_type
+                                account_type_resolver = "flat_consensus"
+                            else:
+                                bureau_value, bureau = _first_meaningful_from_mapping(
+                                    account_type_per_bureau
                                 )
+                                if bureau_value:
+                                    account_type_value = bureau_value
+                                    account_type_resolver = (
+                                        f"flat_bureau.{bureau}" if bureau else "flat_bureau"
+                                    )
 
-                field_resolvers["status"] = status_resolver
+                    field_resolvers["account_type"] = account_type_resolver
 
-                if _has_meaningful_text(status_value, treat_unknown=True):
-                    status_consensus = status_value
-    
-                display_payload = build_display_payload(
-                    holder_name=display_holder_name,
-                    primary_issue=display_primary_issue,
-                    account_number_per_bureau=account_number_per_bureau,
-                    account_number_consensus=account_number_consensus,
-                    account_type_per_bureau=account_type_per_bureau,
-                    account_type_consensus=account_type_consensus,
-                    status_per_bureau=status_per_bureau,
-                    status_consensus=status_consensus,
-                    balance_per_bureau=balance_per_bureau,
-                    date_opened_per_bureau=date_opened_per_bureau,
-                    closed_date_per_bureau=closed_date_per_bureau,
-                )
+                    if _has_meaningful_text(account_type_value, treat_unknown=True):
+                        account_type_consensus = account_type_value
+
+                    status_value = None
+                    status_resolver = "missing"
+                    if _has_meaningful_text(status_consensus, treat_unknown=True):
+                        status_value = status_consensus
+                        status_resolver = "flat_bureau"
+                    else:
+                        label_status = labels.get("status")
+                        if _has_meaningful_text(label_status, treat_unknown=True):
+                            status_value = label_status
+                            status_resolver = "summary.labels.status"
+                        else:
+                            consensus_status = _collect_flat_consensus(
+                                fields_flat_payload, "account_status"
+                            )
+                            if _has_meaningful_text(
+                                consensus_status, treat_unknown=True
+                            ):
+                                status_value = consensus_status
+                                status_resolver = "flat_consensus"
+                            else:
+                                bureau_value, bureau = _first_meaningful_from_mapping(
+                                    status_per_bureau
+                                )
+                                if bureau_value:
+                                    status_value = bureau_value
+                                    status_resolver = (
+                                        f"flat_bureau.{bureau}" if bureau else "flat_bureau"
+                                    )
+
+                    field_resolvers["status"] = status_resolver
+
+                    if _has_meaningful_text(status_value, treat_unknown=True):
+                        status_consensus = status_value
+
+                    display_payload = build_display_payload(
+                        holder_name=display_holder_name,
+                        primary_issue=display_primary_issue,
+                        account_number_per_bureau=account_number_per_bureau,
+                        account_number_consensus=account_number_consensus,
+                        account_type_per_bureau=account_type_per_bureau,
+                        account_type_consensus=account_type_consensus,
+                        status_per_bureau=status_per_bureau,
+                        status_consensus=status_consensus,
+                        balance_per_bureau=balance_per_bureau,
+                        date_opened_per_bureau=date_opened_per_bureau,
+                        closed_date_per_bureau=closed_date_per_bureau,
+                    )
 
                 def _format_field_value(value: Any) -> str:
                     if value is None:
@@ -2778,18 +3047,30 @@ def generate_frontend_packs_for_run(
                     account_id,
                     " ".join(resolver_log_parts),
                 )
-    
+
                 try:
                     relative_account_dir = account_dir.relative_to(run_dir).as_posix()
                 except ValueError:
                     relative_account_dir = account_dir.as_posix()
-    
-                pointers = {
-                    "summary": f"{relative_account_dir}/summary.json",
-                    "tags": f"{relative_account_dir}/tags.json",
-                    "flat": f"{relative_account_dir}/fields_flat.json",
-                }
-    
+
+                if use_bureaus_only:
+                    pointers = {
+                        key: f"{relative_account_dir}/{value}"
+                        for key, value in {
+                            "bureaus": "bureaus.json",
+                            "meta": "meta.json",
+                            "tags": "tags.json",
+                        }.items()
+                    }
+                    if summary_path.exists():
+                        pointers["summary"] = f"{relative_account_dir}/summary.json"
+                else:
+                    pointers = {
+                        "summary": f"{relative_account_dir}/summary.json",
+                        "tags": f"{relative_account_dir}/tags.json",
+                        "flat": f"{relative_account_dir}/fields_flat.json",
+                    }
+
                 full_pack_payload: dict[str, Any] | None = None
 
                 def _ensure_full_pack_payload() -> dict[str, Any] | None:

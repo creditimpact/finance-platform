@@ -396,20 +396,68 @@ def _is_frontend_review_index(path: Path) -> bool:
 def _atomic_write_frontend_review_index(path: Path, payload: Any) -> None:
     directory = path.parent
     os.makedirs(directory, exist_ok=True)
-    fd, tmp_raw_path = tempfile.mkstemp(
-        prefix=f"{path.name}.", dir=directory, text=True
-    )
-    tmp_path = Path(tmp_raw_path)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
-    finally:
+
+    attempts = 0
+    last_error: OSError | None = None
+    while attempts < 2:
+        attempts += 1
+        fd: int | None = None
+        tmp_path: Path | None = None
         try:
-            if tmp_path.exists():
-                tmp_path.unlink()
-        except Exception:
-            pass
+            fd, tmp_raw_path = tempfile.mkstemp(
+                prefix=f"{path.name}.", dir=directory, text=True
+            )
+            tmp_path = Path(tmp_raw_path)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = None  # File descriptor handled by os.fdopen context manager.
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+            os.replace(str(tmp_path), str(path))
+        except FileNotFoundError as exc:
+            last_error = exc
+            log.warning(
+                "FRONTEND_REVIEW_INDEX_RETRY path=%s tmp=%s error=%s",
+                path,
+                tmp_path,
+                exc,
+            )
+            if tmp_path is not None:
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except FileNotFoundError:
+                    pass
+            if attempts >= 2:
+                break
+            time.sleep(0.05)
+            continue
+        except OSError as exc:
+            last_error = exc
+            if attempts >= 2:
+                break
+            if tmp_path is not None:
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except FileNotFoundError:
+                    pass
+            time.sleep(0.05)
+            continue
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            if tmp_path is not None:
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except FileNotFoundError:
+                    pass
+        return
+
+    if last_error is not None:
+        raise last_error
 
 
 def _atomic_write_json(path: Path | str, payload: Any) -> None:
@@ -823,44 +871,44 @@ def _looks_like_holder_heading(text: str) -> bool:
 def _derive_holder_name_from_summary(
     summary: Mapping[str, Any] | None,
     fields_flat: Mapping[str, Any] | None,
-) -> str | None:
-    candidates: list[Any] = []
+) -> tuple[str | None, str]:
+    candidates: list[tuple[Any, str]] = []
 
     if isinstance(summary, Mapping):
         candidates.extend(
             [
-                summary.get("holder_name"),
-                summary.get("consumer_name"),
-                summary.get("consumer"),
+                (summary.get("holder_name"), "summary.holder_name"),
+                (summary.get("consumer_name"), "summary.consumer_name"),
+                (summary.get("consumer"), "summary.consumer"),
             ]
         )
 
         labels = summary.get("labels")
         if isinstance(labels, Mapping):
-            candidates.append(labels.get("holder_name"))
-            candidates.append(labels.get("consumer_name"))
+            candidates.append((labels.get("holder_name"), "summary.labels.holder_name"))
+            candidates.append((labels.get("consumer_name"), "summary.labels.consumer_name"))
 
         normalized = summary.get("normalized")
         if isinstance(normalized, Mapping):
-            candidates.append(normalized.get("holder_name"))
+            candidates.append((normalized.get("holder_name"), "summary.normalized.holder_name"))
 
         meta = summary.get("meta")
         if isinstance(meta, Mapping):
-            candidates.append(meta.get("holder_name"))
-            candidates.append(meta.get("heading_guess"))
+            candidates.append((meta.get("holder_name"), "summary.meta.holder_name"))
+            candidates.append((meta.get("heading_guess"), "summary.meta.heading_guess"))
 
     if isinstance(fields_flat, Mapping):
         for key in ("holder_name", "consumer_name"):
             value = fields_flat.get(key)
             if value:
-                candidates.append(value)
+                candidates.append((value, f"fields_flat.{key}"))
 
-    for candidate in candidates:
+    for candidate, resolver in candidates:
         text = _extract_text(candidate)
         if text:
-            return text
+            return text, resolver
 
-    return None
+    return None, "missing"
 
 
 def _extract_issue_tags(tags_path: Path) -> tuple[str | None, list[str]]:
@@ -2036,11 +2084,13 @@ def generate_frontend_packs_for_run(
                     )
     
                 labels = _extract_summary_labels(summary)
-                holder_name = _derive_holder_name_from_summary(summary, fields_flat_payload)
+                holder_name, holder_name_resolver = _derive_holder_name_from_summary(
+                    summary, fields_flat_payload
+                )
                 primary_issue, issues = _extract_issue_tags(tags_path)
                 if not primary_issue:
                     primary_issue = "unknown"
-    
+
                 display_primary_issue = _coerce_display_text(primary_issue or "unknown")
     
                 account_number_values_raw = _collect_flat_field_per_bureau(
@@ -2105,6 +2155,8 @@ def generate_frontend_packs_for_run(
                     reported_bureaus=reported_bureaus,
                 )
 
+                field_resolvers: dict[str, str] = {"holder_name": holder_name_resolver}
+
                 creditor_name_values_raw = _collect_flat_field_per_bureau(
                     fields_flat_payload, "creditor_name"
                 )
@@ -2112,32 +2164,147 @@ def generate_frontend_packs_for_run(
                     fields_flat_payload, "creditor_name"
                 )
                 display_holder_name = _coerce_display_text(creditor_name_consensus)
-                if not display_holder_name:
-                    display_holder_name = _coerce_display_text(labels.get("creditor_name"))
-                if not display_holder_name:
-                    for raw_value in creditor_name_values_raw.values():
-                        display_holder_name = _coerce_display_text(raw_value)
-                        if display_holder_name:
+                display_holder_name_resolver = "flat_consensus"
+                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                    label_creditor = _coerce_display_text(labels.get("creditor_name"))
+                    if _has_meaningful_text(label_creditor, treat_unknown=True):
+                        display_holder_name = label_creditor
+                        display_holder_name_resolver = "summary.labels.creditor"
+                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                    bureau_name_value = None
+                    bureau_resolver = None
+                    for bureau in _BUREAU_ORDER:
+                        raw_value = creditor_name_values_raw.get(bureau)
+                        text_value = _coerce_display_text(raw_value)
+                        if _has_meaningful_text(text_value, treat_unknown=True):
+                            bureau_name_value = text_value
+                            bureau_resolver = f"flat_bureau.{bureau}"
                             break
-                if not display_holder_name:
+                    if bureau_name_value:
+                        display_holder_name = bureau_name_value
+                        display_holder_name_resolver = bureau_resolver or "flat_bureau"
+                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
                     flat_creditor_value = _flat_lookup(fields_flat_payload, "creditor_name")
-                    display_holder_name = _coerce_display_text(
+                    flat_creditor_text = _coerce_display_text(
                         _stringify_flat_value(flat_creditor_value)
                     )
-                if not display_holder_name:
+                    if _has_meaningful_text(flat_creditor_text, treat_unknown=True):
+                        display_holder_name = flat_creditor_text
+                        display_holder_name_resolver = "fields_flat.creditor_name"
+                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
+                    summary_creditor = _coerce_display_text(summary.get("creditor_name"))
+                    if _has_meaningful_text(summary_creditor, treat_unknown=True):
+                        display_holder_name = summary_creditor
+                        display_holder_name_resolver = "summary.creditor_name"
+                if not _has_meaningful_text(display_holder_name, treat_unknown=True):
                     display_holder_name = "Unknown"
+                    display_holder_name_resolver = "default"
 
-                creditor_name_value = labels.get("creditor_name") or _stringify_flat_value(
-                    _flat_lookup(fields_flat_payload, "creditor_name")
-                ) or _extract_text(summary.get("creditor_name"))
-                account_type_value = (
-                    account_type_consensus
-                    if account_type_consensus != "--"
-                    else labels.get("account_type")
-                )
-                status_value = (
-                    status_consensus if status_consensus != "--" else labels.get("status")
-                )
+                field_resolvers["holder_name"] = display_holder_name_resolver
+
+                creditor_name_value = labels.get("creditor_name")
+                creditor_name_resolver = "summary.labels.creditor"
+                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                    creditor_name_value = _stringify_flat_value(
+                        _flat_lookup(fields_flat_payload, "creditor_name")
+                    )
+                    creditor_name_resolver = "fields_flat.creditor_name"
+                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                    creditor_name_value = _extract_text(summary.get("creditor_name"))
+                    creditor_name_resolver = "summary.creditor_name"
+                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                    creditor_name_value = _collect_flat_consensus(
+                        fields_flat_payload, "creditor_name"
+                    )
+                    creditor_name_resolver = "flat_consensus"
+                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                    for bureau in _BUREAU_ORDER:
+                        candidate = creditor_name_values_raw.get(bureau)
+                        if _has_meaningful_text(candidate, treat_unknown=True):
+                            creditor_name_value = candidate
+                            creditor_name_resolver = f"flat_bureau.{bureau}"
+                            break
+                if not _has_meaningful_text(creditor_name_value, treat_unknown=True):
+                    creditor_name_value = display_holder_name
+                    creditor_name_resolver = display_holder_name_resolver
+
+                field_resolvers["creditor_name"] = creditor_name_resolver or "missing"
+
+                def _first_meaningful_from_mapping(
+                    values: Mapping[str, str]
+                ) -> tuple[str | None, str | None]:
+                    for bureau in _BUREAU_ORDER:
+                        candidate = values.get(bureau)
+                        if _has_meaningful_text(candidate, treat_unknown=True):
+                            return candidate, bureau
+                    for bureau, candidate in values.items():
+                        if _has_meaningful_text(candidate, treat_unknown=True):
+                            return candidate, bureau
+                    return None, None
+
+                account_type_value = None
+                account_type_resolver = "missing"
+                if _has_meaningful_text(account_type_consensus, treat_unknown=True):
+                    account_type_value = account_type_consensus
+                    account_type_resolver = "flat_bureau"
+                else:
+                    label_account_type = labels.get("account_type")
+                    if _has_meaningful_text(label_account_type, treat_unknown=True):
+                        account_type_value = label_account_type
+                        account_type_resolver = "summary.labels.account_type"
+                    else:
+                        consensus_account_type = _collect_flat_consensus(
+                            fields_flat_payload, "account_type"
+                        )
+                        if _has_meaningful_text(consensus_account_type, treat_unknown=True):
+                            account_type_value = consensus_account_type
+                            account_type_resolver = "flat_consensus"
+                        else:
+                            bureau_value, bureau = _first_meaningful_from_mapping(
+                                account_type_per_bureau
+                            )
+                            if bureau_value:
+                                account_type_value = bureau_value
+                                account_type_resolver = (
+                                    f"flat_bureau.{bureau}" if bureau else "flat_bureau"
+                                )
+
+                field_resolvers["account_type"] = account_type_resolver
+
+                if _has_meaningful_text(account_type_value, treat_unknown=True):
+                    account_type_consensus = account_type_value
+
+                status_value = None
+                status_resolver = "missing"
+                if _has_meaningful_text(status_consensus, treat_unknown=True):
+                    status_value = status_consensus
+                    status_resolver = "flat_bureau"
+                else:
+                    label_status = labels.get("status")
+                    if _has_meaningful_text(label_status, treat_unknown=True):
+                        status_value = label_status
+                        status_resolver = "summary.labels.status"
+                    else:
+                        consensus_status = _collect_flat_consensus(
+                            fields_flat_payload, "account_status"
+                        )
+                        if _has_meaningful_text(consensus_status, treat_unknown=True):
+                            status_value = consensus_status
+                            status_resolver = "flat_consensus"
+                        else:
+                            bureau_value, bureau = _first_meaningful_from_mapping(
+                                status_per_bureau
+                            )
+                            if bureau_value:
+                                status_value = bureau_value
+                                status_resolver = (
+                                    f"flat_bureau.{bureau}" if bureau else "flat_bureau"
+                                )
+
+                field_resolvers["status"] = status_resolver
+
+                if _has_meaningful_text(status_value, treat_unknown=True):
+                    status_consensus = status_value
     
                 display_payload = build_display_payload(
                     holder_name=display_holder_name,
@@ -2151,6 +2318,32 @@ def generate_frontend_packs_for_run(
                     balance_per_bureau=balance_per_bureau,
                     date_opened_per_bureau=date_opened_per_bureau,
                     closed_date_per_bureau=closed_date_per_bureau,
+                )
+
+                def _format_field_value(value: Any) -> str:
+                    if value is None:
+                        return "<missing>"
+                    if isinstance(value, str):
+                        return value if value else "<empty>"
+                    return str(value)
+
+                resolver_log_parts = []
+                for name, resolved_value in (
+                    ("holder_name", display_holder_name),
+                    ("creditor_name", creditor_name_value),
+                    ("account_type", account_type_value),
+                    ("status", status_value),
+                ):
+                    resolver_log_parts.append(
+                        f"[resolver={field_resolvers.get(name, 'unknown')}] "
+                        f"{name}={_format_field_value(resolved_value)}"
+                    )
+
+                log.info(
+                    "PACK_FIELD_RESOLUTION sid=%s account=%s %s",
+                    sid,
+                    account_id,
+                    " ".join(resolver_log_parts),
                 )
     
                 try:

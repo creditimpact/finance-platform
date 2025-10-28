@@ -2593,6 +2593,7 @@ def generate_frontend_packs_for_run(
                         sid,
                         account_id,
                     )
+                    skip_reasons["placeholder"] = skip_reasons.get("placeholder", 0) + 1
                     unchanged_docs += 1
                     pack_count += 1
                     continue

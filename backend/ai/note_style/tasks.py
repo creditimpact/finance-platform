@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping
 
+from backend import config
 from backend.api.tasks import app as celery
 from backend.ai.manifest import ensure_note_style_section
 from backend.ai.note_style import prepare_and_send
@@ -100,6 +101,9 @@ def note_style_prepare_and_send_task(
     """Celery task wrapper around :func:`prepare_and_send`."""
 
     sid_text = str(sid or "").strip()
+    if not config.NOTE_STYLE_AUTOSEND:
+        logger.info("NOTE_STYLE_AUTOSEND_DISABLED sid=%s", sid_text)
+        return {"sid": sid_text, "skipped": "autosend_disabled"}
     lock_key = f"note-style:prepare:{sid_text}"
     with redis_lock(lock_key) as acquired:
         if not acquired:
@@ -251,6 +255,9 @@ def note_style_send_sid_task(
     """Send all built note_style packs for ``sid`` inside Celery."""
 
     sid_text = str(sid or "").strip()
+    if not config.NOTE_STYLE_AUTOSEND:
+        logger.info("NOTE_STYLE_AUTOSEND_DISABLED sid=%s", sid_text)
+        return {"sid": sid_text, "skipped": "autosend_disabled"}
     lock_key = f"note-style:send:{sid_text}"
     with redis_lock(lock_key) as acquired:
         if not acquired:

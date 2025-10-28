@@ -528,6 +528,68 @@ def _write_json_if_changed(path: Path, payload: Any) -> bool:
     return True
 
 
+def _enrich_stage_payload_with_full(
+    candidate: Mapping[str, Any] | None,
+    full_payload: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    if isinstance(candidate, dict):
+        merged: dict[str, Any] = candidate
+    elif isinstance(candidate, Mapping):
+        merged = dict(candidate)
+    else:
+        merged = {}
+
+    if not isinstance(full_payload, Mapping):
+        return merged, False
+
+    changed = False
+
+    def _copy_text(key: str, *, treat_unknown: bool = True) -> None:
+        nonlocal changed
+        candidate_value = merged.get(key)
+        if _has_meaningful_text(candidate_value, treat_unknown=treat_unknown):
+            return
+        source_value = full_payload.get(key)
+        if not _has_meaningful_text(source_value, treat_unknown=treat_unknown):
+            return
+        merged[key] = source_value
+        changed = True
+
+    for field_name in ("holder_name", "primary_issue", "creditor_name", "account_type", "status"):
+        _copy_text(field_name, treat_unknown=True)
+
+    for key in ("last4", "balance_owed", "dates", "bureau_badges"):
+        source_section = full_payload.get(key)
+        if not isinstance(source_section, Mapping):
+            if key not in merged and source_section is not None:
+                merged[key] = source_section
+                changed = True
+            continue
+
+        candidate_section = merged.get(key)
+        if isinstance(candidate_section, Mapping):
+            continue
+        merged[key] = dict(source_section)
+        changed = True
+
+    display_candidate = merged.get("display")
+    display_enriched, display_changed = _preserve_stage_display_values(
+        full_payload.get("display"), display_candidate
+    )
+    if display_changed or (display_candidate is None and isinstance(display_enriched, dict)):
+        merged["display"] = display_enriched
+        if display_changed:
+            changed = True
+
+    if "claim_field_links" not in merged and isinstance(
+        full_payload.get("claim_field_links"), Mapping
+    ):
+        merged["claim_field_links"] = dict(full_payload["claim_field_links"])
+        changed = True
+
+    return merged, changed
+
+
 def _ensure_frontend_index_redirect_stub(path: Path, *, force: bool = False) -> None:
     """Write the legacy ``frontend/index.json`` redirect if it is missing."""
 
@@ -2754,6 +2816,10 @@ def generate_frontend_packs_for_run(
                 if need_full_payload:
                     _ensure_full_pack_payload()
 
+                stage_write_mode = "full" if stage_payload_full else "minimal"
+                stage_write_reason = "ok"
+                minimal_enriched = False
+
                 if stage_payload_full:
                     full_payload = _ensure_full_pack_payload()
                     stage_pack_payload = dict(full_payload) if full_payload is not None else {}
@@ -2778,17 +2844,27 @@ def generate_frontend_packs_for_run(
                         closed_date_per_bureau=closed_date_per_bureau,
                     )
 
+                    full_payload = _ensure_full_pack_payload()
+                    if full_payload is not None:
+                        stage_pack_payload, minimal_enriched = _enrich_stage_payload_with_full(
+                            stage_pack_payload, full_payload
+                        )
+
                     if not _has_meaningful_display(stage_pack_payload.get("display")):
                         full_payload = _ensure_full_pack_payload()
                         if full_payload is not None and _has_meaningful_display(
                             full_payload.get("display")
                         ):
                             stage_pack_payload = dict(full_payload)
+                            stage_write_mode = "full"
+                            stage_write_reason = "failsafe"
                             log.info(
                                 "PACKGEN_FAILSAFE_USED_FULL sid=%s account=%s",
                                 sid,
                                 account_id,
                             )
+                    elif minimal_enriched:
+                        stage_write_reason = "minimal_enriched"
 
                 account_filename = _safe_account_dirname(account_id, account_dir.name)
                 stage_pack_path = stage_packs_dir / f"{account_filename}.json"
@@ -2834,6 +2910,9 @@ def generate_frontend_packs_for_run(
                 )
 
                 if existing_has_meaningful_data and not new_has_meaningful_data:
+                    if stage_payload_full:
+                        stage_write_mode = "full"
+                    stage_write_reason = "skip_empty_overwrite"
                     log.info(
                         "PACKGEN_SKIP_EMPTY_OVERWRITE sid=%s account=%s",
                         sid,
@@ -2842,6 +2921,13 @@ def generate_frontend_packs_for_run(
                     skip_reasons["placeholder"] = skip_reasons.get("placeholder", 0) + 1
                     unchanged_docs += 1
                     pack_count += 1
+                    log.info(
+                        "PACK_WRITE_DECISION sid=%s account=%s mode=%s guarded=skipped reason=%s",
+                        sid,
+                        account_id,
+                        stage_write_mode,
+                        stage_write_reason,
+                    )
                     continue
 
                 if _should_skip_pack_due_to_lock(
@@ -2899,6 +2985,16 @@ def generate_frontend_packs_for_run(
                     )
                     write_errors.append((account_id, exc))
                     continue
+
+                if stage_payload_full:
+                    stage_write_mode = "full"
+                log.info(
+                    "PACK_WRITE_DECISION sid=%s account=%s mode=%s guarded=written reason=%s",
+                    sid,
+                    account_id,
+                    stage_write_mode,
+                    stage_write_reason,
+                )
     
                 if changed:
                     built_docs += 1

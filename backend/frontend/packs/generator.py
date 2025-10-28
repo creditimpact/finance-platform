@@ -1195,17 +1195,69 @@ def build_lean_pack_doc(
     }
 
 
+def _build_stage_display_payload(
+    *,
+    holder_name: str | None,
+    primary_issue: str | None,
+    account_number_per_bureau: Mapping[str, str],
+    account_number_consensus: str | None,
+    account_type_per_bureau: Mapping[str, str],
+    account_type_consensus: str | None,
+    status_per_bureau: Mapping[str, str],
+    status_consensus: str | None,
+    balance_per_bureau: Mapping[str, str],
+    date_opened_per_bureau: Mapping[str, str],
+    closed_date_per_bureau: Mapping[str, str],
+) -> dict[str, Any]:
+    return {
+        "display_version": _DISPLAY_SCHEMA_VERSION,
+        "holder_name": holder_name,
+        "primary_issue": primary_issue,
+        "account_number": {
+            "per_bureau": dict(account_number_per_bureau),
+            "consensus": _normalize_consensus_text(account_number_consensus),
+        },
+        "account_type": {
+            "per_bureau": dict(account_type_per_bureau),
+            "consensus": _normalize_consensus_text(account_type_consensus),
+        },
+        "status": {
+            "per_bureau": dict(status_per_bureau),
+            "consensus": _normalize_consensus_text(status_consensus),
+        },
+        "balance_owed": {"per_bureau": dict(balance_per_bureau)},
+        "date_opened": dict(date_opened_per_bureau),
+        "closed_date": dict(closed_date_per_bureau),
+    }
+
+
 def build_stage_pack_doc(
     *,
     account_id: str,
     holder_name: str | None,
     primary_issue: str | None,
-    display_payload: Mapping[str, Any],
+    account_number_per_bureau: Mapping[str, str],
+    account_number_consensus: str | None,
+    account_type_per_bureau: Mapping[str, str],
+    account_type_consensus: str | None,
+    status_per_bureau: Mapping[str, str],
+    status_consensus: str | None,
+    balance_per_bureau: Mapping[str, str],
+    date_opened_per_bureau: Mapping[str, str],
+    closed_date_per_bureau: Mapping[str, str],
 ) -> dict[str, Any]:
-    display = _build_compact_display(
+    display = _build_stage_display_payload(
         holder_name=holder_name,
         primary_issue=primary_issue,
-        display_payload=display_payload,
+        account_number_per_bureau=account_number_per_bureau,
+        account_number_consensus=account_number_consensus,
+        account_type_per_bureau=account_type_per_bureau,
+        account_type_consensus=account_type_consensus,
+        status_per_bureau=status_per_bureau,
+        status_consensus=status_consensus,
+        balance_per_bureau=balance_per_bureau,
+        date_opened_per_bureau=date_opened_per_bureau,
+        closed_date_per_bureau=closed_date_per_bureau,
     )
 
     return {
@@ -1938,11 +1990,6 @@ def generate_frontend_packs_for_run(
                 if not primary_issue:
                     primary_issue = "unknown"
     
-                display_holder_name = _coerce_display_text(
-                    holder_name or labels.get("creditor_name") or ""
-                )
-                if not display_holder_name:
-                    display_holder_name = "Unknown"
                 display_primary_issue = _coerce_display_text(primary_issue or "unknown")
     
                 account_number_values_raw = _collect_flat_field_per_bureau(
@@ -1991,12 +2038,12 @@ def generate_frontend_packs_for_run(
                     fields_flat_payload, "closed_date"
                 )
                 closed_date_per_bureau = _normalize_per_bureau(closed_date_values_raw)
-    
+
                 date_reported_values_raw = _collect_flat_field_per_bureau(
                     fields_flat_payload, "date_reported"
                 )
                 date_reported_per_bureau = _normalize_per_bureau(date_reported_values_raw)
-    
+
                 reported_bureaus = _determine_reported_bureaus(summary, fields_flat_payload)
                 bureau_summary = _prepare_bureau_payload_from_flat(
                     account_number_values=account_number_per_bureau,
@@ -2006,7 +2053,29 @@ def generate_frontend_packs_for_run(
                     date_reported_values=date_reported_per_bureau,
                     reported_bureaus=reported_bureaus,
                 )
-    
+
+                creditor_name_values_raw = _collect_flat_field_per_bureau(
+                    fields_flat_payload, "creditor_name"
+                )
+                creditor_name_consensus = _collect_flat_consensus(
+                    fields_flat_payload, "creditor_name"
+                )
+                display_holder_name = _coerce_display_text(creditor_name_consensus)
+                if not display_holder_name:
+                    display_holder_name = _coerce_display_text(labels.get("creditor_name"))
+                if not display_holder_name:
+                    for raw_value in creditor_name_values_raw.values():
+                        display_holder_name = _coerce_display_text(raw_value)
+                        if display_holder_name:
+                            break
+                if not display_holder_name:
+                    flat_creditor_value = _flat_lookup(fields_flat_payload, "creditor_name")
+                    display_holder_name = _coerce_display_text(
+                        _stringify_flat_value(flat_creditor_value)
+                    )
+                if not display_holder_name:
+                    display_holder_name = "Unknown"
+
                 creditor_name_value = labels.get("creditor_name") or _stringify_flat_value(
                     _flat_lookup(fields_flat_payload, "creditor_name")
                 ) or _extract_text(summary.get("creditor_name"))
@@ -2070,7 +2139,15 @@ def generate_frontend_packs_for_run(
                         account_id=account_id,
                         holder_name=display_holder_name,
                         primary_issue=display_primary_issue,
-                        display_payload=display_payload,
+                        account_number_per_bureau=account_number_per_bureau,
+                        account_number_consensus=account_number_consensus,
+                        account_type_per_bureau=account_type_per_bureau,
+                        account_type_consensus=account_type_consensus,
+                        status_per_bureau=status_per_bureau,
+                        status_consensus=status_consensus,
+                        balance_per_bureau=balance_per_bureau,
+                        date_opened_per_bureau=date_opened_per_bureau,
+                        closed_date_per_bureau=closed_date_per_bureau,
                     )
 
                 account_filename = _safe_account_dirname(account_id, account_dir.name)

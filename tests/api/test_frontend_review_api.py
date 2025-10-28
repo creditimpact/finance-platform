@@ -375,6 +375,65 @@ def test_frontend_review_packs_listing_from_index(api_client):
     }
 
 
+def test_frontend_review_packs_missing_triggers_build(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S131"
+    run_dir = runs_root / sid
+    (run_dir / "cases" / "accounts" / "1").mkdir(parents=True, exist_ok=True)
+
+    calls: list[tuple[str, Path | None]] = []
+
+    def _fake_request_frontend_review_build(
+        sid_arg: str, *, run_dir: Path | None = None, runs_root=None
+    ) -> bool:
+        calls.append((sid_arg, run_dir))
+        return True
+
+    monkeypatch.setattr(
+        "backend.api.app.request_frontend_review_build",
+        _fake_request_frontend_review_build,
+    )
+
+    response = client.get(f"/api/runs/{sid}/frontend/review/packs")
+    assert response.status_code == 202
+    assert response.headers.get("X-Packs-Shape") == "building"
+    assert response.headers.get("Retry-After") == "2"
+
+    payload = response.get_json()
+    assert payload == {
+        "status": "building",
+        "queued": True,
+        "has_cases": True,
+        "items": [],
+    }
+
+    assert calls == [(sid, run_dir)]
+
+
+def test_frontend_review_packs_missing_without_cases_does_not_queue(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S132"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    def _fail_request(*args, **kwargs):  # pragma: no cover - defensive
+        raise AssertionError("request_frontend_review_build should not be called")
+
+    monkeypatch.setattr("backend.api.app.request_frontend_review_build", _fail_request)
+
+    response = client.get(f"/api/runs/{sid}/frontend/review/packs")
+    assert response.status_code == 202
+    assert response.headers.get("X-Packs-Shape") == "building"
+
+    payload = response.get_json()
+    assert payload == {
+        "status": "building",
+        "queued": False,
+        "has_cases": False,
+        "items": [],
+    }
+
+
 def test_runs_last_returns_latest_from_index(api_client):
     client, runs_root = api_client
     runs_root.mkdir(parents=True, exist_ok=True)

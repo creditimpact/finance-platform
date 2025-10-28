@@ -1812,11 +1812,30 @@ def api_frontend_review_packs(sid: str):
 
     manifest = _load_frontend_stage_manifest(run_dir)
     if manifest is None:
-        return jsonify({"error": "index_not_found"}), 404
+        has_cases = _run_has_cases(run_dir)
+        queued = (
+            request_frontend_review_build(sid, run_dir=run_dir)
+            if has_cases
+            else False
+        )
+        payload = {
+            "status": "building",
+            "queued": bool(queued),
+            "has_cases": has_cases,
+            "items": [],
+        }
+        response = jsonify(payload)
+        response.status_code = 202
+        response.headers["X-Packs-Shape"] = "building"
+        response.headers["Retry-After"] = "2"
+        return response
 
     _, payload = manifest
     normalized = _normalize_frontend_review_index_payload(run_dir, payload, sid=sid)
-    return jsonify({"items": normalized.get("items", [])})
+    response_payload = {"items": normalized.get("items", [])}
+    response = jsonify(response_payload)
+    response.headers["X-Packs-Shape"] = "listing"
+    return response
 
 
 def _normalize_frontend_review_index_payload(

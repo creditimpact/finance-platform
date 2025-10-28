@@ -19,6 +19,7 @@ from backend.ai.manifest import (
     ensure_note_style_section,
     update_note_style_stage_status,
 )
+from backend.ai.note_style.io import note_style_stage_view
 from backend.ai.note_style_logging import (
     append_note_style_warning,
     log_structured_event,
@@ -1243,30 +1244,6 @@ def _refresh_after_index_update(
     skipped_count: int,
     completed_at_override: str | None = None,
 ) -> None:
-    packs_total = int(totals.get("total", 0))
-    packs_completed = int(totals.get("completed", 0))
-    packs_failed = int(totals.get("failed", 0))
-
-    if packs_total > 0 and packs_failed > 0:
-        stage_status = "error"
-    elif packs_total == 0:
-        stage_status = "success"
-    elif packs_completed == packs_total:
-        stage_status = "success"
-    else:
-        stage_status = "built"
-
-    empty_ok = packs_total == 0
-    ready = stage_status == "success"
-
-    counts = {"packs_total": packs_total}
-    metrics = {"packs_total": packs_total}
-    results_counts = {
-        "results_total": packs_total,
-        "completed": packs_completed,
-        "failed": packs_failed,
-    }
-
     results_override: tuple[int, int, int] | None = None
     try:
         results_override = refresh_note_style_stage_from_results(
@@ -1306,33 +1283,22 @@ def _refresh_after_index_update(
                 _structured_repr(barrier_state),
             )
 
-    if results_override is not None:
-        (
-            override_total,
-            override_completed,
-            override_failed,
-        ) = results_override
-        packs_total = max(packs_total, override_total)
-        packs_completed = max(packs_completed, override_completed)
-        packs_failed = max(packs_failed, override_failed)
-        if packs_total > 0 and packs_failed > 0:
-            stage_status = "error"
-        elif packs_total == 0:
-            stage_status = "success"
-        elif packs_completed == packs_total:
-            stage_status = "success"
-        else:
-            stage_status = "built"
+    view = note_style_stage_view(sid, runs_root=runs_root_path)
 
-        empty_ok = packs_total == 0
-        ready = stage_status == "success"
-        counts = {"packs_total": packs_total}
-        metrics = {"packs_total": packs_total}
-        results_counts = {
-            "results_total": packs_total,
-            "completed": packs_completed,
-            "failed": packs_failed,
-        }
+    packs_total = view.total_expected
+    packs_completed = view.completed_total
+    packs_failed = view.failed_total
+    stage_status = view.state
+    ready = stage_status == "success"
+    empty_ok = packs_total == 0
+
+    counts = {"packs_total": packs_total}
+    metrics = {"packs_total": packs_total}
+    results_counts = {
+        "results_total": packs_total,
+        "completed": packs_completed,
+        "failed": packs_failed,
+    }
 
     log.info(
         "NOTE_STYLE_REFRESH sid=%s ready=%s total=%s completed=%s failed=%s skipped=%s",
@@ -1355,27 +1321,25 @@ def _refresh_after_index_update(
         packs_skipped=skipped_count,
     )
 
-    any_results = (packs_completed + packs_failed) > 0
     completed_timestamp: str | None
     if completed_at_override is not None:
         completed_timestamp = completed_at_override
-    elif packs_total == 0 or any_results:
+    elif view.is_terminal:
         completed_timestamp = _now_iso()
     else:
         completed_timestamp = None
 
-    sent_flag = packs_total == 0 or any_results
-    if completed_at_override:
-        sent_flag = True
+    sent_flag = view.is_terminal or completed_at_override is not None
 
     try:
         update_note_style_stage_status(
             sid,
             runs_root=runs_root_path,
-            built=packs_total > 0,
+            built=view.built_complete,
             sent=sent_flag,
-            failed=packs_failed > 0,
+            failed=view.failed_total > 0,
             completed_at=completed_timestamp,
+            state=stage_status,
         )
     except Exception:  # pragma: no cover - defensive logging
         log.warning("NOTE_STYLE_MANIFEST_STAGE_UPDATE_FAILED sid=%s", sid, exc_info=True)

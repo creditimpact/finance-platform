@@ -14,18 +14,11 @@ from backend.runflow.counters import note_style_stage_counts
 log = logging.getLogger(__name__)
 
 
-def _safe_int(value: object) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _collect_note_style_metrics(run_dir_path: Path) -> tuple[int | None, int | None]:
+    from backend.ai.note_style.io import note_style_stage_view
+
     try:
-        counters = note_style_stage_counts(run_dir_path)
+        view = note_style_stage_view(run_dir_path.name, runs_root=run_dir_path.parent)
     except Exception:  # pragma: no cover - defensive logging
         log.debug(
             "NOTE_STYLE_AUTOSEND_METRICS_FAILED path=%s",
@@ -34,20 +27,17 @@ def _collect_note_style_metrics(run_dir_path: Path) -> tuple[int | None, int | N
         )
         return (None, None)
 
-    if not counters:
+    packs_total = view.total_expected
+    if packs_total == 0:
         return (0, 0)
 
-    built_total = _safe_int(counters.get("packs_total"))
-    completed_total = _safe_int(counters.get("packs_completed")) or 0
-    failed_total = _safe_int(counters.get("packs_failed")) or 0
-
-    terminal_total: int | None
-    if completed_total or failed_total:
-        terminal_total = completed_total + failed_total
+    terminal_total = view.completed_total + view.failed_total
+    if terminal_total == 0:
+        terminal_value: int | None = None
     else:
-        terminal_total = 0 if built_total == 0 else None
+        terminal_value = terminal_total
 
-    return (built_total, terminal_total)
+    return (packs_total, terminal_value)
 
 
 def _log_autosend_decision(
@@ -91,49 +81,6 @@ def _stage_completed(status: Mapping[str, object] | None) -> bool:
         return True
 
     return False
-
-
-def _note_style_already_sent(status: Mapping[str, object] | None) -> bool:
-    if not isinstance(status, Mapping):
-        return False
-
-    if bool(status.get("failed")):
-        return True
-
-    if bool(status.get("sent")):
-        return True
-
-    completed_at = status.get("completed_at")
-    if isinstance(completed_at, str) and completed_at.strip():
-        return True
-
-    return False
-
-
-def _count_note_style_packs(packs_dir: Path) -> int:
-    try:
-        entries = list(packs_dir.iterdir())
-    except FileNotFoundError:
-        return 0
-    except NotADirectoryError:
-        return 0
-    except OSError:
-        log.debug(
-            "NOTE_STYLE_PACKS_DISCOVERY_FAILED path=%s", packs_dir, exc_info=True
-        )
-        return 0
-
-    total = 0
-    for entry in entries:
-        if not entry.is_file():
-            continue
-        name = entry.name
-        if name.startswith("."):
-            continue
-        lowered = name.lower()
-        if lowered.endswith(".jsonl") or lowered.endswith(".json"):
-            total += 1
-    return total
 
 
 def _env_flag_enabled(name: str, *, default: bool) -> bool:
@@ -252,9 +199,19 @@ def schedule_note_style_after_validation(
         )
         return
 
+    from backend.ai.note_style.io import note_style_stage_view
+
     validation_status = manifest.get_ai_stage_status("validation")
     note_style_status = manifest.get_ai_stage_status("note_style")
-    sent_flag = bool(note_style_status.get("sent"))
+    view = note_style_stage_view(sid_text, runs_root=runs_root_path)
+    metrics_cache = (
+        view.total_expected,
+        (view.completed_total + view.failed_total)
+        if (view.completed_total or view.failed_total)
+        else (0 if view.total_expected == 0 else None),
+    )
+
+    sent_flag = bool(note_style_status.get("sent")) or view.is_terminal
 
     if not _stage_completed(validation_status):
         built_total, terminal_total = _metrics()
@@ -267,11 +224,36 @@ def schedule_note_style_after_validation(
         )
         return
 
-    if _note_style_already_sent(note_style_status):
+    if not view.has_expected:
         built_total, terminal_total = _metrics()
         _log_autosend_decision(
             sid=sid_text,
-            reason="already_terminal",
+            reason="empty",
+            sent=sent_flag,
+            built=built_total,
+            terminal=terminal_total,
+        )
+        return
+
+    pending_total = len(view.pending_results)
+    ready_total = len(view.ready_to_send)
+
+    if pending_total == 0 or view.is_terminal:
+        built_total, terminal_total = _metrics()
+        _log_autosend_decision(
+            sid=sid_text,
+            reason="already_complete",
+            sent=sent_flag,
+            built=built_total,
+            terminal=terminal_total,
+        )
+        return
+
+    if ready_total == 0:
+        built_total, terminal_total = _metrics()
+        _log_autosend_decision(
+            sid=sid_text,
+            reason="packs_not_ready",
             sent=sent_flag,
             built=built_total,
             terminal=terminal_total,
@@ -323,14 +305,10 @@ def schedule_note_style_after_validation(
         )
         return
 
-    pack_count = _count_note_style_packs(paths.packs_dir)
     built_total, terminal_total = _metrics()
-    if built_total is None or pack_count > built_total:
-        metrics_cache = (pack_count, terminal_total)
-        built_total = pack_count
 
     log.info(
-        "NOTE_STYLE_AUTOSEND_READY sid=%s packs=%s", sid_text, pack_count
+        "NOTE_STYLE_AUTOSEND_READY sid=%s packs=%s", sid_text, pending_total
     )
 
     try:
@@ -355,7 +333,7 @@ def schedule_note_style_after_validation(
         log.warning(
             "NOTE_STYLE_AUTOSEND_SCHEDULE_FAILED sid=%s packs=%s",
             sid_text,
-            pack_count,
+            pending_total,
             exc_info=True,
         )
         return
@@ -371,7 +349,7 @@ def schedule_note_style_after_validation(
     log.info(
         "NOTE_STYLE_AUTOSEND_AFTER_VALIDATION sid=%s packs=%s",
         sid_text,
-        pack_count,
+        pending_total,
     )
 
 

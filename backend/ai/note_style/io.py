@@ -30,6 +30,62 @@ class NoteStyleSnapshot:
     packs_failed: set[str]
 
 
+@dataclass(frozen=True)
+class NoteStyleStageView:
+    """Derived lifecycle information for the note_style stage."""
+
+    packs_expected: frozenset[str]
+    packs_built: frozenset[str]
+    packs_completed: frozenset[str]
+    packs_failed: frozenset[str]
+    state: str
+    built_complete: bool
+
+    @property
+    def total_expected(self) -> int:
+        return len(self.packs_expected)
+
+    @property
+    def built_total(self) -> int:
+        return len(self.packs_built & self.packs_expected)
+
+    @property
+    def completed_total(self) -> int:
+        return len(self.packs_expected & self.packs_completed)
+
+    @property
+    def failed_total(self) -> int:
+        return len(self.packs_expected & self.packs_failed)
+
+    @property
+    def terminal_accounts(self) -> frozenset[str]:
+        return frozenset((self.packs_completed | self.packs_failed) & self.packs_expected)
+
+    @property
+    def terminal_total(self) -> int:
+        return len(self.terminal_accounts)
+
+    @property
+    def missing_builds(self) -> frozenset[str]:
+        return frozenset(self.packs_expected - self.packs_built)
+
+    @property
+    def pending_results(self) -> frozenset[str]:
+        return frozenset(self.packs_expected - self.terminal_accounts)
+
+    @property
+    def ready_to_send(self) -> frozenset[str]:
+        return frozenset((self.packs_built - self.terminal_accounts) & self.packs_expected)
+
+    @property
+    def has_expected(self) -> bool:
+        return bool(self.packs_expected)
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.state in {"success", "error", "empty"}
+
+
 _NOTE_VALUE_PATHS: tuple[tuple[str, ...], ...] = (
     ("note",),
     ("note_text",),
@@ -334,4 +390,80 @@ def note_style_snapshot(
     )
 
 
-__all__ = ["NoteStyleSnapshot", "note_style_snapshot"]
+def _determine_stage_state(
+    *,
+    packs_expected: set[str],
+    packs_built: set[str],
+    packs_completed: set[str],
+    packs_failed: set[str],
+) -> tuple[str, bool]:
+    expected_total = len(packs_expected)
+    built_total = len(packs_expected & packs_built)
+    completed_total = len(packs_expected & packs_completed)
+    failed_total = len(packs_expected & packs_failed)
+    terminal_total = completed_total + failed_total
+
+    built_complete = bool(expected_total) and built_total == expected_total
+
+    if expected_total == 0:
+        return ("empty", False)
+    if not built_complete:
+        return ("pending", False)
+    if terminal_total == 0:
+        return ("built", True)
+    if terminal_total < expected_total:
+        return ("in_progress", True)
+    if failed_total > 0 and completed_total == 0:
+        return ("error", True)
+    return ("success", True)
+
+
+def note_style_stage_view(
+    sid: str,
+    *,
+    runs_root: Path | str | None = None,
+    snapshot: NoteStyleSnapshot | None = None,
+) -> NoteStyleStageView:
+    """Return the derived lifecycle view for ``sid``."""
+
+    sid_text = str(sid or "").strip()
+    if not sid_text:
+        return NoteStyleStageView(
+            packs_expected=frozenset(),
+            packs_built=frozenset(),
+            packs_completed=frozenset(),
+            packs_failed=frozenset(),
+            state="empty",
+            built_complete=False,
+        )
+
+    snapshot_value = snapshot or note_style_snapshot(sid_text, runs_root=runs_root)
+
+    packs_expected = set(snapshot_value.packs_expected)
+    packs_built = set(snapshot_value.packs_built) & packs_expected
+    packs_completed = set(snapshot_value.packs_completed) & packs_expected
+    packs_failed = set(snapshot_value.packs_failed) & packs_expected
+
+    state, built_complete = _determine_stage_state(
+        packs_expected=packs_expected,
+        packs_built=packs_built,
+        packs_completed=packs_completed,
+        packs_failed=packs_failed,
+    )
+
+    return NoteStyleStageView(
+        packs_expected=frozenset(packs_expected),
+        packs_built=frozenset(packs_built),
+        packs_completed=frozenset(packs_completed),
+        packs_failed=frozenset(packs_failed),
+        state=state,
+        built_complete=built_complete,
+    )
+
+
+__all__ = [
+    "NoteStyleSnapshot",
+    "NoteStyleStageView",
+    "note_style_snapshot",
+    "note_style_stage_view",
+]

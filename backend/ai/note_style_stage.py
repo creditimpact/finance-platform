@@ -19,7 +19,12 @@ from backend.ai.manifest import (
     register_note_style_build,
     update_note_style_stage_status,
 )
-from backend.ai.note_style.io import NoteStyleSnapshot, note_style_snapshot
+from backend.ai.note_style.io import (
+    NoteStyleSnapshot,
+    NoteStyleStageView,
+    note_style_snapshot,
+    note_style_stage_view,
+)
 from backend.core.ai.paths import (
     NoteStylePaths,
     ensure_note_style_account_paths,
@@ -689,49 +694,29 @@ def _record_stage_snapshot(
     sid: str,
     runs_root: Path,
     index_payload: Mapping[str, Any],
-) -> NoteStyleSnapshot:
+) -> NoteStyleStageView:
+    _ = index_payload  # preserved for compatibility with existing call sites
     snapshot = note_style_snapshot(sid, runs_root=runs_root)
+    view = note_style_stage_view(sid, runs_root=runs_root, snapshot=snapshot)
 
-    expected_accounts = set(snapshot.packs_expected)
-    built_accounts = set(snapshot.packs_built)
-    completed_accounts = set(snapshot.packs_completed)
-    failed_accounts = set(snapshot.packs_failed)
-
-    total_expected = len(expected_accounts)
-    built_total = len(expected_accounts & built_accounts)
-    completed_total = len(expected_accounts & completed_accounts)
-    failed_total = len(expected_accounts & failed_accounts)
-    terminal_total = completed_total + failed_total
-
-    empty_ok = total_expected == 0
-
-    if empty_ok:
-        status = "empty"
-    elif not expected_accounts.issubset(built_accounts):
-        status = "pending"
-    elif terminal_total >= total_expected and total_expected > 0:
-        status = "success"
-    else:
-        status = "built"
-
-    counts_payload = {"packs_total": total_expected}
+    counts_payload = {"packs_total": view.total_expected}
     metrics_payload = {
-        "packs_total": total_expected,
-        "packs_built": built_total,
+        "packs_total": view.total_expected,
+        "packs_built": view.built_total,
     }
     results_payload = {
-        "results_total": total_expected,
-        "completed": completed_total,
-        "failed": failed_total,
+        "results_total": view.total_expected,
+        "completed": view.completed_total,
+        "failed": view.failed_total,
     }
 
     try:
         record_stage(
             sid,
             "note_style",
-            status=status,
+            status=view.state,
             counts=counts_payload,
-            empty_ok=empty_ok,
+            empty_ok=view.total_expected == 0,
             metrics=metrics_payload,
             results=results_payload,
             runs_root=runs_root,
@@ -739,7 +724,7 @@ def _record_stage_snapshot(
     except Exception:  # pragma: no cover - defensive logging
         log.exception("NOTE_STYLE_STAGE_RECORD_FAILED sid=%s", sid)
 
-    return snapshot
+    return view
 
 
 def build_note_style_pack_for_account(
@@ -845,7 +830,7 @@ def build_note_style_pack_for_account(
         result_path=account_paths.result_file,
         timestamp=timestamp,
     )
-    snapshot = _record_stage_snapshot(
+    view = _record_stage_snapshot(
         sid=sid, runs_root=runs_root_path, index_payload=index_payload
     )
 
@@ -868,16 +853,13 @@ def build_note_style_pack_for_account(
         )
 
     try:
-        built_complete = bool(
-            snapshot.packs_expected
-            and snapshot.packs_expected.issubset(snapshot.packs_built)
-        )
         update_note_style_stage_status(
             sid,
             runs_root=runs_root_path,
-            built=built_complete,
+            built=view.built_complete,
             sent=False,
             completed_at=None,
+            state=view.state,
         )
     except Exception:  # pragma: no cover - defensive logging
         log.warning(

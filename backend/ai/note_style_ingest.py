@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
+from backend.ai.note_style.io import note_style_stage_view
 from backend.ai.note_style_results import (
     complete_note_style_result,
     store_note_style_result,
@@ -156,12 +157,17 @@ def ingest_note_style_result(
 
     if analysis_valid and results_count > 0:
         try:
-            update_note_style_stage_status(
-                sid,
-                runs_root=runs_root,
-                sent=True,
-                completed_at=completed_at,
-            )
+            view = note_style_stage_view(sid, runs_root=runs_root)
+            if view.is_terminal:
+                update_note_style_stage_status(
+                    sid,
+                    runs_root=runs_root,
+                    built=view.built_complete,
+                    sent=True,
+                    failed=view.failed_total > 0,
+                    completed_at=completed_at,
+                    state=view.state,
+                )
         except Exception:  # pragma: no cover - defensive logging
             log.warning(
                 "NOTE_STYLE_MANIFEST_STAGE_STATUS_UPDATE_FAILED sid=%s account_id=%s path=%s",
@@ -171,12 +177,13 @@ def ingest_note_style_result(
                 exc_info=True,
             )
         else:
-            log.info(
-                "NOTE_STYLE_MANIFEST_STAGE_STATUS_UPDATED sid=%s account_id=%s results=%d",
-                sid,
-                account_id,
-                results_count,
-            )
+            if view.is_terminal:
+                log.info(
+                    "NOTE_STYLE_MANIFEST_STAGE_STATUS_UPDATED sid=%s account_id=%s results=%d",
+                    sid,
+                    account_id,
+                    results_count,
+                )
 
     return result_path
 

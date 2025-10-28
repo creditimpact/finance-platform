@@ -17,7 +17,7 @@ from backend.ai.note_style_logging import (
     append_note_style_warning,
     log_structured_event,
 )
-from backend.ai.note_style.io import note_style_snapshot
+from backend.ai.note_style.io import note_style_stage_view
 from backend.ai.note_style_results import record_note_style_failure
 from backend.ai.note_style_sender import (
     send_note_style_pack_for_account,
@@ -25,7 +25,6 @@ from backend.ai.note_style_sender import (
 )
 from backend.core.ai.paths import ensure_note_style_paths
 from backend.core.redis_client import redis
-from backend.pipeline import runs
 
 
 logger = logging.getLogger(__name__)
@@ -45,19 +44,14 @@ def redis_lock(key: str, ttl: int = 120):
         if acquired:
             try:
                 redis.delete(key)
-            except Exception:  # pragma: no cover - defensive logging
-                logger.warning("NOTE_STYLE_LOCK_RELEASE_FAILED key=%s", key, exc_info=True)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning("NOTE_STYLE_LOCK_RELEASE_FAILED key=%s", key, exc_info=True)
 
 
-def is_terminal_status(status: str) -> bool:
-    return status in {"success", "completed", "error", "failed", "empty"}
-
-
-def _note_style_has_packs(
+def _stage_view(
     sid: str, runs_root: str | Path | None = None
-) -> bool:
-    snapshot = note_style_snapshot(sid, runs_root=runs_root)
-    return bool(snapshot.packs_built)
+):
+    return note_style_stage_view(sid, runs_root=runs_root)
 
 
 def _resolve_runs_root(runs_root: str | Path | None) -> Path:
@@ -115,12 +109,13 @@ def note_style_prepare_and_send_task(
             )
             return {"sid": sid_text, "skipped": "locked"}
 
-        status = runs.get_stage_status(
-            sid_text, stage="note_style", runs_root=runs_root
-        )
-        if status and is_terminal_status(status):
+        view = _stage_view(sid_text, runs_root=runs_root)
+        ready_accounts = view.ready_to_send
+        pending_total = len(view.pending_results)
+
+        if view.is_terminal:
             logger.info(
-                "NOTE_STYLE_TERMINAL_SKIP sid=%s status=%s", sid_text, status
+                "NOTE_STYLE_TERMINAL_SKIP sid=%s state=%s", sid_text, view.state
             )
             log_structured_event(
                 "NOTE_STYLE_TERMINAL_SKIP",
@@ -128,11 +123,11 @@ def note_style_prepare_and_send_task(
                 task="prepare_and_send",
                 sid=sid_text,
                 runs_root=runs_root,
-                status=status,
+                status=view.state,
             )
-            return {"sid": sid_text, "skipped": "terminal", "status": status}
+            return {"sid": sid_text, "skipped": "terminal", "state": view.state}
 
-        if not _note_style_has_packs(sid_text, runs_root=runs_root):
+        if not view.has_expected:
             log.info(
                 "NOTE_STYLE_AUTO: skip_send sid=%s reason=no_note_style_packs", sid_text
             )
@@ -142,6 +137,27 @@ def note_style_prepare_and_send_task(
                 "sent": 0,
                 "reason": "no_note_style_packs",
             }
+
+        if not ready_accounts:
+            reason = "awaiting_build" if view.missing_builds else "no_ready_packs"
+            log.info(
+                "NOTE_STYLE_AUTO: skip_send sid=%s reason=%s pending=%s state=%s",
+                sid_text,
+                reason,
+                pending_total,
+                view.state,
+            )
+            log_structured_event(
+                "NOTE_STYLE_PREPARE_SKIP",
+                logger=log,
+                task="prepare_and_send",
+                sid=sid_text,
+                runs_root=runs_root,
+                reason=reason,
+                state=view.state,
+                pending=pending_total,
+            )
+            return {"sid": sid_text, "skipped": reason, "state": view.state}
 
         start = time.monotonic()
         log_structured_event(
@@ -284,12 +300,13 @@ def note_style_send_sid_task(
             )
             return {"sid": sid_text, "skipped": "locked"}
 
-        status = runs.get_stage_status(
-            sid_text, stage="note_style", runs_root=runs_root
-        )
-        if status and is_terminal_status(status):
+        view = _stage_view(sid_text, runs_root=runs_root)
+        ready_accounts = view.ready_to_send
+        pending_total = len(view.pending_results)
+
+        if view.is_terminal:
             logger.info(
-                "NOTE_STYLE_TERMINAL_SKIP sid=%s status=%s", sid_text, status
+                "NOTE_STYLE_TERMINAL_SKIP sid=%s state=%s", sid_text, view.state
             )
             log_structured_event(
                 "NOTE_STYLE_TERMINAL_SKIP",
@@ -297,20 +314,41 @@ def note_style_send_sid_task(
                 task="send_sid",
                 sid=sid_text,
                 runs_root=runs_root,
-                status=status,
+                status=view.state,
             )
-            return {"sid": sid_text, "skipped": "terminal", "status": status}
+            return {"sid": sid_text, "skipped": "terminal", "state": view.state}
 
-        if runs.all_note_style_results_terminal(sid_text, runs_root=runs_root):
-            logger.info("NOTE_STYLE_ALREADY_TERMINAL sid=%s", sid_text)
+        if not view.has_expected:
+            logger.info("NOTE_STYLE_NO_PACKS sid=%s", sid_text)
             log_structured_event(
-                "NOTE_STYLE_ALREADY_TERMINAL",
+                "NOTE_STYLE_NO_PACKS",
                 logger=log,
                 task="send_sid",
                 sid=sid_text,
                 runs_root=runs_root,
             )
-            return {"sid": sid_text, "skipped": "already_terminal"}
+            return {"sid": sid_text, "skipped": "no_packs"}
+
+        if not ready_accounts:
+            reason = "awaiting_build" if view.missing_builds else "no_ready_packs"
+            logger.info(
+                "NOTE_STYLE_SEND_SKIP sid=%s reason=%s pending=%s state=%s",
+                sid_text,
+                reason,
+                pending_total,
+                view.state,
+            )
+            log_structured_event(
+                "NOTE_STYLE_SEND_SKIP",
+                logger=log,
+                task="send_sid",
+                sid=sid_text,
+                runs_root=runs_root,
+                reason=reason,
+                state=view.state,
+                pending=pending_total,
+            )
+            return {"sid": sid_text, "skipped": reason, "state": view.state}
 
         start = time.monotonic()
         log_structured_event(

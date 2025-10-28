@@ -66,6 +66,56 @@ def test_generate_frontend_task_logs_receipt(monkeypatch, caplog):
     )
 
 
+def test_generate_frontend_task_skips_manifest_when_locked(monkeypatch):
+    import backend.api.tasks as tasks_module
+
+    recorded: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def _fake_generate(*args, **kwargs):
+        return {
+            "status": "locked",
+            "packs_count": 0,
+            "built": False,
+            "packs_dir": "/tmp/frontend/packs",
+            "last_built_at": None,
+        }
+
+    def _fake_update(*args, **kwargs):
+        recorded.append((args, kwargs))
+
+    monkeypatch.setattr(tasks_module, "generate_frontend_packs_for_run", _fake_generate)
+    monkeypatch.setattr(tasks_module, "update_manifest_frontend", _fake_update)
+
+    tasks_module.generate_frontend_packs_task.run("SID-LOCKED")
+
+    assert recorded == []
+
+
+def test_generate_frontend_task_updates_manifest_on_success(monkeypatch):
+    import backend.api.tasks as tasks_module
+
+    recorded: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def _fake_generate(*args, **kwargs):
+        return {
+            "status": "success",
+            "packs_count": 3,
+            "built": True,
+            "packs_dir": "/tmp/frontend/packs",
+            "last_built_at": "2024-01-01T00:00:00Z",
+        }
+
+    def _fake_update(*args, **kwargs):
+        recorded.append((args, kwargs))
+
+    monkeypatch.setattr(tasks_module, "generate_frontend_packs_for_run", _fake_generate)
+    monkeypatch.setattr(tasks_module, "update_manifest_frontend", _fake_update)
+
+    tasks_module.generate_frontend_packs_task.run("SID-SUCCESS")
+
+    assert len(recorded) == 1
+
+
 def test_enqueue_helper_uses_frontend_queue(monkeypatch, caplog):
     monkeypatch.setenv("CELERY_FRONTEND_QUEUE", "frontend")
 

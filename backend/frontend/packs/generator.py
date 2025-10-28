@@ -1321,6 +1321,12 @@ def _build_stage_manifest(
 
     manifest_payload = {**manifest_core, "generated_at": generated_at, "built_at": built_at}
     _write_json_if_changed(stage_index_path, manifest_payload)
+    log.info(
+        "wrote review index sid=%s (count=%d) path=%s",
+        sid,
+        len(pack_entries),
+        stage_index_path,
+    )
 
     return manifest_payload
 
@@ -1951,7 +1957,15 @@ def generate_frontend_packs_for_run(
                     existing_pack=existing_stage_pack,
                     question_set=_QUESTION_SET,
                 )
-    
+
+                log.info(
+                    "writing pack sid=%s (acct=%s, type=%s, status=%s)",
+                    sid,
+                    account_id,
+                    account_type_value or "unknown",
+                    status_value or "unknown",
+                )
+
                 try:
                     stage_changed = _write_json_if_changed(
                         stage_pack_path, stage_pack_payload

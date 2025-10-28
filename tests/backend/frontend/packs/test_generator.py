@@ -310,3 +310,26 @@ def test_generate_frontend_packs_defaults_unknown_issue_when_tags_missing(
     assert pack_payload["primary_issue"] == "unknown"
 
 
+def test_generate_frontend_packs_creates_empty_index_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "S500"
+
+    monkeypatch.setenv("ENABLE_FRONTEND_PACKS", "0")
+    monkeypatch.setenv("FRONTEND_REVIEW_CREATE_EMPTY_INDEX", "1")
+
+    try:
+        result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    finally:
+        monkeypatch.delenv("ENABLE_FRONTEND_PACKS", raising=False)
+        monkeypatch.delenv("FRONTEND_REVIEW_CREATE_EMPTY_INDEX", raising=False)
+
+    index_path = runs_root / sid / "frontend" / "review" / "index.json"
+    assert index_path.exists()
+
+    manifest = json.loads(index_path.read_text(encoding="utf-8"))
+    assert manifest["packs_count"] == 0
+    assert result["packs_count"] == 0
+    assert result["last_built_at"] == manifest["generated_at"]
+

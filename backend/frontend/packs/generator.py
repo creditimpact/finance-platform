@@ -145,6 +145,10 @@ def _frontend_packs_debug_mirror_enabled() -> bool:
     return value not in {"0", "false", "False"}
 
 
+def _frontend_review_create_empty_index_enabled() -> bool:
+    return _env_flag_enabled("FRONTEND_REVIEW_CREATE_EMPTY_INDEX", False)
+
+
 def _log_stage_paths(
     sid: str,
     config: FrontendStageConfig,
@@ -1523,13 +1527,33 @@ def generate_frontend_packs_for_run(
             )
     
             if not _frontend_packs_enabled():
+                fallback_manifest: Mapping[str, Any] | None = None
+                if _frontend_review_create_empty_index_enabled():
+                    stage_dir.mkdir(parents=True, exist_ok=True)
+                    os.makedirs(stage_packs_dir, exist_ok=True)
+                    os.makedirs(stage_responses_dir, exist_ok=True)
+                    stage_index_path.parent.mkdir(parents=True, exist_ok=True)
+                    fallback_manifest = _build_stage_manifest(
+                        sid=sid,
+                        stage_name=stage_name,
+                        run_dir=run_dir,
+                        stage_packs_dir=stage_packs_dir,
+                        stage_responses_dir=stage_responses_dir,
+                        stage_index_path=stage_index_path,
+                        question_set=_QUESTION_SET,
+                    )
+                    _ensure_frontend_index_redirect_stub(redirect_stub_path)
+                    log.info("FRONTEND_EMPTY_INDEX_FALLBACK sid=%s", sid)
+
                 responses_count = _emit_responses_scan(sid, stage_responses_dir)
-                summary = {
+                summary: dict[str, Any] = {
                     "packs_count": 0,
                     "responses_received": responses_count,
                     "empty_ok": True,
                     "reason": "disabled",
                 }
+                if fallback_manifest is not None:
+                    summary["fallback_index"] = True
                 runflow_step(
                     sid,
                     "frontend",
@@ -1557,16 +1581,33 @@ def generate_frontend_packs_for_run(
                     summary=summary,
                     empty_ok=True,
                 )
-                _log_done(sid, 0, status="skipped", reason="disabled")
+                if isinstance(fallback_manifest, Mapping):
+                    generated_at = fallback_manifest.get("generated_at")
+                    fallback_last_built = generated_at if isinstance(generated_at, str) else None
+                else:
+                    fallback_last_built = None
+                _log_done(
+                    sid,
+                    0,
+                    status="skipped",
+                    reason="disabled",
+                    fallback_index=bool(fallback_manifest),
+                )
                 result = {
                     "status": "skipped",
                     "packs_count": 0,
                     "empty_ok": True,
                     "built": False,
                     "packs_dir": packs_dir_str,
-                    "last_built_at": None,
+                    "last_built_at": fallback_last_built,
                 }
-                _log_build_summary(sid, packs_count=0, last_built_at=None)
+                if fallback_manifest is not None:
+                    result["fallback_index"] = True
+                _log_build_summary(
+                    sid,
+                    packs_count=0,
+                    last_built_at=fallback_last_built,
+                )
                 return result
     
             stage_dir.mkdir(parents=True, exist_ok=True)

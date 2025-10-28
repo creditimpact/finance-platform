@@ -12,6 +12,10 @@ def test_collect_process_snapshot_validation_paths(monkeypatch, tmp_path):
     sid = "2024-001"
     monkeypatch.setenv("RUNS_ROOT", str(runs_root))
     monkeypatch.setenv("ENABLE_FRONTEND_PACKS", "0")
+    monkeypatch.setenv("FRONTEND_TRIGGER_AFTER_CASES", "0")
+    monkeypatch.setenv("FRONTEND_STAGE_AUTORUN", "0")
+    monkeypatch.setenv("REVIEW_STAGE_AUTORUN", "1")
+    monkeypatch.setenv("FRONTEND_REVIEW_CREATE_EMPTY_INDEX", "on")
     monkeypatch.setenv("ENABLE_VALIDATION_SENDER", "1")
     monkeypatch.setenv("AUTO_VALIDATION_SEND", "yes")
     monkeypatch.setenv("VALIDATION_SEND_ON_BUILD", "no")
@@ -23,6 +27,10 @@ def test_collect_process_snapshot_validation_paths(monkeypatch, tmp_path):
 
     flags = snapshot["flags"]
     assert flags["ENABLE_FRONTEND_PACKS"]["enabled"] is False
+    assert flags["FRONTEND_TRIGGER_AFTER_CASES"]["enabled"] is False
+    assert flags["FRONTEND_STAGE_AUTORUN"]["enabled"] is False
+    assert flags["REVIEW_STAGE_AUTORUN"]["enabled"] is True
+    assert flags["FRONTEND_REVIEW_CREATE_EMPTY_INDEX"]["enabled"] is True
     assert flags["ENABLE_VALIDATION_SENDER"]["enabled"] is True
     assert flags["AUTO_VALIDATION_SEND"]["enabled"] is True
     assert flags["VALIDATION_SEND_ON_BUILD"]["enabled"] is False

@@ -79,9 +79,22 @@ class _StubClient:
                 "kwargs": kwargs,
             }
         )
+        arguments = json.dumps({"analysis": self._response_payload})
         return {
             "choices": [
-                {"message": {"content": json.dumps(self._response_payload)}}
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "submit_note_style_analysis",
+                                    "arguments": arguments,
+                                }
+                            }
+                        ],
+                    }
+                }
             ]
         }
 
@@ -116,6 +129,10 @@ def test_note_style_sender_sends_built_pack(
     processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
     assert processed == [account_id]
     assert len(client.calls) == 1
+    first_kwargs = client.calls[0]["kwargs"]
+    assert "tools" in first_kwargs
+    assert first_kwargs["tools"][0]["function"]["name"] == "submit_note_style_analysis"
+    assert first_kwargs["tool_choice"]["function"]["name"] == "submit_note_style_analysis"
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -238,7 +255,7 @@ def test_note_style_sender_sends_built_pack(
     assert metrics_entry.get("model") == config.NOTE_STYLE_MODEL
 
     call_kwargs = client.calls[0]["kwargs"]
-    assert call_kwargs.get("response_format") == {"type": "json_object"}
+    assert "tools" in call_kwargs
 
 
 def test_note_style_sender_retries_on_invalid_result(
@@ -320,6 +337,8 @@ def test_note_style_sender_retries_on_invalid_result(
 
     assert processed == [account_id]
     assert len(client.calls) == 2
+    assert "tools" in client.calls[0]["kwargs"]
+    assert "response_format" in client.calls[1]["kwargs"]
 
     corrective_message = client.calls[1]["messages"][1]
     assert corrective_message["role"] == "system"
@@ -856,7 +875,7 @@ def test_note_style_sender_normalizes_message_content(tmp_path: Path, monkeypatc
     assert json.loads(user_content) == {"payload": {"topic": "billing"}}
 
     call_kwargs = client.calls[0]["kwargs"]
-    assert call_kwargs.get("response_format") == {"type": "json_object"}
+    assert "tools" in call_kwargs
 
 
 def test_note_style_sender_ignores_debug_snapshot_files(

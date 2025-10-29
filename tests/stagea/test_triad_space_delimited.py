@@ -47,6 +47,24 @@ def _write_triad_continuation_row(tsv_path: Path, continuation_text: str) -> Non
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
 
 
+def _write_original_creditor_wrapped(tsv_path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        "1\t1\t10\t11\t60\t100\tTransUnion\n",
+        "1\t1\t10\t11\t160\t200\tExperian\n",
+        "1\t1\t10\t11\t260\t300\tEquifax\n",
+        "1\t2\t20\t21\t0\t40\tAccount #\n",
+        "1\t2\t20\t21\t60\t100\t123456789\n",
+        "1\t2\t20\t21\t160\t200\t123456789\n",
+        "1\t2\t20\t21\t260\t300\t123456789\n",
+        "1\t3\t30\t31\t0\t40\tOriginal Creditor:\n",
+        "1\t4\t40\t41\t60\t140\tPALISADES FUNDING CORP\n",
+        "1\t4\t40\t41\t160\t240\tATLANTIC CAPITAL\n",
+        "1\t4\t40\t41\t260\t340\tPACIFIC HOLDINGS\n",
+    ]
+    tsv_path.write_text(header + "".join(rows), encoding="utf-8")
+
+
 def _write_masked_account_row(tsv_path: Path) -> None:
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
@@ -157,6 +175,20 @@ def test_triad_preserves_masked_account_numbers(
     assert fields["transunion"]["account_number_display"] == "****"
     assert fields["experian"]["account_number_display"] == "****"
     assert fields["equifax"]["account_number_display"] == "552433**********"
+
+
+def test_triad_original_creditor_wrapped_value(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    tsv_path = tmp_path / "_orig_creditor_wrapped.tsv"
+    _write_original_creditor_wrapped(tsv_path)
+
+    data, _accounts_dir, _sid = _run_split(tsv_path, caplog)
+    triad_fields = data["accounts"][0]["triad_fields"]
+
+    assert triad_fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
+    assert triad_fields["experian"]["original_creditor"] == "ATLANTIC CAPITAL"
+    assert triad_fields["equifax"]["original_creditor"] == "PACIFIC HOLDINGS"
 
 
 def test_stagea_space_delimited_account_fields(

@@ -182,6 +182,10 @@ FIELD_LABELS: dict[str, str] = {
     "account description": "account_description",
     "dispute status": "dispute_status",
     "creditor type": "creditor_type",
+    "original creditor 01": "original_creditor",
+    "original creditor 02": "original_creditor",
+    "orig. creditor": "original_creditor",
+    "orig creditor": "original_creditor",
     "original creditor": "original_creditor",
     "account status": "account_status",
     "payment status": "payment_status",
@@ -210,7 +214,7 @@ LABEL_MAP: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^DISPUTE\s+STATUS", re.I), "dispute_status"),
     (re.compile(r"^CREDITOR\s+TYPE", re.I), "creditor_type"),
     (
-        re.compile(r"^ORIG(?:INAL)?\.?\s*CREDITOR(?:\s*\d{1,2})?$", re.I),
+        re.compile(r"^ORIG(?:INAL)?\.?\s*CREDITOR(?:\s*\d{1,2})?\s*:?", re.I),
         "original_creditor",
     ),
     (re.compile(r"^ACCOUNT\s+STATUS", re.I), "account_status"),
@@ -2985,6 +2989,9 @@ def enrich_block(blk: dict) -> dict:
         "Dispute Status",
         "Creditor Type",
         "Original Creditor",
+        "Original Creditor 01",
+        "Original Creditor 02",
+        "Orig. Creditor",
     ]
     BOTTOM_LABELS = [
         "Account Status",
@@ -3088,6 +3095,10 @@ def enrich_block(blk: dict) -> dict:
         "Account Description": "account_description",
         "Dispute Status": "dispute_status",
         "Creditor Type": "creditor_type",
+        "Original Creditor": "original_creditor",
+        "Original Creditor 01": "original_creditor",
+        "Original Creditor 02": "original_creditor",
+        "Orig. Creditor": "original_creditor",
     }
 
     CONTINUATION_SINGLETONS = {":", "mortgage", "balance", "account", "finance"}

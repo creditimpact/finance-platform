@@ -34,6 +34,33 @@ def _write_tsv(path: Path) -> None:
     path.write_text(header + "".join(rows), encoding="utf-8")
 
 
+def _write_original_creditor_row(
+    path: Path,
+    label: str,
+    tu_value: str | None,
+    xp_value: str | None,
+    eq_value: str | None,
+) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        "1\t1\t10\t11\t60\t100\tTransUnion\n",
+        "1\t1\t10\t11\t160\t200\tExperian\n",
+        "1\t1\t10\t11\t260\t300\tEquifax\n",
+        "1\t2\t20\t21\t0\t40\tAccount #\n",
+        "1\t2\t20\t21\t60\t100\t123456789\n",
+        "1\t2\t20\t21\t160\t200\t123456789\n",
+        "1\t2\t20\t21\t260\t300\t123456789\n",
+        f"1\t3\t30\t31\t0\t40\t{label}\n",
+    ]
+    if tu_value is not None:
+        rows.append(f"1\t3\t30\t31\t60\t140\t{tu_value}\n")
+    if xp_value is not None:
+        rows.append(f"1\t3\t30\t31\t160\t240\t{xp_value}\n")
+    if eq_value is not None:
+        rows.append(f"1\t3\t30\t31\t260\t340\t{eq_value}\n")
+    path.write_text(header + "".join(rows), encoding="utf-8")
+
+
 def test_anchor_with_multi_token_bureau_and_unicode_colon(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
     _write_tsv(tsv_path)
@@ -65,6 +92,68 @@ def test_anchor_with_multi_token_bureau_and_unicode_colon(tmp_path: Path, caplog
     assert "TRIAD_HEADER_ABOVE page=" in caplog.text
     assert "TRIAD_HEADER_XMIDS tu=" in caplog.text
     assert "TRIAD_ANCHOR_COUNTS label=1" in caplog.text
+
+
+def test_triad_original_creditor_tu_only(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    tsv_path = tmp_path / "_orig_creditor_tu.tsv"
+    _write_original_creditor_row(
+        tsv_path,
+        "Original Creditor 01:",
+        "PALISADES FUNDING CORP",
+        None,
+        None,
+    )
+
+    data, _accounts_dir, _sid = _run_split(tsv_path, caplog)
+    fields = data["accounts"][0]["triad_fields"]
+
+    assert fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
+    assert fields["experian"]["original_creditor"] == ""
+    assert fields["equifax"]["original_creditor"] == ""
+
+
+def test_triad_original_creditor_all_bureaus(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    tsv_path = tmp_path / "_orig_creditor_all.tsv"
+    _write_original_creditor_row(
+        tsv_path,
+        "Original Creditor 02:",
+        "PALISADES FUNDING CORP",
+        "ATLANTIC CAPITAL",
+        "PACIFIC HOLDINGS",
+    )
+
+    data, _accounts_dir, _sid = _run_split(tsv_path, caplog)
+    fields = data["accounts"][0]["triad_fields"]
+
+    assert fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
+    assert fields["experian"]["original_creditor"] == "ATLANTIC CAPITAL"
+    assert fields["equifax"]["original_creditor"] == "PACIFIC HOLDINGS"
+
+
+def test_triad_original_creditor_absent_key(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        "1\t1\t10\t11\t60\t100\tTransUnion\n",
+        "1\t1\t10\t11\t160\t200\tExperian\n",
+        "1\t1\t10\t11\t260\t300\tEquifax\n",
+        "1\t2\t20\t21\t0\t40\tAccount #\n",
+        "1\t2\t20\t21\t60\t100\t123456789\n",
+        "1\t2\t20\t21\t160\t200\t123456789\n",
+        "1\t2\t20\t21\t260\t300\t123456789\n",
+        "1\t3\t30\t31\t0\t40\tHigh Balance:\n",
+        "1\t3\t30\t31\t60\t100\t5000\n",
+        "1\t3\t30\t31\t160\t200\t6000\n",
+        "1\t3\t30\t31\t260\t300\t7000\n",
+    ]
+    tsv_path = tmp_path / "_orig_creditor_absent.tsv"
+    tsv_path.write_text(header + "".join(rows), encoding="utf-8")
+
+    data, _accounts_dir, _sid = _run_split(tsv_path, caplog)
+    fields = data["accounts"][0]["triad_fields"]
+
+    for bureau in ("transunion", "experian", "equifax"):
+        assert "original_creditor" in fields[bureau]
+        assert fields[bureau]["original_creditor"] == ""
 
 
 @pytest.fixture(autouse=True)

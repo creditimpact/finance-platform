@@ -48,6 +48,12 @@ LABELS_TOP: List[str] = [
     "Original Creditor",
 ]
 
+_LABEL_VARIANTS_TOP = {
+    "Original Creditor 01": "Original Creditor",
+    "Original Creditor 02": "Original Creditor",
+    "Orig. Creditor": "Original Creditor",
+}
+
 LABELS_BOTTOM: List[str] = [
     "Account Status",
     "Payment Status",
@@ -76,6 +82,10 @@ def _label_to_pattern(label: str) -> re.Pattern[str]:
 _TOP_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
     (_label_to_pattern(lab), lab) for lab in LABELS_TOP
 ]
+_TOP_PATTERNS.extend(
+    (_label_to_pattern(alias), canonical)
+    for alias, canonical in _LABEL_VARIANTS_TOP.items()
+)
 _BOTTOM_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
     (_label_to_pattern(lab), lab) for lab in LABELS_BOTTOM
 ]

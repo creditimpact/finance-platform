@@ -38,7 +38,8 @@ _TOOL_RESPONSE_INSTRUCTION = (
 )
 
 _JSON_RESPONSE_INSTRUCTION = (
-    "Respond with a single JSON object only. No explanations. Must be valid JSON."
+    "Return exactly one valid JSON object that matches the schema."
+    " Do not include commentary, prefixes, suffixes, or code fences."
 )
 
 _CONTEXT_HINT_PREFIX = "Context hints: "

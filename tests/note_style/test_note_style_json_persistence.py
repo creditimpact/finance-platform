@@ -134,7 +134,7 @@ def _write_manifest(run_dir: Path, account_ids: list[str]) -> None:
     )
 
 
-@pytest.mark.parametrize("mode", ["json", "tool"])
+@pytest.mark.parametrize("mode", ["content", "json", "tool"])
 def test_note_style_json_persistence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
     sid = "SID900"
     account_ids = ["idx-900", "idx-901", "idx-902"]
@@ -145,7 +145,9 @@ def test_note_style_json_persistence(tmp_path: Path, monkeypatch: pytest.MonkeyP
         _write_response(run_dir, sid, account_id, f"Customer note text #{index}.")
     _write_manifest(run_dir, account_ids)
 
-    response_mode = NoteStyleResponseMode.JSON if mode == "json" else NoteStyleResponseMode.TOOL
+    response_mode = (
+        NoteStyleResponseMode.CONTENT if mode != "tool" else NoteStyleResponseMode.TOOL
+    )
     monkeypatch.setattr(config, "NOTE_STYLE_ENABLED", True)
     monkeypatch.setattr(config, "NOTE_STYLE_AUTOSEND", True)
     monkeypatch.setattr(config, "NOTE_STYLE_RESPONSE_MODE", response_mode)

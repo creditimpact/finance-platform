@@ -3,9 +3,9 @@
 The ``NOTE_STYLE_RESPONSE_MODE`` flag controls how note_style requests ask the
 model to return JSON. It now has two explicit options:
 
-``"json"`` (default)
-    Enforce plain JSON responses by setting ``response_format={"type":
-    "json_object"}`` and disabling tool calls.
+``"content"`` (default)
+    Enforce plain JSON responses delivered in ``assistant.content`` by setting
+    ``response_format={"type": "json_object"}`` and disabling tool calls.
 
 ``"tool"``
     Require tool calls using the configured tool schema and parse responses via
@@ -27,11 +27,11 @@ from . import _coerce_positive_int, _warn_default, env_bool
 class NoteStyleResponseMode(str, Enum):
     """Valid response modes for note_style requests."""
 
-    JSON = "json"
+    CONTENT = "content"
     TOOL = "tool"
 
 
-_DEFAULT_RESPONSE_MODE: Final[NoteStyleResponseMode] = NoteStyleResponseMode.JSON
+_DEFAULT_RESPONSE_MODE: Final[NoteStyleResponseMode] = NoteStyleResponseMode.CONTENT
 
 
 def _normalize_candidate(value: str) -> NoteStyleResponseMode | None:
@@ -44,8 +44,8 @@ def _normalize_candidate(value: str) -> NoteStyleResponseMode | None:
             return mode
 
     # Backwards compatibility with legacy aliases.
-    if normalized == "json_object":
-        return NoteStyleResponseMode.JSON
+    if normalized in {"json", "json_object"}:
+        return NoteStyleResponseMode.CONTENT
 
     return None
 

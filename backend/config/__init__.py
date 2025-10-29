@@ -182,7 +182,10 @@ def _load_keyword_lists() -> Tuple[dict, dict, dict]:
     Returns empty dictionaries when the config file is missing or malformed.
     """
 
-    path = os.getenv("KEYWORDS_CONFIG_PATH", Path(__file__).with_name("keywords.json"))
+    path = os.getenv(
+        "KEYWORDS_CONFIG_PATH",
+        Path(__file__).resolve().parent.parent / "keywords.json",
+    )
     try:
         with open(path, "r", encoding="utf-8") as f:
             data: Any = json.load(f)
@@ -345,7 +348,7 @@ def _default_casestore_dir() -> str:
     else:
         # ``config.py`` lives under ``backend/``; its grandparent is the
         # repository root.
-        base = Path(__file__).resolve().parent.parent / ".cases"
+        base = Path(__file__).resolve().parent.parent.parent / ".cases"
     base.mkdir(parents=True, exist_ok=True)
     return base.as_posix()
 
@@ -429,3 +432,9 @@ except Exception:
 
 RAW_TRIAD_FROM_X = env_bool("RAW_TRIAD_FROM_X", True)
 RAW_JOIN_TOKENS_WITH_SPACE = env.bool("RAW_JOIN_TOKENS_WITH_SPACE", True)
+
+from .note_style import (
+    NOTE_STYLE_RESPONSE_MODE,
+    NOTE_STYLE_RETRY_COUNT,
+    NOTE_STYLE_STRICT_SCHEMA,
+)

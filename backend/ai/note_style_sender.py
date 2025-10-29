@@ -1276,6 +1276,13 @@ def send_note_style_packs_for_sid(
         "<manifest>" if config.NOTE_STYLE_USE_MANIFEST_PATHS else default_glob,
         config.NOTE_STYLE_USE_MANIFEST_PATHS,
     )
+    log.info(
+        "NOTE_STYLE_SEND_CONFIG sid=%s response_mode=%s retry_count=%s strict_schema=%s",
+        sid,
+        config.NOTE_STYLE_RESPONSE_MODE,
+        config.NOTE_STYLE_RETRY_COUNT,
+        int(bool(config.NOTE_STYLE_STRICT_SCHEMA)),
+    )
 
     manifest_candidates: list[_PackCandidate] = []
     if config.NOTE_STYLE_USE_MANIFEST_PATHS:

@@ -130,7 +130,7 @@ def test_chat_completion_invalid_content_raises(client):
     completions = StubChatCompletions(response)
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
 
-    with pytest.raises(AIClientProtocolError):
+    with pytest.raises(ValueError):
         client.chat_completion(messages=[{"role": "user", "content": "hi"}])
 
 
@@ -139,6 +139,6 @@ def test_chat_completion_empty_content_without_tool_raises(client):
     completions = StubChatCompletions(response)
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
 
-    with pytest.raises(AIClientProtocolError):
+    with pytest.raises(ValueError):
         client.chat_completion(messages=[{"role": "user", "content": "hi"}])
 

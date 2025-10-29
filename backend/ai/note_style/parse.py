@@ -156,64 +156,91 @@ def _normalize_note_style_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("note_style payload must be a JSON object")
 
-    # Unwrap accidental envelope
-    if "analysis" in payload and isinstance(payload["analysis"], dict):
-        payload = dict(payload["analysis"])
+    source: Mapping[str, Any] = payload
+    analysis_candidate = payload.get("analysis")
+    if isinstance(analysis_candidate, Mapping):
+        source = analysis_candidate
+
+    candidate = {str(key): value for key, value in dict(source).items()}
+    candidate.pop("analysis", None)
+    candidate.pop("note", None)
+
+    tone_value = candidate.get("tone")
+    tone_text = (
+        _normalize_required_str(tone_value)
+        if tone_value is not None and str(tone_value).strip()
+        else "unspecified"
+    )
+
+    context_value = candidate.get("context_hints")
+    context_payload = context_value if isinstance(context_value, Mapping) else {}
+
+    timeframe_value = (
+        context_payload.get("timeframe")
+        if isinstance(context_payload, Mapping)
+        else {}
+    )
+    timeframe_payload = timeframe_value if isinstance(timeframe_value, Mapping) else {}
+
+    month_value = _normalize_timeframe_month(timeframe_payload.get("month"))
+    if isinstance(month_value, str):
+        month_text = month_value.strip()
+        if month_text.isdigit():
+            try:
+                month_int = int(month_text)
+            except ValueError:
+                pass
+            else:
+                if 1 <= month_int <= 12:
+                    month_value = f"{month_int:02d}"
+    relative_value = _normalize_nullable_str(timeframe_payload.get("relative"))
+
+    topic_value = None
+    if isinstance(context_payload, Mapping):
+        raw_topic = context_payload.get("topic")
+        if raw_topic is not None and str(raw_topic).strip():
+            topic_value = _normalize_required_str(raw_topic)
+    if not topic_value:
+        topic_value = "unspecified"
+
+    entities_value = (
+        context_payload.get("entities")
+        if isinstance(context_payload, Mapping)
+        else {}
+    )
+    entities_payload = entities_value if isinstance(entities_value, Mapping) else {}
+    creditor_value = _normalize_nullable_str(entities_payload.get("creditor"))
+    amount_candidate = _normalize_amount(entities_payload.get("amount"))
+    amount_value: float | None
+    if isinstance(amount_candidate, bool):
+        amount_value = float(amount_candidate)
+    elif isinstance(amount_candidate, (int, float)):
+        amount_value = float(amount_candidate)
+    elif isinstance(amount_candidate, str):
+        match = re.search(r"-?\d+(?:\.\d+)?", amount_candidate)
+        amount_value = float(match.group(0)) if match else None
     else:
-        payload = dict(payload)
+        amount_value = None
 
-    # Drop accidental 'note' key if present
-    payload.pop("note", None)
+    emphasis_list = _normalize_string_list(candidate.get("emphasis"))
+    confidence_candidate = _normalize_confidence_value(candidate.get("confidence"))
+    if isinstance(confidence_candidate, (int, float)):
+        confidence_value = max(0.0, min(1.0, float(confidence_candidate)))
+    else:
+        confidence_value = 0.0
+    risk_flags_list = _normalize_string_list(candidate.get("risk_flags"))
 
-    tone_value = payload.get("tone")
-    if not isinstance(tone_value, str) or not tone_value.strip():
-        payload["tone"] = "unspecified"
-
-    payload.setdefault("context_hints", {})
-
-    if "emphasis" not in payload or payload["emphasis"] is None:
-        payload["emphasis"] = []
-
-    if "confidence" not in payload or payload["confidence"] is None:
-        payload["confidence"] = 0.0
-
-    if "risk_flags" not in payload or payload["risk_flags"] is None:
-        payload["risk_flags"] = []
-
-    ch = payload["context_hints"]
-    if not isinstance(ch, dict):
-        ch = {}
-    payload["context_hints"] = ch
-    ch.setdefault("timeframe", {})
-    ch.setdefault("topic", "unspecified")
-    ch.setdefault("entities", {})
-
-    tf = ch["timeframe"]
-    if not isinstance(tf, dict):
-        tf = {}
-    ch["timeframe"] = tf
-    tf.setdefault("month", None)
-    tf.setdefault("relative", None)
-
-    topic_value = ch.get("topic")
-    if not isinstance(topic_value, str) or not topic_value.strip():
-        ch["topic"] = "unspecified"
-
-    ent = ch["entities"]
-    if not isinstance(ent, dict):
-        ent = {}
-    ch["entities"] = ent
-    ent.setdefault("creditor", None)
-    ent.setdefault("amount", None)
-
-    # Coerce month number → string
-    m = tf.get("month")
-    if isinstance(m, (int, float)) and m == int(m):
-        tf["month"] = f"{int(m):02d}"
-    elif m is not None and not isinstance(m, str):
-        tf["month"] = str(m)
-
-    return payload
+    return {
+        "tone": tone_text,
+        "context_hints": {
+            "timeframe": {"month": month_value, "relative": relative_value},
+            "topic": topic_value,
+            "entities": {"creditor": creditor_value, "amount": amount_value},
+        },
+        "emphasis": emphasis_list,
+        "confidence": confidence_value,
+        "risk_flags": risk_flags_list,
+    }
 
 
 def _normalize_analysis_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:

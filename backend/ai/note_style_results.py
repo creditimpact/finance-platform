@@ -454,7 +454,12 @@ def _normalize_context_section(context: MutableMapping[str, Any]) -> None:
     timeframe_payload = context.get("timeframe")
     if isinstance(timeframe_payload, Mapping):
         timeframe_mutable = _ensure_mutable_mapping(timeframe_payload)
-        month_normalized = _normalize_date_field(timeframe_mutable.get("month"))
+        raw_month = timeframe_mutable.get("month")
+        month_normalized = _normalize_date_field(raw_month)
+        if month_normalized is None:
+            month_numeric = _normalize_month_value(raw_month)
+            if month_numeric is not None:
+                month_normalized = f"{month_numeric:02d}"
         timeframe_mutable["month"] = month_normalized
         relative_value = timeframe_mutable.get("relative")
         if relative_value is None:
@@ -640,8 +645,11 @@ def _prepare_result_for_validation(
             timeframe_payload = context_mutable.get("timeframe")
             if isinstance(timeframe_payload, Mapping):
                 timeframe_mutable = _ensure_mutable_mapping(timeframe_payload)
-                timeframe_mutable["month"] = _normalize_month_value(
+                month_numeric = _normalize_month_value(
                     timeframe_mutable.get("month")
+                )
+                timeframe_mutable["month"] = (
+                    f"{month_numeric:02d}" if month_numeric is not None else None
                 )
                 context_mutable["timeframe"] = timeframe_mutable
 
@@ -1050,8 +1058,9 @@ def _guard_result_analysis(
     if isinstance(context_sanitized, MutableMapping):
         timeframe_sanitized = context_sanitized.get("timeframe")
         if isinstance(timeframe_sanitized, MutableMapping):
-            timeframe_sanitized["month"] = _normalize_month_value(
-                timeframe_sanitized.get("month")
+            month_numeric = _normalize_month_value(timeframe_sanitized.get("month"))
+            timeframe_sanitized["month"] = (
+                f"{month_numeric:02d}" if month_numeric is not None else None
             )
 
     payload["analysis"] = sanitized

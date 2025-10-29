@@ -441,12 +441,31 @@ def _parse_normalized_response_payload(
         json_payload = response_payload.get("tool_json")
     else:
         origin = "message.content"
+        expects_content_json = "content_json" in response_payload
         json_payload = response_payload.get("content_json")
+        if expects_content_json:
+            if json_payload is None:
+                raise ValueError("note_style expects JSON object in content_json, got none")
+            if not isinstance(json_payload, Mapping):
+                raise ValueError("note_style expects JSON object in content_json, got non-object")
 
     if not isinstance(json_payload, Mapping):
         fallback = response_payload.get("json")
-        if isinstance(fallback, Mapping):
+        if isinstance(fallback, Mapping) and (
+            mode == "tool" or "content_json" not in response_payload
+        ):
             json_payload = fallback
+
+    if not isinstance(json_payload, Mapping) and mode != "tool":
+        content_text = response_payload.get("content_text")
+        if isinstance(content_text, str) and content_text.strip():
+            return parse_note_style_response_text(
+                content_text, origin=origin, strict=strict
+            )
+        if "content_text" in response_payload and content_text is None:
+            raise ValueError(
+                "note_style received explicit content_text=None without content_json"
+            )
 
     if isinstance(json_payload, Mapping):
         return _build_validated_response(

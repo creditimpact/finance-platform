@@ -89,6 +89,17 @@ def test_parse_malformed_json_raises() -> None:
     assert exc_info.value.code in {"invalid_schema", "schema_validation_failed", "invalid_json"}
 
 
+def test_parse_missing_content_json_raises_value_error() -> None:
+    payload = _structured_payload()
+    response = _make_response(payload)
+    response["content_json"] = None
+
+    with pytest.raises(ValueError) as exc_info:
+        parse_note_style_response_payload(response)
+
+    assert "content_json" in str(exc_info.value)
+
+
 def test_parse_uses_tool_call_arguments_when_content_missing() -> None:
     payload = _structured_payload()
     response = _make_tool_response(payload)

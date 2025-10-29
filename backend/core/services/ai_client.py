@@ -171,6 +171,12 @@ class AIClient:
             if not using_tools:
                 kwargs.setdefault("response_format", {"type": "json_object"})
 
+        response_format = kwargs.get("response_format")
+        wants_json_object = bool(
+            isinstance(response_format, Mapping)
+            and response_format.get("type") == "json_object"
+        )
+
         resp = self._client.chat.completions.create(
             model=model,
             messages=messages,
@@ -269,6 +275,10 @@ class AIClient:
             return parsed_payload
 
         content_payload = getattr(message, "content", None)
+
+        if wants_json_object and content_payload is None:
+            raise ValueError("json_object expected in message.content but got None (tool call?)")
+
         raw_content = _payload_to_text(content_payload)
 
         mode: str | None = None
@@ -278,7 +288,19 @@ class AIClient:
         tool_calls = getattr(message, "tool_calls", None)
         preferred_tool_mode = is_note_style_request and not forced_json_mode
         content_text = (raw_content or "").strip() if isinstance(raw_content, str) else None
-        if preferred_tool_mode and tool_calls:
+        if wants_json_object:
+            if raw_content is None:
+                raise AIClientProtocolError("message.content missing JSON payload")
+            content_text = raw_content.strip()
+            if not content_text:
+                raise AIClientProtocolError("message.content missing JSON payload")
+            parsed_json = _parse_json_object(
+                content_text,
+                context="message.content",
+                allow_recovery=True,
+            )
+            mode = "content"
+        elif preferred_tool_mode and tool_calls:
             first_call = tool_calls[0]
             arguments = getattr(getattr(first_call, "function", object()), "arguments", None)
             raw_tool_arguments = _payload_to_text(arguments)

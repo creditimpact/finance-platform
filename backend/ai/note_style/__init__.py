@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 
 from backend import config
 from backend.ai.manifest import ensure_note_style_section
+from backend.ai.note_style.schema import NoteStyleResult, to_json, validate_result
 from backend.ai.note_style_stage import (
     build_note_style_pack_for_account,
     discover_note_style_response_accounts,
@@ -369,5 +370,8 @@ __all__ = [
     "schedule_prepare_and_send",
     "schedule_send_for_sid",
     "schedule_send_for_account",
+    "NoteStyleResult",
+    "validate_result",
+    "to_json",
 ]
 

@@ -1550,6 +1550,16 @@ def _send_pack_payload(
             )
             latency = time.perf_counter() - start
             final_latency = latency
+            response_format_payload = call_kwargs.get("response_format")
+            if (
+                isinstance(response_format_payload, Mapping)
+                and response_format_payload.get("type") == "json_object"
+                and not isinstance(response.get("content_json"), Mapping)
+            ):
+                log.warning(
+                    "NOTE_STYLE: json_object expected but wrapper returned no content_json keys=%s",
+                    sorted(response.keys()),
+                )
             log.info(
                 "STYLE_SEND_MODEL_CALL sid=%s account_id=%s model=%s status=success attempt=%d latency=%.3fs",
                 sid,

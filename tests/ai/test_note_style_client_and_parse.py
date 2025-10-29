@@ -8,7 +8,8 @@ import pytest
 from backend.ai.note_style.parse import NoteStyleParseError, parse_note_style_response_payload
 from backend.ai.note_style_ingest import ingest_note_style_result
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
-from backend.core.services.ai_client import AIClient, AIClientProtocolError, AIConfig
+from backend.core.services.ai_client import AIClient, AIClientProtocolError
+from backend.core.services.ai_config import AIConfig
 from backend.util.json_tools import try_fix_to_json
 
 

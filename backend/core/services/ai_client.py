@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Iterator, List, Tuple
 
 from openai import OpenAI
 
-# from backend.ai.note_style.schema import build_note_style_tool
 from backend.config import note_style as note_cfg
+from backend.core.services.ai_config import AIConfig
 
 
 logger = logging.getLogger(__name__)
@@ -21,18 +20,6 @@ def _maybe_build_tools(mode: str):
 
         return [build_note_style_tool()]
     return None
-
-
-@dataclass
-class AIConfig:
-    """Configuration for :class:`AIClient`."""
-
-    api_key: str
-    base_url: str = "https://api.openai.com/v1"
-    chat_model: str = "gpt-4"
-    response_model: str = "gpt-4.1-mini"
-    timeout: float | None = None
-    max_retries: int = 0
 
 
 class AIClientProtocolError(RuntimeError):

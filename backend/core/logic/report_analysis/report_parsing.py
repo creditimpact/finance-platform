@@ -186,6 +186,9 @@ ALIAS_TO_STD: dict[str, str] = {
     "dispute": "dispute_status",
     "dispute flag": "dispute_status",
     "account dispute status": "dispute_status",
+    "original creditor": "original_creditor",
+    "originalcreditor": "original_creditor",
+    "orig creditor": "original_creditor",
     # Remarks
     "creditor remarks": "creditor_remarks",
     "remarks": "creditor_remarks",
@@ -412,6 +415,7 @@ _DETAIL_LABELS: list[tuple[str, re.Pattern[str]]] = [
     ("account_description", re.compile(r"account\s*description", re.I)),
     ("dispute_status", re.compile(r"dispute\s*status", re.I)),
     ("creditor_type", re.compile(r"creditor\s*type", re.I)),
+    ("original_creditor", re.compile(r"original\s*creditor", re.I)),
     ("account_status", re.compile(r"account\s*status", re.I)),
     ("payment_status", re.compile(r"payment\s*status", re.I)),
     ("creditor_remarks", re.compile(r"creditor\s*remarks?", re.I)),

@@ -8,11 +8,19 @@ from typing import Any, Dict, Iterable, Iterator, List, Tuple
 
 from openai import OpenAI
 
-from backend.ai.note_style.schema import build_note_style_tool
+# from backend.ai.note_style.schema import build_note_style_tool
 from backend.config import note_style as note_cfg
 
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_build_tools(mode: str):
+    if mode == "tool":
+        from backend.ai.note_style.schema import build_note_style_tool
+
+        return [build_note_style_tool()]
+    return None
 
 
 @dataclass
@@ -168,7 +176,9 @@ class AIClient:
                 kwargs["response_format"] = {"type": "json_object"}
             else:
                 kwargs["response_format"] = {"type": "json_object"}
-                kwargs.setdefault("tools", [build_note_style_tool()])
+                tools = _maybe_build_tools("tool")
+                if tools is not None:
+                    kwargs.setdefault("tools", tools)
         else:
             using_tools = bool(kwargs.get("tools"))
             if not using_tools:

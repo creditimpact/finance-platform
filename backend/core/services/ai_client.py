@@ -7,21 +7,10 @@ from typing import Any, Dict, Iterable, Iterator, List, Tuple
 
 from openai import OpenAI
 
-from backend.config import note_style as note_cfg
 from backend.core.services.ai_config import AIConfig
 
 
 logger = logging.getLogger(__name__)
-
-
-def _maybe_build_tools(mode: str):
-    if mode == "tool":
-        from backend.ai.note_style.schema import build_note_style_tool
-
-        return [build_note_style_tool()]
-    return None
-
-
 class AIClientProtocolError(RuntimeError):
     """Raised when the OpenAI response violates the expected protocol."""
 
@@ -148,30 +137,10 @@ class AIClient:
         top_p_value = top_p
 
         is_note_style_request = bool(kwargs.pop("_note_style_request", False))
-        configured_mode = getattr(
-            note_cfg.NOTE_STYLE_RESPONSE_MODE, "value", note_cfg.NOTE_STYLE_RESPONSE_MODE
-        )
-        normalized_mode = str(configured_mode).strip().lower()
-        allow_tool_calls = bool(
-            note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS and note_cfg.NOTE_STYLE_ALLOW_TOOLS
-        )
-        wants_tool_mode = allow_tool_calls and normalized_mode == "tool"
-
         if is_note_style_request:
-            existing_response_format = kwargs.get("response_format")
-            forces_json_object = (
-                isinstance(existing_response_format, Mapping)
-                and existing_response_format.get("type") == "json_object"
-            )
-            if wants_tool_mode and not forces_json_object:
-                kwargs.pop("response_format", None)
-                tools = _maybe_build_tools("tool")
-                if tools is not None:
-                    kwargs.setdefault("tools", tools)
-            else:
-                kwargs["response_format"] = {"type": "json_object"}
-                kwargs.pop("tools", None)
-                kwargs.pop("tool_choice", None)
+            kwargs["response_format"] = {"type": "json_object"}
+            kwargs.pop("tools", None)
+            kwargs.pop("tool_choice", None)
         else:
             using_tools = bool(kwargs.get("tools"))
             if not using_tools:
@@ -288,20 +257,25 @@ class AIClient:
         raw_tool_arguments = None
 
         tool_calls = getattr(message, "tool_calls", None)
-        preferred_tool_mode = is_note_style_request and wants_tool_mode
 
         if wants_json_object:
             raw_content = _payload_to_text(content_payload)
             if raw_content is None:
-                raise ValueError(
+                raise AIClientProtocolError(
                     "json_object expected in message.content but got None (tool call?)"
                 )
             try:
                 parsed = json.loads(raw_content)
+            except json.JSONDecodeError as exc:
+                raise AIClientProtocolError(
+                    "json_object response was not valid JSON"
+                ) from exc
             except Exception as exc:  # pragma: no cover - defensive
-                raise ValueError(f"json_object parsing failed: {exc}") from exc
+                raise AIClientProtocolError(
+                    f"json_object parsing failed: {exc}"
+                ) from exc
             if not isinstance(parsed, dict):
-                raise ValueError("json_object expected a JSON object")
+                raise AIClientProtocolError("json_object expected a JSON object")
             parsed_json = parsed
             mode = "content"
         else:
@@ -309,22 +283,7 @@ class AIClient:
 
         content_text = (raw_content or "").strip() if isinstance(raw_content, str) else None
         if not wants_json_object:
-            if preferred_tool_mode and tool_calls:
-                first_call = tool_calls[0]
-                arguments = getattr(getattr(first_call, "function", object()), "arguments", None)
-                raw_tool_arguments = _payload_to_text(arguments)
-                arguments_text = (
-                    raw_tool_arguments.strip() if isinstance(raw_tool_arguments, str) else None
-                )
-                if not arguments_text:
-                    raise AIClientProtocolError("Tool call arguments missing JSON payload")
-                parsed_json = _parse_json_object(
-                    arguments_text,
-                    context="message.tool_calls[0].function.arguments",
-                    allow_recovery=False,
-                )
-                mode = "tool"
-            elif content_text:
+            if content_text:
                 parsed_json = _parse_json_object(
                     content_text,
                     context="message.content",
@@ -349,7 +308,7 @@ class AIClient:
 
         if parsed_json is None:
             if wants_json_object:
-                raise ValueError("json_object parsing produced no payload")
+                raise AIClientProtocolError("json_object parsing produced no payload")
             raise AIClientProtocolError("No content or tool_calls in response")
 
         content_text_value = None

@@ -1,8 +1,11 @@
+import pytest
+
 from backend.util.json_tools import try_fix_to_json
 
 
-def test_try_fix_to_json_returns_none_for_none():
-    assert try_fix_to_json(None) is None
+def test_try_fix_to_json_raises_for_none():
+    with pytest.raises(ValueError):
+        try_fix_to_json(None)
 
 
 def test_try_fix_to_json_extracts_fenced_block():

@@ -11,10 +11,13 @@ def try_fix_to_json(text: str | None) -> Dict[str, Any] | None:
 
     Returns:
         dict | None: Parsed JSON object when extraction succeeds, otherwise ``None``.
+
+    Raises:
+        ValueError: If ``text`` is ``None``.
     """
 
     if text is None:
-        return None
+        raise ValueError("Cannot coerce JSON from None input")
 
     if not isinstance(text, str):  # Defensive guard for unexpected payloads.
         return None

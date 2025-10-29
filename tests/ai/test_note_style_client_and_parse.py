@@ -256,7 +256,8 @@ def test_chat_completion_handles_tool_arguments_mapping(monkeypatch: pytest.Monk
 
 
 def test_try_fix_to_json_handles_none() -> None:
-    assert try_fix_to_json(None) is None
+    with pytest.raises(ValueError):
+        try_fix_to_json(None)
 
 
 def test_contract_breach_returns_parse_error(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping
 
+from backend.ai.manifest import update_note_style_stage_status
 from backend.ai.note_style.io import note_style_stage_view
 from backend.ai.note_style.parse import parse_note_style_response_payload
 from backend.ai.note_style_results import (
@@ -15,7 +16,6 @@ from backend.ai.note_style_results import (
 )
 from backend.core.ai.paths import NoteStyleAccountPaths
 from backend.note_style.validator import validate_analysis_payload
-from backend.runflow.manifest import update_note_style_stage_status
 
 
 log = logging.getLogger(__name__)

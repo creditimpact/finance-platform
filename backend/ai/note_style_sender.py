@@ -174,7 +174,9 @@ def _describe_tool_choice(tool_choice: Any, tools: Any) -> str | None:
     return None
 
 
-def _resolve_request_metadata(response_kwargs: Mapping[str, Any]) -> dict[str, Any]:
+def _resolve_request_metadata(
+    response_kwargs: Mapping[str, Any], *, mode: str | None = None
+) -> dict[str, Any]:
     response_format = None
     tool_choice = None
     if "response_format" in response_kwargs:
@@ -187,6 +189,7 @@ def _resolve_request_metadata(response_kwargs: Mapping[str, Any]) -> dict[str, A
     return {
         "response_format": response_format,
         "tool_choice": tool_choice,
+        "mode": mode,
     }
 
 
@@ -195,6 +198,7 @@ def _build_response_metrics(
     *,
     response_format: str | None,
     tool_choice: str | None,
+    mode: str | None,
 ) -> dict[str, Any]:
     request_id = _coerce_attr(response_payload, "id")
     usage = _coerce_attr(response_payload, "usage")
@@ -214,6 +218,7 @@ def _build_response_metrics(
         "response_tokens": response_tokens,
         "response_format": response_format,
         "tool_choice": tool_choice,
+        "mode": mode,
     }
 
 
@@ -244,6 +249,9 @@ def _log_pack_request_metrics(
             value = metrics.get(key)
             if value is not None:
                 payload[key] = value
+        mode_value = metrics.get("mode")
+        if mode_value is not None:
+            payload["mode"] = mode_value
         for key in ("prompt_tokens", "response_tokens"):
             value = metrics.get(key)
             if value is not None:
@@ -502,22 +510,77 @@ def _messages_for_attempt(
     return messages
 
 
+def _normalize_response_mode(value: str | None) -> str:
+    if not value:
+        return "tool"
+    normalized = str(value).strip().lower()
+    if normalized in {"tool", "json_object", "prompt_only"}:
+        return normalized
+    return "tool"
+
+
+def _determine_request_mode(
+    *,
+    base_mode: str,
+    attempt_index: int,
+    enable_tool_call_retry: bool,
+    has_response_format: bool,
+) -> str:
+    if attempt_index <= 0:
+        return base_mode
+
+    if base_mode == "tool":
+        if enable_tool_call_retry:
+            return "tool"
+        if has_response_format:
+            return "json_object"
+        return "tool"
+
+    if base_mode == "json_object":
+        if enable_tool_call_retry:
+            return "tool"
+        return "json_object"
+
+    if base_mode == "prompt_only":
+        if enable_tool_call_retry:
+            return "tool"
+        if has_response_format:
+            return "json_object"
+        return "prompt_only"
+
+    return base_mode
+
+
 def _response_kwargs_for_attempt(
     response_format: Mapping[str, Any] | None,
     attempt_index: int,
     *,
+    response_mode: str,
     enable_tool_call_retry: bool,
-) -> dict[str, Any]:
-    if enable_tool_call_retry and attempt_index >= 2:
-        return {
-            "tools": [_build_tool_payload()],
-            "tool_choice": dict(_build_tool_choice()),
-        }
+) -> tuple[dict[str, Any], str]:
+    normalized_mode = _normalize_response_mode(response_mode)
+    has_format = response_format is not None
+    request_mode = _determine_request_mode(
+        base_mode=normalized_mode,
+        attempt_index=attempt_index,
+        enable_tool_call_retry=enable_tool_call_retry,
+        has_response_format=has_format,
+    )
 
-    if response_format is None:
-        return {}
+    if request_mode == "tool":
+        return (
+            {
+                "tools": [_build_tool_payload()],
+                "tool_choice": dict(_build_tool_choice()),
+            },
+            request_mode,
+        )
 
-    return {"response_format": copy.deepcopy(response_format)}
+    if request_mode == "json_object":
+        payload = response_format or {"type": "json_object"}
+        return ({"response_format": copy.deepcopy(payload)}, request_mode)
+
+    return ({}, request_mode)
 
 
 def _relativize(path: Path, base: Path) -> str:
@@ -1166,6 +1229,7 @@ def _send_pack_payload(
     messages = _coerce_messages(pack_payload)
 
     response_format = _coerce_response_format(pack_payload)
+    response_mode = config.NOTE_STYLE_RESPONSE_MODE
 
     retry_attempts = max(0, int(config.NOTE_STYLE_INVALID_RESULT_RETRY_ATTEMPTS))
     enable_tool_call_retry = bool(config.NOTE_STYLE_INVALID_RESULT_RETRY_TOOL_CALL)
@@ -1248,13 +1312,16 @@ def _send_pack_payload(
 
     for attempt_index in range(total_attempts):
         attempt_messages = _messages_for_attempt(messages, attempt_index)
-        response_kwargs = _response_kwargs_for_attempt(
+        response_kwargs, request_mode = _response_kwargs_for_attempt(
             response_format,
             attempt_index,
+            response_mode=response_mode,
             enable_tool_call_retry=enable_tool_call_retry,
         )
         response_kwargs.setdefault("max_tokens", _NOTE_STYLE_RESPONSE_MAX_TOKENS)
-        request_metadata = _resolve_request_metadata(response_kwargs)
+        request_metadata = _resolve_request_metadata(
+            response_kwargs, mode=request_mode
+        )
 
         response_metrics: Mapping[str, Any] | None = None
         start = time.perf_counter()
@@ -1279,6 +1346,7 @@ def _send_pack_payload(
                 response,
                 response_format=request_metadata.get("response_format"),
                 tool_choice=request_metadata.get("tool_choice"),
+                mode=request_mode,
             )
         except Exception as exc:
             latency = time.perf_counter() - start

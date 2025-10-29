@@ -1091,7 +1091,7 @@ def test_note_style_pack_for_account_uses_manifest_paths(
 
 
 
-def test_note_style_sender_uses_tools_when_env_enabled(
+def test_note_style_sender_enforces_json_mode_even_when_tool_env_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1181,8 +1181,8 @@ def test_note_style_sender_uses_tools_when_env_enabled(
     assert processed == [account_id]
     assert len(client.calls) == 1
     call_kwargs = client.calls[0]["kwargs"]
-    assert "tools" in call_kwargs
-    assert call_kwargs.get("response_format") is None
+    assert "tools" not in call_kwargs
+    assert call_kwargs.get("response_format") == {"type": "json_object"}
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)

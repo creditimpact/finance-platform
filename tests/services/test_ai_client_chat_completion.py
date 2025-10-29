@@ -73,6 +73,7 @@ def test_chat_completion_content_mode(client):
     assert result[1] == {"key": "value"}
     assert result["mode"] == "content"
     assert result["content_json"] == {"key": "value"}
+    assert result["content_text"] is None
     assert result["tool_json"] is None
     assert result["json"] == {"key": "value"}
     assert result["raw"] is response
@@ -97,6 +98,7 @@ def test_chat_completion_tool_mode(client):
     assert result[1] == {"tool": True}
     assert result["mode"] == "tool"
     assert result["content_json"] is None
+    assert result["content_text"] is None
     assert result["tool_json"] == {"tool": True}
     assert result["json"] == {"tool": True}
     assert result["raw_content"] is None
@@ -118,6 +120,7 @@ def test_chat_completion_tool_mode_with_dict_arguments(client):
     assert isinstance(result, ChatCompletionResult)
     assert result["mode"] == "tool"
     assert result["content_json"] is None
+    assert result["content_text"] is None
     assert result["tool_json"] == payload
     assert result["json"] == payload
     expected_raw = json.dumps(payload, ensure_ascii=False)

@@ -39,6 +39,7 @@ STAGEA_REQUIRED_FIELDS = [
     "account_rating",
     "account_description",
     "creditor_remarks",
+    "original_creditor",
     "account_type",
     "creditor_type",
     "dispute_status",

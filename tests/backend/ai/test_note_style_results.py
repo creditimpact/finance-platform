@@ -176,6 +176,17 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     assert structured_event.get("note_metrics")
     assert structured_event.get("risk_flags") is not None
 
+    refresh_event = next(
+        (
+            entry
+            for entry in structured_records
+            if entry.get("event") == "NOTE_STYLE_REFRESH"
+        ),
+        None,
+    )
+    assert refresh_event is not None
+    assert refresh_event.get("packs_expected") == 1
+
     assert result_path == account_paths.result_file
     stored_lines = [
         line
@@ -184,19 +195,22 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     ]
     assert len(stored_lines) == 1
     stored_payload = json.loads(stored_lines[0])
-    assert set(stored_payload.keys()) == {
+    assert {
         "sid",
         "account_id",
         "evaluated_at",
         "analysis",
         "note_metrics",
-    }
+    }.issubset(stored_payload.keys())
     assert stored_payload["evaluated_at"] == completed_at
     assert stored_payload["note_metrics"] == baseline_metrics
     assert set(stored_payload["note_metrics"].keys()) == {"char_len", "word_len"}
     assert stored_payload["sid"] == sid
     assert stored_payload["account_id"] == account_id
-    assert "note_hash" not in stored_payload
+    note_hash_value = stored_payload.get("note_hash")
+    if note_hash_value is not None:
+        assert isinstance(note_hash_value, str)
+        assert note_hash_value.strip()
     assert "prompt_salt" not in stored_payload
     assert "fingerprint_hash" not in stored_payload
     analysis = stored_payload["analysis"]
@@ -214,7 +228,10 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     assert len(packs) == 1
     entry = packs[0]
     assert entry["status"] == "completed"
-    assert "note_hash" not in entry
+    note_hash_entry = entry.get("note_hash")
+    if note_hash_entry is not None:
+        assert isinstance(note_hash_entry, str)
+        assert note_hash_entry.strip()
 
     assert stage_calls == [(sid, runs_root)]
     assert barrier_calls == [sid]

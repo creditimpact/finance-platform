@@ -226,6 +226,17 @@ def test_note_style_sender_sends_built_pack(
         for entry in structured_records
     )
 
+    metrics_events = [
+        entry
+        for entry in structured_records
+        if entry.get("event") == "NOTE_STYLE_MODEL_METRICS"
+    ]
+    assert metrics_events, "Expected model metrics event"
+    metrics_entry = metrics_events[0]
+    assert metrics_entry.get("parse_ok") is True
+    assert metrics_entry.get("retry_count") == 0
+    assert metrics_entry.get("model") == config.NOTE_STYLE_MODEL
+
     call_kwargs = client.calls[0]["kwargs"]
     assert call_kwargs.get("response_format") == {"type": "json_object"}
 
@@ -341,6 +352,17 @@ def test_note_style_sender_retries_on_invalid_result(
         if entry.get("event") == "NOTE_STYLE_SENT"
     ]
     assert sent_events and sent_events[0]["retries_used"] == 1
+
+    metrics_events = [
+        entry
+        for entry in structured_records
+        if entry.get("event") == "NOTE_STYLE_MODEL_METRICS"
+    ]
+    assert metrics_events, "Expected model metrics event on retry"
+    metrics_entry = metrics_events[-1]
+    assert metrics_entry.get("parse_ok") is True
+    assert metrics_entry.get("retry_count") == 1
+
 
 
 def test_note_style_sender_accepts_string_runs_root(

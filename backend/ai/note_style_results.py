@@ -15,6 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
+from backend import config
 from backend.ai.manifest import (
     ensure_note_style_section,
     update_note_style_stage_status,
@@ -38,6 +39,32 @@ from backend.runflow.decider import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _normalize_global_result_basename() -> None:
+    template = getattr(config, "NOTE_STYLE_RESULTS_BASENAME", "")
+    if not isinstance(template, str):
+        return
+
+    normalized_template = template
+    if template.endswith(".result.jsonl"):
+        normalized_template = template[: -len(".result.jsonl")] + ".jsonl"
+    elif template.endswith(".result"):
+        normalized_template = template[: -len(".result")] + ".jsonl"
+
+    if normalized_template != template:
+        try:
+            config.NOTE_STYLE_RESULTS_BASENAME = normalized_template
+        except Exception:
+            log.debug(
+                "NOTE_STYLE_RESULTS_BASENAME_UPDATE_FAILED original=%s normalized=%s",
+                template,
+                normalized_template,
+                exc_info=True,
+            )
+
+
+_normalize_global_result_basename()
 
 
 _SHORT_NOTE_WORD_LIMIT = 12
@@ -135,6 +162,63 @@ def _atomic_write_jsonl(path: Path, payload: Mapping[str, Any]) -> int:
             pass
     _fsync_directory(path.parent)
     return len(data)
+
+
+_RESULT_JSONL_SUFFIX = ".jsonl"
+_LEGACY_RESULT_SUFFIX = ".result"
+_LEGACY_RESULT_JSONL_SUFFIX = f"{_LEGACY_RESULT_SUFFIX}{_RESULT_JSONL_SUFFIX}"
+
+
+def _account_result_jsonl_path(account_paths: NoteStyleAccountPaths) -> Path:
+    """Return the canonical ``.jsonl`` result path for ``account_paths``.
+
+    Previous iterations of the pipeline persisted note_style results with a
+    ``.result`` or ``.result.jsonl`` suffix. To ensure the new JSONL contract is
+    respected while maintaining backwards compatibility we normalize the
+    expected path and opportunistically migrate any legacy artifact when the new
+    file does not yet exist.
+    """
+
+    result_path = account_paths.result_file
+    name = result_path.name
+
+    if name.endswith(_LEGACY_RESULT_JSONL_SUFFIX):
+        desired_path = result_path.with_name(
+            name[: -len(_LEGACY_RESULT_JSONL_SUFFIX)] + _RESULT_JSONL_SUFFIX
+        )
+    elif name.endswith(_LEGACY_RESULT_SUFFIX):
+        desired_path = result_path.with_name(
+            name[: -len(_LEGACY_RESULT_SUFFIX)] + _RESULT_JSONL_SUFFIX
+        )
+    elif result_path.suffix != _RESULT_JSONL_SUFFIX:
+        desired_path = result_path.with_suffix(_RESULT_JSONL_SUFFIX)
+    else:
+        desired_path = result_path
+
+    desired_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if desired_path != result_path:
+        if result_path.exists() and not desired_path.exists():
+            try:
+                os.replace(result_path, desired_path)
+            except OSError:
+                log.warning(
+                    "NOTE_STYLE_RESULT_RENAME_FAILED old_path=%s new_path=%s",
+                    result_path,
+                    desired_path,
+                    exc_info=True,
+                )
+        try:
+            object.__setattr__(account_paths, "result_file", desired_path)
+        except Exception:
+            log.debug(
+                "NOTE_STYLE_RESULT_PATH_MUTATION_FAILED old_path=%s new_path=%s",
+                result_path,
+                desired_path,
+                exc_info=True,
+            )
+
+    return desired_path
 
 
 def _to_snake_case(value: Any) -> str:
@@ -948,7 +1032,8 @@ def _validate_result_payload(
     missing_artifacts: list[str] = []
     if not account_paths.pack_file.exists():
         missing_artifacts.append("pack")
-    if not account_paths.result_file.exists():
+    result_file_path = _account_result_jsonl_path(account_paths)
+    if not result_file_path.exists():
         missing_artifacts.append("result")
 
     if not missing_fields and not missing_artifacts:
@@ -1439,6 +1524,7 @@ def complete_note_style_result(
     )
 
     writer = NoteStyleIndexWriter(sid=sid, paths=resolved_paths)
+    result_file_path = _account_result_jsonl_path(resolved_account_paths)
     (
         updated_entry,
         totals,
@@ -1448,7 +1534,7 @@ def complete_note_style_result(
     ) = writer.mark_completed(
         account_id,
         pack_path=resolved_account_paths.pack_file,
-        result_path=resolved_account_paths.result_file,
+        result_path=result_file_path,
         completed_at=completed_at,
     )
 
@@ -1490,6 +1576,7 @@ def store_note_style_result(
     ensure_note_style_section(sid, runs_root=runs_root_path)
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
+    result_file_path = _account_result_jsonl_path(account_paths)
 
     normalized_payload = _normalize_result_payload(payload)
 
@@ -1527,7 +1614,7 @@ def store_note_style_result(
         payload=normalized_payload,
     )
 
-    bytes_written = _atomic_write_jsonl(account_paths.result_file, normalized_payload)
+    bytes_written = _atomic_write_jsonl(result_file_path, normalized_payload)
     _validate_result_payload(
         sid=sid,
         account_id=account_id,
@@ -1535,7 +1622,7 @@ def store_note_style_result(
         account_paths=account_paths,
         payload=normalized_payload,
     )
-    result_relative = _relative_to_base(account_paths.result_file, paths.base)
+    result_relative = _relative_to_base(result_file_path, paths.base)
     log.info(
         "NOTE_STYLE_PARSED sid=%s account_id=%s path=%s bytes=%d",
         sid,
@@ -1581,7 +1668,7 @@ def store_note_style_result(
             completed_at=completed_at,
         )
 
-    return account_paths.result_file
+    return result_file_path
 
 
 def record_note_style_failure(
@@ -1602,7 +1689,7 @@ def record_note_style_failure(
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
-    failure_path = account_paths.result_file
+    failure_path = _account_result_jsonl_path(account_paths)
     failure_payload: dict[str, Any] = {
         "status": "failed",
         "error": (str(error).strip() or "error") if error is not None else "error",

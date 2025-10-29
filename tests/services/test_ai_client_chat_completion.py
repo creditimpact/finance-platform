@@ -8,9 +8,9 @@ import pytest
 from backend.core.services.ai_client import (
     AIClient,
     AIClientProtocolError,
-    AIConfig,
     ChatCompletionResult,
 )
+from backend.core.services.ai_config import AIConfig
 
 
 class StubChatCompletions:

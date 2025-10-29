@@ -2,7 +2,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 
-from backend.core.services.ai_client import AIConfig
+from backend.core.services.ai_config import AIConfig
 
 _logger = logging.getLogger("config")
 if not _logger.handlers:

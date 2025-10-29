@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
-from backend.core.services.ai_client import AIClient, AIConfig
+from backend.core.services.ai_client import AIClient
+from backend.core.services.ai_config import AIConfig
 
 
 def test_extra_headers_sanitized():

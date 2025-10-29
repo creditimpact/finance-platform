@@ -26,7 +26,7 @@ from backend.ai.note_style.io import (
     note_style_snapshot,
     note_style_stage_view,
 )
-from backend.ai.note_style.prompt import build_response_instruction
+from backend.ai.note_style.prompt import NOTE_STYLE_SYSTEM
 from backend.ai.note_style_logging import log_note_style_decision
 from backend.core.ai.paths import (
     NoteStylePaths,
@@ -43,21 +43,7 @@ from backend.runflow.decider import record_stage
 log = logging.getLogger(__name__)
 
 
-_NOTE_STYLE_SYSTEM_PROMPT = (
-    "You analyze customer notes and output JSON ONLY.\n"
-    "Return exactly one object with this schema: {\"tone\": string, "
-    "\"context_hints\": {\"timeframe\": {\"month\": string|null, \"relative\": string|null}, "
-    "\"topic\": string, \"entities\": {\"creditor\": string|null, \"amount\": number|null}}, "
-    "\"emphasis\": [string], \"confidence\": number, \"risk_flags\": [string]}.\n"
-    "Rules:\n"
-    "- Base output ONLY on context.note_text; treat other fields as hints, do not restate them as facts.\n"
-    "- Keep every value short; lists ≤ 6 items.\n"
-    "- If note is empty/meaningless → tone='neutral', topic='unspecified', confidence ≤ 0.2, add risk_flags ['empty_note'].\n"
-    "- If a legal claim is asserted without supporting docs mentioned → add ['unsupported_claim'].\n"
-    "- Calibrate confidence: short/ambiguous notes ≤ 0.5.\n"
-    "Do not include explanations or extra keys.\n"
-    f"{build_response_instruction(use_tools=False)}"
-)
+_NOTE_STYLE_SYSTEM_PROMPT = NOTE_STYLE_SYSTEM
 
 _NOTE_KEYS = {
     "note",

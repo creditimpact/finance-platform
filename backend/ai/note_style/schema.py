@@ -92,7 +92,7 @@ class NoteStyleTimeframe(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    month: conint(ge=1, le=12) | None = Field(default=None)
+    month: constr(strip_whitespace=True, min_length=1) | None = Field(default=None)
     relative: constr(strip_whitespace=True, min_length=1) | None = None
 
 

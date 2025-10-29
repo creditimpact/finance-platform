@@ -23,6 +23,144 @@ _REQUIRED_TIMEFRAME_KEYS = ("month", "relative")
 _REQUIRED_ENTITY_KEYS = ("creditor", "amount")
 
 
+def _normalize_nullable_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_required_str(value: Any) -> str:
+    return str(value).strip()
+
+
+def _normalize_timeframe_month(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not value.is_integer():
+            return str(value)
+        month_int = int(value)
+        if 1 <= month_int <= 12:
+            return f"{month_int:02d}"
+        return str(month_int)
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_amount(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    cleaned = text.replace(",", "")
+    if cleaned.startswith("$"):
+        cleaned = cleaned[1:]
+    try:
+        return float(cleaned)
+    except ValueError:
+        return value
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        entry = value.strip()
+        return [entry] if entry else []
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        normalized: list[str] = []
+        for item in value:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text:
+                normalized.append(text)
+        return normalized
+    return []
+
+
+def _normalize_confidence_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return value
+        try:
+            return float(text)
+        except ValueError:
+            return value
+    return value
+
+
+def _normalize_analysis_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    if not isinstance(payload, Mapping):
+        return payload
+
+    normalized: dict[str, Any] = {}
+
+    if "tone" in payload:
+        tone_value = payload.get("tone")
+        if tone_value is not None:
+            normalized["tone"] = _normalize_required_str(tone_value)
+
+    context_value = payload.get("context_hints")
+    if isinstance(context_value, Mapping):
+        context_normalized: dict[str, Any] = {}
+
+        timeframe_value = context_value.get("timeframe")
+        if isinstance(timeframe_value, Mapping):
+            timeframe_normalized: dict[str, Any] = {}
+            if "month" in timeframe_value:
+                timeframe_normalized["month"] = _normalize_timeframe_month(
+                    timeframe_value.get("month")
+                )
+            if "relative" in timeframe_value:
+                timeframe_normalized["relative"] = _normalize_nullable_str(
+                    timeframe_value.get("relative")
+                )
+            context_normalized["timeframe"] = timeframe_normalized
+
+        topic_value = context_value.get("topic")
+        if topic_value is not None:
+            context_normalized["topic"] = _normalize_required_str(topic_value)
+
+        entities_value = context_value.get("entities")
+        if isinstance(entities_value, Mapping):
+            entities_normalized: dict[str, Any] = {}
+            if "creditor" in entities_value:
+                entities_normalized["creditor"] = _normalize_nullable_str(
+                    entities_value.get("creditor")
+                )
+            if "amount" in entities_value:
+                entities_normalized["amount"] = _normalize_amount(
+                    entities_value.get("amount")
+                )
+            context_normalized["entities"] = entities_normalized
+
+        if context_normalized:
+            normalized["context_hints"] = context_normalized
+
+    if "emphasis" in payload:
+        normalized["emphasis"] = _normalize_string_list(payload.get("emphasis"))
+
+    if "confidence" in payload:
+        normalized["confidence"] = _normalize_confidence_value(payload.get("confidence"))
+
+    if "risk_flags" in payload:
+        normalized["risk_flags"] = _normalize_string_list(payload.get("risk_flags"))
+
+    return normalized
+
+
 @dataclass(frozen=True)
 class NoteStyleParsedResponse:
     """Represents a successfully parsed note_style response."""
@@ -340,11 +478,15 @@ def parse_note_style_response_text(
             continue
 
         analysis_payload, path = _resolve_analysis_payload(payload)
-        valid, errors = _schema_validate(analysis_payload)
+        normalized_analysis = _normalize_analysis_payload(analysis_payload)
+        if path == "analysis" and isinstance(payload, MutableMapping):
+            payload = dict(payload)
+            payload["analysis"] = normalized_analysis
+        valid, errors = _schema_validate(normalized_analysis)
         if valid:
             response = NoteStyleParsedResponse(
                 payload=payload,
-                analysis=analysis_payload,
+                analysis=normalized_analysis,
                 source=f"{origin}:{label}",
             )
             if strict_mode:
@@ -368,11 +510,15 @@ def parse_note_style_response_text(
             if relaxed is None:
                 continue
             analysis_payload, path = _resolve_analysis_payload(relaxed)
-            valid, errors = _schema_validate(analysis_payload)
+            normalized_analysis = _normalize_analysis_payload(analysis_payload)
+            if path == "analysis" and isinstance(relaxed, MutableMapping):
+                relaxed = dict(relaxed)
+                relaxed["analysis"] = normalized_analysis
+            valid, errors = _schema_validate(normalized_analysis)
             if valid:
                 response = NoteStyleParsedResponse(
                     payload=relaxed,
-                    analysis=analysis_payload,
+                    analysis=normalized_analysis,
                     source=f"{origin}:{label}:relaxed",
                 )
                 return response
@@ -414,7 +560,11 @@ def _build_validated_response(
         _ensure_note_analysis_structure(payload, source=source)
 
     analysis_payload, path = _resolve_analysis_payload(payload)
-    valid, errors = _schema_validate(analysis_payload)
+    normalized_analysis = _normalize_analysis_payload(analysis_payload)
+    if path == "analysis" and isinstance(payload, MutableMapping):
+        payload = dict(payload)
+        payload["analysis"] = normalized_analysis
+    valid, errors = _schema_validate(normalized_analysis)
     if not valid:
         raise NoteStyleParseError(
             "Model response missing valid note_style analysis JSON",
@@ -426,7 +576,7 @@ def _build_validated_response(
             },
         )
 
-    return NoteStyleParsedResponse(payload=payload, analysis=analysis_payload, source=source)
+    return NoteStyleParsedResponse(payload=payload, analysis=normalized_analysis, source=source)
 
 
 def _parse_normalized_response_payload(

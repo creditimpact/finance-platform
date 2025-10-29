@@ -1,0 +1,6 @@
+{
+  "files.associations": {
+    "*.result": "json",
+    "*.jsonl": "json"
+  }
+}

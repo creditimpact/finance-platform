@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
@@ -65,6 +66,23 @@ NOTE_STYLE_ANALYSIS_SCHEMA: dict[str, Any] = {
 
 # Exported for tool-calling parameter definitions.
 NOTE_STYLE_TOOL_PARAMETERS_SCHEMA: dict[str, Any] = NOTE_STYLE_ANALYSIS_SCHEMA
+NOTE_STYLE_TOOL_FUNCTION_NAME = "submit_note_style_analysis"
+NOTE_STYLE_TOOL_DESCRIPTION = (
+    "Return the strict note_style analysis JSON object that satisfies the schema."
+)
+
+
+def build_note_style_tool() -> dict[str, Any]:
+    """Return a fresh tool definition for note_style requests."""
+
+    return {
+        "type": "function",
+        "function": {
+            "name": NOTE_STYLE_TOOL_FUNCTION_NAME,
+            "description": NOTE_STYLE_TOOL_DESCRIPTION,
+            "parameters": copy.deepcopy(NOTE_STYLE_TOOL_PARAMETERS_SCHEMA),
+        },
+    }
 
 _ANALYSIS_VALIDATOR = Draft7Validator(NOTE_STYLE_ANALYSIS_SCHEMA)
 
@@ -170,6 +188,9 @@ def _error_sort_key(error: Any) -> tuple[Sequence[Any], str]:
 __all__ = [
     "NOTE_STYLE_ANALYSIS_SCHEMA",
     "NOTE_STYLE_TOOL_PARAMETERS_SCHEMA",
+    "NOTE_STYLE_TOOL_FUNCTION_NAME",
+    "NOTE_STYLE_TOOL_DESCRIPTION",
+    "build_note_style_tool",
     "validate_note_style_analysis",
     "NoteStyleResult",
     "validate_result",

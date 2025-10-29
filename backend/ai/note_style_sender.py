@@ -1033,47 +1033,69 @@ def _result_is_terminal(
 
 
 def _extract_response_text(response_payload: Any) -> str:
-    choices: Sequence[Any] | None = None
-    if hasattr(response_payload, "choices"):
-        choices = getattr(response_payload, "choices")
-    elif isinstance(response_payload, Mapping):
-        choices = response_payload.get("choices")  # type: ignore[assignment]
+    def _choices_from_payload(payload: Any) -> Sequence[Any] | None:
+        if payload is None:
+            return None
+        if hasattr(payload, "choices"):
+            return getattr(payload, "choices")
+        if isinstance(payload, Mapping):
+            value = payload.get("choices")  # type: ignore[assignment]
+            if isinstance(value, Sequence):
+                return value
+        return None
 
-    if not isinstance(choices, Sequence) or not choices:
+    def _message_from_choice(choice: Any) -> Any:
+        if choice is None:
+            return None
+        if hasattr(choice, "message"):
+            return getattr(choice, "message")
+        if isinstance(choice, Mapping):
+            return choice.get("message")
+        return None
+
+    def _coerce_content_from_message(message: Any) -> str:
+        content: Any
+        if message is None:
+            return ""
+        if hasattr(message, "content"):
+            content = getattr(message, "content")
+        elif isinstance(message, Mapping):
+            content = message.get("content")
+        else:
+            content = message
+
+        if isinstance(content, str):
+            return content
+        if isinstance(content, Sequence) and not isinstance(content, (bytes, bytearray)):
+            pieces: list[str] = []
+            for chunk in content:
+                if isinstance(chunk, str):
+                    pieces.append(chunk)
+                elif isinstance(chunk, Mapping):
+                    text_piece = chunk.get("text")
+                    if isinstance(text_piece, str):
+                        pieces.append(text_piece)
+            return "".join(pieces)
+        if content is not None:
+            return str(content)
         return ""
 
-    first = choices[0]
-    if hasattr(first, "message"):
-        message = getattr(first, "message")
-    elif isinstance(first, Mapping):
-        message = first.get("message")
-    else:
-        message = None
+    def _extract_from_choices(choices: Sequence[Any] | None) -> str:
+        if not isinstance(choices, Sequence) or not choices:
+            return ""
+        message = _message_from_choice(choices[0])
+        return _coerce_content_from_message(message)
 
-    if message is None:
-        return ""
+    primary_text = _extract_from_choices(_choices_from_payload(response_payload))
+    if primary_text:
+        return primary_text
 
-    if hasattr(message, "content"):
-        content = getattr(message, "content")
-    elif isinstance(message, Mapping):
-        content = message.get("content")
-    else:
-        content = None
+    if isinstance(response_payload, Mapping):
+        raw_candidate = response_payload.get("raw") or response_payload.get("openai")
+        fallback_text = _extract_from_choices(_choices_from_payload(raw_candidate))
+        if fallback_text:
+            return fallback_text
 
-    if isinstance(content, str):
-        return content
-    if isinstance(content, Sequence) and not isinstance(content, (bytes, bytearray)):
-        pieces: list[str] = []
-        for chunk in content:
-            if isinstance(chunk, str):
-                pieces.append(chunk)
-            elif isinstance(chunk, Mapping):
-                text_piece = chunk.get("text")
-                if isinstance(text_piece, str):
-                    pieces.append(text_piece)
-        return "".join(pieces)
-    if content is not None:
-        return str(content)
     return ""
 
 

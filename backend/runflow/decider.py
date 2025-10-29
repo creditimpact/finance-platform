@@ -1228,8 +1228,24 @@ def _apply_note_style_stage_promotion(
     failed_value = view.failed_total
     terminal_value = view.terminal_total
     empty_ok = total_value == 0
-    status_value = view.state
-    stage_terminal = view.is_terminal
+    if total_value == 0:
+        status_value = "empty"
+        stage_terminal = True
+    elif total_value > 0 and completed_value == 0 and failed_value == 0:
+        status_value = "built"
+        stage_terminal = False
+    elif completed_value + failed_value < total_value:
+        status_value = "processing"
+        stage_terminal = False
+    elif completed_value == total_value:
+        status_value = "success"
+        stage_terminal = True
+    elif failed_value > 0:
+        status_value = "error"
+        stage_terminal = False
+    else:
+        status_value = "processing"
+        stage_terminal = False
 
     if results_override is not None:
         override_total, override_completed, override_failed = results_override
@@ -1319,7 +1335,7 @@ def _apply_note_style_stage_promotion(
         else ""
     )
 
-    desired_sent = stage_terminal
+    desired_sent = status_value in {"success", "empty"}
     completed_matches = (
         (stage_terminal and existing_completed_at is not None)
         or (not stage_terminal and existing_completed_at is None)
@@ -1339,7 +1355,7 @@ def _apply_note_style_stage_promotion(
             update_required = False
 
     promoted = (
-        status_value in {"success", "empty"}
+        status_value in {"success", "empty", "error"}
         and previous_status != status_value
     )
     log_context = {

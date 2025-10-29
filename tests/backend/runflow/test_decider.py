@@ -339,7 +339,7 @@ def test_note_style_stage_promotion_requires_completed_results(tmp_path: Path) -
     assert log_context_again == {"total": 2, "completed": 1, "failed": 0}
 
     mid_stage = data["stages"]["note_style"]
-    assert mid_stage["status"] == "in_progress"
+    assert mid_stage["status"] == "processing"
     assert mid_stage["empty_ok"] is False
     assert mid_stage["results"]["completed"] == 1
     assert mid_stage["results"]["failed"] == 0
@@ -430,14 +430,13 @@ def test_note_style_stage_promotion_partial_failures_mark_success(tmp_path: Path
     assert log_context == {"total": 2, "completed": 1, "failed": 1}
 
     stage_payload = data["stages"]["note_style"]
-    assert stage_payload["status"] == "success"
+    assert stage_payload["status"] == "error"
     assert stage_payload["empty_ok"] is False
     assert stage_payload["metrics"] == {"packs_total": 2}
     assert stage_payload["results"] == {"results_total": 2, "completed": 1, "failed": 1}
     assert stage_payload["summary"]["failed"] == 1
-    assert stage_payload["sent"] is True
-    assert isinstance(stage_payload["completed_at"], str)
-    assert stage_payload["completed_at"].endswith("Z")
+    assert stage_payload["sent"] is False
+    assert stage_payload["completed_at"] is None
 
 
 def test_note_style_stage_promotion_all_failed_marks_success(tmp_path: Path) -> None:
@@ -466,14 +465,13 @@ def test_note_style_stage_promotion_all_failed_marks_success(tmp_path: Path) -> 
     assert log_context == {"total": 2, "completed": 0, "failed": 2}
 
     stage_payload = data["stages"]["note_style"]
-    assert stage_payload["status"] == "success"
+    assert stage_payload["status"] == "error"
     assert stage_payload["empty_ok"] is False
     assert stage_payload["metrics"] == {"packs_total": 2}
     assert stage_payload["results"] == {"results_total": 2, "completed": 0, "failed": 2}
     assert stage_payload["summary"]["failed"] == 2
-    assert stage_payload["sent"] is True
-    assert isinstance(stage_payload["completed_at"], str)
-    assert stage_payload["completed_at"].endswith("Z")
+    assert stage_payload["sent"] is False
+    assert stage_payload["completed_at"] is None
 
 
 def test_note_style_stage_promotion_uses_manifest_paths(

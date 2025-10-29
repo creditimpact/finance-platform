@@ -6,19 +6,31 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 
-_BASE_SYSTEM_PROMPT = (
-    "You analyse customer notes and respond with structured JSON.\n"
-    "Return only a single JSON object that matches the schema. No explanations, no markdown, no code fences.\n"
-    "Schema:\n"
-    '{"tone": string, "context_hints": {"timeframe": {"month": string|null, "relative": '
-    'string|null}, "topic": string, "entities": {"creditor": string|null, "amount": '
-    'number|null}}, "emphasis": [string], "confidence": number, "risk_flags": [string]}.\n'
-    "Example:\n"
-    '{"tone": "neutral", "context_hints": {"timeframe": {"month": null, "relative": '
-    '"recent"}, "topic": "billing dispute", "entities": {"creditor": "ACME Bank", '
-    '"amount": 250.0}}, "emphasis": ["disputed charge"], "confidence": 0.8, '
-    '"risk_flags": []}'
-)
+_BASE_SYSTEM_PROMPT = """
+You analyse customer notes and respond with structured JSON.
+You must respond with exactly ONE JSON object and nothing else.
+Do not include code fences or explanations.
+Use this schema (keys and nesting exactly as written):
+
+{
+  "note": string,
+  "analysis": {
+    "tone": "assertive" | "neutral" | "empathetic" | "polite",
+    "context_hints": {
+      "timeframe": { "month": int|null, "relative": string|null },
+      "topic": string,
+      "entities": { "creditor": string|null, "amount": number|null }
+    },
+    "emphasis": string[],            // e.g., ["paid_in_full","balance_should_be_0"]
+    "confidence": number,            // 0..1
+    "risk_flags": string[]           // e.g., ["discrepancy_in_balance"]
+  }
+}
+If a field is unknown, return null (not an empty string).
+
+Example output:
+{"note":"...", "analysis":{"tone":"assertive","context_hints":{"timeframe":{"month":null,"relative":"2024"},"topic":"auto_loan_payment","entities":{"creditor":"PALISADES FU","amount":5912.0}},"emphasis":["paid_in_full"],"confidence":0.9,"risk_flags":["discrepancy_in_balance"]}}
+"""
 
 _TOOL_RESPONSE_INSTRUCTION = (
     "Use the provided tool exactly once and return your full JSON only in tool.arguments. "

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Tuple
 
 from openai import OpenAI
 
@@ -21,6 +22,60 @@ class AIConfig:
     response_model: str = "gpt-4.1-mini"
     timeout: float | None = None
     max_retries: int = 0
+
+
+class AIClientProtocolError(RuntimeError):
+    """Raised when the OpenAI response violates the expected protocol."""
+
+
+class ChatCompletionResult(tuple, Mapping[str, Any]):
+    """Tuple-like wrapper that also exposes a mapping interface."""
+
+    def __new__(
+        cls,
+        raw_response: Any,
+        parsed_payload: Dict[str, Any],
+        metadata: Dict[str, Any],
+    ) -> "ChatCompletionResult":
+        obj = super().__new__(cls, (raw_response, parsed_payload))
+        obj._metadata = metadata
+        return obj
+
+    # Mapping interface -------------------------------------------------
+    def __getitem__(self, key: Any) -> Any:  # type: ignore[override]
+        if isinstance(key, int):
+            return super().__getitem__(key)
+        return self._metadata[key]
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._metadata)
+
+    def __len__(self) -> int:
+        return len(self._metadata)
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        return self._metadata.get(key, default)
+
+    def keys(self) -> Iterable[Any]:
+        return self._metadata.keys()
+
+    def items(self) -> Iterable[Tuple[Any, Any]]:
+        return self._metadata.items()
+
+    def values(self) -> Iterable[Any]:
+        return self._metadata.values()
+
+    def __contains__(self, key: object) -> bool:  # type: ignore[override]
+        return key in self._metadata
+
+    # Convenience tuple accessors --------------------------------------
+    @property
+    def raw(self) -> Any:
+        return self[0]
+
+    @property
+    def parsed(self) -> Dict[str, Any]:
+        return self[1]
 
 
 class AIClient:
@@ -67,7 +122,7 @@ class AIClient:
         temperature: float = 0,
         top_p: float = 1,
         **kwargs: Any,
-    ):
+    ) -> ChatCompletionResult:
         """Proxy to ``chat.completions.create``."""
 
         model = model or self.config.chat_model
@@ -133,7 +188,9 @@ class AIClient:
             if value is None or isinstance(value, (str, int, float, bool)):
                 return value
             if isinstance(value, Mapping):
-                return {str(key): _coerce_json_value(sub_value) for key, sub_value in value.items()}
+                return {
+                    str(key): _coerce_json_value(sub_value) for key, sub_value in value.items()
+                }
             if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
                 return [_coerce_json_value(item) for item in value]
             return str(value)
@@ -155,58 +212,89 @@ class AIClient:
                     return str(coerced)
             return str(payload)
 
-        def _load_json(payload: Any, *, context: str) -> Dict[str, Any] | None:
-            payload_text = _payload_to_text(payload)
-            if payload_text is None:
-                return None
-            text = payload_text.strip()
-            if not text:
-                return None
+        def _parse_json_object(
+            text: str,
+            *,
+            context: str,
+            allow_recovery: bool,
+        ) -> Dict[str, Any]:
             try:
                 parsed_payload = json.loads(text)
-                if not isinstance(parsed_payload, dict):
-                    raise ValueError("Expected JSON object")
-                return parsed_payload
-            except Exception:  # pragma: no cover - defensive
+            except json.JSONDecodeError as exc:
+                if not allow_recovery:
+                    raise AIClientProtocolError(
+                        f"{context} did not contain valid JSON object"
+                    ) from exc
+
                 from backend.util.json_tools import try_fix_to_json
 
-                fixed = try_fix_to_json(payload_text)
+                fixed = try_fix_to_json(text)
                 if fixed is None:
-                    logger.exception(
-                        "AI_CLIENT_JSON_PARSE_FAILED context=%s", context
-                    )
-                    return None
+                    raise AIClientProtocolError(
+                        f"{context} did not contain valid JSON object"
+                    ) from exc
 
                 fixed_len = len(json.dumps(fixed, ensure_ascii=False))
                 logger.warning(
                     "NOTE_STYLE_JSON_FIXED context=%s raw_len=%d fixed_len=%d",
                     context,
-                    len(payload_text),
+                    len(text),
                     fixed_len,
                 )
                 return fixed
 
+            if not isinstance(parsed_payload, dict):
+                raise AIClientProtocolError(
+                    f"{context} did not produce a JSON object"
+                )
+
+            return parsed_payload
+
         content_payload = getattr(message, "content", None)
         raw_content = _payload_to_text(content_payload)
-        content_json = _load_json(raw_content, context="content")
 
-        tool_json = None
+        mode: str | None = None
+        parsed_json: Dict[str, Any] | None = None
         raw_tool_arguments = None
-        tool_calls = getattr(message, "tool_calls", None)
-        if tool_calls:
-            first_call = tool_calls[0]
-            arguments = getattr(getattr(first_call, "function", object()), "arguments", None)
-            raw_tool_arguments = _payload_to_text(arguments)
-            tool_json = _load_json(raw_tool_arguments, context="tool")
 
-        has_tool_payload = tool_json is not None or raw_tool_arguments is not None
-        mode = "content" if content_payload is not None and not has_tool_payload else "tool"
+        content_text = (raw_content or "").strip() if isinstance(raw_content, str) else None
+        if content_text:
+            parsed_json = _parse_json_object(
+                content_text,
+                context="message.content",
+                allow_recovery=True,
+            )
+            mode = "content"
+        else:
+            tool_calls = getattr(message, "tool_calls", None)
+            if tool_calls:
+                first_call = tool_calls[0]
+                arguments = getattr(getattr(first_call, "function", object()), "arguments", None)
+                raw_tool_arguments = _payload_to_text(arguments)
+                arguments_text = (
+                    raw_tool_arguments.strip()
+                    if isinstance(raw_tool_arguments, str)
+                    else None
+                )
+                if not arguments_text:
+                    raise AIClientProtocolError(
+                        "Tool call arguments missing JSON payload"
+                    )
+                parsed_json = _parse_json_object(
+                    arguments_text,
+                    context="message.tool_calls[0].function.arguments",
+                    allow_recovery=False,
+                )
+                mode = "tool"
 
-        normalized_response = {
+        if parsed_json is None:
+            raise AIClientProtocolError("No content or tool_calls in response")
+
+        metadata = {
             "mode": mode,
-            "content_json": content_json,
-            "tool_json": tool_json,
-            "json": content_json if content_json is not None else tool_json,
+            "content_json": parsed_json if mode == "content" else None,
+            "tool_json": parsed_json if mode == "tool" else None,
+            "json": parsed_json,
             "raw": resp,
             "openai": resp,
             "raw_content": raw_content,
@@ -222,7 +310,7 @@ class AIClient:
                 total_tokens if total_tokens is not None else "?",
             )
 
-        return normalized_response
+        return ChatCompletionResult(resp, parsed_json, metadata)
 
     def response_json(
         self,

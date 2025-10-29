@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.core.services.ai_client import AIClient, AIConfig
+from backend.core.services.ai_client import (
+    AIClient,
+    AIClientProtocolError,
+    AIConfig,
+    ChatCompletionResult,
+)
 
 
 class StubChatCompletions:
@@ -63,6 +68,9 @@ def test_chat_completion_content_mode(client):
 
     result = client.chat_completion(messages=[{"role": "user", "content": "hi"}])
 
+    assert isinstance(result, ChatCompletionResult)
+    assert result[0] is response
+    assert result[1] == {"key": "value"}
     assert result["mode"] == "content"
     assert result["content_json"] == {"key": "value"}
     assert result["tool_json"] is None
@@ -84,6 +92,9 @@ def test_chat_completion_tool_mode(client):
         tools=[{"type": "function", "function": {"name": "noop", "parameters": {}}}],
     )
 
+    assert isinstance(result, ChatCompletionResult)
+    assert result[0] is response
+    assert result[1] == {"tool": True}
     assert result["mode"] == "tool"
     assert result["content_json"] is None
     assert result["tool_json"] == {"tool": True}
@@ -104,6 +115,7 @@ def test_chat_completion_tool_mode_with_dict_arguments(client):
         tools=[{"type": "function", "function": {"name": "noop", "parameters": {}}}],
     )
 
+    assert isinstance(result, ChatCompletionResult)
     assert result["mode"] == "tool"
     assert result["content_json"] is None
     assert result["tool_json"] == payload
@@ -111,4 +123,22 @@ def test_chat_completion_tool_mode_with_dict_arguments(client):
     expected_raw = json.dumps(payload, ensure_ascii=False)
     assert result["raw_tool_arguments"] == expected_raw
     assert result["raw_content"] is None
+
+
+def test_chat_completion_invalid_content_raises(client):
+    response = _build_response(content="not-json")
+    completions = StubChatCompletions(response)
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    with pytest.raises(AIClientProtocolError):
+        client.chat_completion(messages=[{"role": "user", "content": "hi"}])
+
+
+def test_chat_completion_empty_content_without_tool_raises(client):
+    response = _build_response(content="   ")
+    completions = StubChatCompletions(response)
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    with pytest.raises(AIClientProtocolError):
+        client.chat_completion(messages=[{"role": "user", "content": "hi"}])
 

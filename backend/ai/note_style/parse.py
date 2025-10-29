@@ -101,6 +101,70 @@ def _normalize_confidence_value(value: Any) -> Any:
     return value
 
 
+def _normalize_note_style_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("note_style payload must be a JSON object")
+
+    # Unwrap accidental envelope
+    if "analysis" in payload and isinstance(payload["analysis"], dict):
+        payload = dict(payload["analysis"])
+    else:
+        payload = dict(payload)
+
+    # Drop accidental 'note' key if present
+    payload.pop("note", None)
+
+    tone_value = payload.get("tone")
+    if not isinstance(tone_value, str) or not tone_value.strip():
+        payload["tone"] = "unspecified"
+
+    payload.setdefault("context_hints", {})
+
+    if "emphasis" not in payload or payload["emphasis"] is None:
+        payload["emphasis"] = []
+
+    if "confidence" not in payload or payload["confidence"] is None:
+        payload["confidence"] = 0.0
+
+    if "risk_flags" not in payload or payload["risk_flags"] is None:
+        payload["risk_flags"] = []
+
+    ch = payload["context_hints"]
+    if not isinstance(ch, dict):
+        ch = {}
+    payload["context_hints"] = ch
+    ch.setdefault("timeframe", {})
+    ch.setdefault("topic", "unspecified")
+    ch.setdefault("entities", {})
+
+    tf = ch["timeframe"]
+    if not isinstance(tf, dict):
+        tf = {}
+    ch["timeframe"] = tf
+    tf.setdefault("month", None)
+    tf.setdefault("relative", None)
+
+    topic_value = ch.get("topic")
+    if not isinstance(topic_value, str) or not topic_value.strip():
+        ch["topic"] = "unspecified"
+
+    ent = ch["entities"]
+    if not isinstance(ent, dict):
+        ent = {}
+    ch["entities"] = ent
+    ent.setdefault("creditor", None)
+    ent.setdefault("amount", None)
+
+    # Coerce month number → string
+    m = tf.get("month")
+    if isinstance(m, (int, float)) and m == int(m):
+        tf["month"] = f"{int(m):02d}"
+    elif m is not None and not isinstance(m, str):
+        tf["month"] = str(m)
+
+    return payload
+
+
 def _normalize_analysis_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         return payload
@@ -374,21 +438,18 @@ def _gather_analysis_field_errors(analysis: Mapping[str, Any]) -> list[str]:
 
 
 def _ensure_note_analysis_structure(payload: Mapping[str, Any], *, source: str) -> None:
-    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        raise NoteStyleParseError(
+            "note_style analysis payload must be an object",
+            code="invalid_schema",
+            details={"source": source},
+        )
 
-    note_value = payload.get("note")
-    if not isinstance(note_value, str) or not note_value.strip():
-        errors.append("note must be a non-empty string")
-
-    analysis = payload.get("analysis")
-    if not isinstance(analysis, Mapping):
-        errors.append("analysis must be an object with required keys")
-    else:
-        errors.extend(_gather_analysis_field_errors(analysis))
+    errors = _gather_analysis_field_errors(payload)
 
     if errors:
         raise NoteStyleParseError(
-            "Model response missing required note/analysis fields",
+            "Model response missing required analysis fields",
             code="invalid_schema",
             details={"source": source, "messages": errors},
         )
@@ -477,30 +538,38 @@ def parse_note_style_response_text(
             )
             continue
 
-        analysis_payload, path = _resolve_analysis_payload(payload)
-        normalized_analysis = _normalize_analysis_payload(analysis_payload)
-        if path == "analysis" and isinstance(payload, MutableMapping):
-            payload = dict(payload)
-            payload["analysis"] = normalized_analysis
+        try:
+            normalized_payload = _normalize_note_style_payload(dict(payload))
+        except ValueError as exc:
+            attempt_details.append(
+                {
+                    "source": label,
+                    "error": "normalization_failed",
+                    "message": str(exc),
+                    "preview": _summarize_candidate(label, candidate),
+                }
+            )
+            continue
+
+        normalized_analysis = _normalize_analysis_payload(normalized_payload)
         valid, errors = _schema_validate(normalized_analysis)
         if valid:
             response = NoteStyleParsedResponse(
-                payload=payload,
+                payload=normalized_payload,
                 analysis=normalized_analysis,
                 source=f"{origin}:{label}",
             )
             if strict_mode:
-                _ensure_note_analysis_structure(payload, source=response.source)
+                _ensure_note_analysis_structure(normalized_payload, source=response.source)
             return response
 
-        attempted.append(payload)
+        attempted.append(normalized_payload)
         attempt_details.append(
             {
                 "source": label,
                 "error": "schema_validation_failed",
                 "messages": errors,
                 "preview": _summarize_candidate(label, candidate),
-                "path": path,
             }
         )
 
@@ -509,28 +578,36 @@ def parse_note_style_response_text(
             relaxed = _attempt_relaxed_parse(candidate)
             if relaxed is None:
                 continue
-            analysis_payload, path = _resolve_analysis_payload(relaxed)
-            normalized_analysis = _normalize_analysis_payload(analysis_payload)
-            if path == "analysis" and isinstance(relaxed, MutableMapping):
-                relaxed = dict(relaxed)
-                relaxed["analysis"] = normalized_analysis
+            try:
+                normalized_payload = _normalize_note_style_payload(dict(relaxed))
+            except ValueError as exc:
+                attempt_details.append(
+                    {
+                        "source": f"{label}:relaxed",
+                        "error": "normalization_failed",
+                        "message": str(exc),
+                        "preview": _summarize_candidate(label, candidate),
+                    }
+                )
+                continue
+
+            normalized_analysis = _normalize_analysis_payload(normalized_payload)
             valid, errors = _schema_validate(normalized_analysis)
             if valid:
                 response = NoteStyleParsedResponse(
-                    payload=relaxed,
+                    payload=normalized_payload,
                     analysis=normalized_analysis,
                     source=f"{origin}:{label}:relaxed",
                 )
                 return response
 
-            attempted.append(relaxed)
+            attempted.append(normalized_payload)
             attempt_details.append(
                 {
                     "source": f"{label}:relaxed",
                     "error": "schema_validation_failed",
                     "messages": errors,
                     "preview": _summarize_candidate(label, candidate),
-                    "path": path,
                 }
             )
 
@@ -541,14 +618,6 @@ def parse_note_style_response_text(
         details={"attempts": attempt_details[:5]},
     )
 
-
-def _resolve_analysis_payload(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], str]:
-    if isinstance(payload.get("analysis"), Mapping):
-        analysis = payload.get("analysis")  # type: ignore[assignment]
-        return analysis, "analysis"
-    return payload, "root"
-
-
 def _build_validated_response(
     payload: Mapping[str, Any],
     *,
@@ -556,14 +625,12 @@ def _build_validated_response(
     source: str,
     strict: bool,
 ) -> NoteStyleParsedResponse:
-    if strict:
-        _ensure_note_analysis_structure(payload, source=source)
+    normalized_payload = _normalize_note_style_payload(dict(payload))
 
-    analysis_payload, path = _resolve_analysis_payload(payload)
-    normalized_analysis = _normalize_analysis_payload(analysis_payload)
-    if path == "analysis" and isinstance(payload, MutableMapping):
-        payload = dict(payload)
-        payload["analysis"] = normalized_analysis
+    if strict:
+        _ensure_note_analysis_structure(normalized_payload, source=source)
+
+    normalized_analysis = _normalize_analysis_payload(normalized_payload)
     valid, errors = _schema_validate(normalized_analysis)
     if not valid:
         raise NoteStyleParseError(
@@ -572,11 +639,12 @@ def _build_validated_response(
             details={
                 "source": source,
                 "messages": errors,
-                "path": path,
             },
         )
 
-    return NoteStyleParsedResponse(payload=payload, analysis=normalized_analysis, source=source)
+    return NoteStyleParsedResponse(
+        payload=normalized_payload, analysis=normalized_analysis, source=source
+    )
 
 
 def _parse_normalized_response_payload(
@@ -671,7 +739,8 @@ def parse_note_style_response_payload(response_payload: Any) -> NoteStyleParsedR
                 candidate_payload = response_payload  # type: ignore[assignment]
 
     if strict_mode and candidate_payload is not None:
-        _ensure_note_analysis_structure(candidate_payload, source=candidate_source)
+        normalized_candidate = _normalize_note_style_payload(dict(candidate_payload))
+        _ensure_note_analysis_structure(normalized_candidate, source=candidate_source)
 
     if isinstance(response_payload, Mapping) and ("mode" in response_payload or "json" in response_payload):
         return _parse_normalized_response_payload(response_payload, strict=strict_mode)

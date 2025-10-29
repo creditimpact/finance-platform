@@ -17,6 +17,7 @@ def _load_config_with_env(monkeypatch: Any, **env: str) -> Any:
         else:
             monkeypatch.setenv(key, value)
 
+    sys.modules.pop("backend.config.note_style", None)
     sys.modules.pop(_DEF_CONFIG_MODULE, None)
     return importlib.import_module(_DEF_CONFIG_MODULE)
 
@@ -30,6 +31,7 @@ def test_note_style_idempotent_flag_respects_zero(monkeypatch):
         )
         assert config.NOTE_STYLE_IDEMPOTENT_BY_NOTE_HASH is False
     finally:
+        sys.modules.pop("backend.config.note_style", None)
         sys.modules.pop(_DEF_CONFIG_MODULE, None)
 
 
@@ -40,4 +42,16 @@ def test_note_style_skip_flag_respects_truthy(monkeypatch):
         config = _load_config_with_env(monkeypatch, NOTE_STYLE_SKIP_IF_RESULT_EXISTS="1")
         assert config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS is True
     finally:
+        sys.modules.pop("backend.config.note_style", None)
+        sys.modules.pop(_DEF_CONFIG_MODULE, None)
+
+
+def test_note_style_allow_tool_calls_truthy(monkeypatch):
+    """NOTE_STYLE_ALLOW_TOOL_CALLS honors truthy environment overrides."""
+
+    try:
+        config = _load_config_with_env(monkeypatch, NOTE_STYLE_ALLOW_TOOL_CALLS="1")
+        assert config.NOTE_STYLE_ALLOW_TOOL_CALLS is True
+    finally:
+        sys.modules.pop("backend.config.note_style", None)
         sys.modules.pop(_DEF_CONFIG_MODULE, None)

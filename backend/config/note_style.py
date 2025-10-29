@@ -71,6 +71,9 @@ def _coerce_retry_count() -> int:
 NOTE_STYLE_RESPONSE_MODE: Final[NoteStyleResponseMode] = _coerce_response_mode()
 NOTE_STYLE_RETRY_COUNT: Final[int] = _coerce_retry_count()
 NOTE_STYLE_STRICT_SCHEMA: Final[bool] = env_bool("NOTE_STYLE_STRICT_SCHEMA", True)
+NOTE_STYLE_ALLOW_TOOL_CALLS: Final[bool] = env_bool(
+    "NOTE_STYLE_ALLOW_TOOL_CALLS", False
+)
 
 
 __all__ = [
@@ -78,5 +81,6 @@ __all__ = [
     "NOTE_STYLE_RESPONSE_MODE",
     "NOTE_STYLE_RETRY_COUNT",
     "NOTE_STYLE_STRICT_SCHEMA",
+    "NOTE_STYLE_ALLOW_TOOL_CALLS",
 ]
 

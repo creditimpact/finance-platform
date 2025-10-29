@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Sequence
 
 from openai import OpenAI
 
@@ -129,18 +129,48 @@ class AIClient:
         choice = resp.choices[0]
         message = choice.message
 
-        def _load_json(payload: str | None, *, context: str) -> Dict[str, Any] | None:
+        def _coerce_json_value(value: Any) -> Any:
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return value
+            if isinstance(value, Mapping):
+                return {str(key): _coerce_json_value(sub_value) for key, sub_value in value.items()}
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                return [_coerce_json_value(item) for item in value]
+            return str(value)
+
+        def _payload_to_text(payload: Any) -> str | None:
             if payload is None:
                 return None
+            if isinstance(payload, str):
+                return payload
+            if isinstance(payload, (bytes, bytearray)):
+                return payload.decode("utf-8", "ignore")
+            if isinstance(payload, Mapping) or (
+                isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray))
+            ):
+                coerced = _coerce_json_value(payload)
+                try:
+                    return json.dumps(coerced, ensure_ascii=False)
+                except (TypeError, ValueError):  # pragma: no cover - defensive
+                    return str(coerced)
+            return str(payload)
+
+        def _load_json(payload: Any, *, context: str) -> Dict[str, Any] | None:
+            payload_text = _payload_to_text(payload)
+            if payload_text is None:
+                return None
+            text = payload_text.strip()
+            if not text:
+                return None
             try:
-                parsed_payload = json.loads(payload)
+                parsed_payload = json.loads(text)
                 if not isinstance(parsed_payload, dict):
                     raise ValueError("Expected JSON object")
                 return parsed_payload
             except Exception:  # pragma: no cover - defensive
                 from backend.util.json_tools import try_fix_to_json
 
-                fixed = try_fix_to_json(payload)
+                fixed = try_fix_to_json(payload_text)
                 if fixed is None:
                     logger.exception(
                         "AI_CLIENT_JSON_PARSE_FAILED context=%s", context
@@ -151,24 +181,25 @@ class AIClient:
                 logger.warning(
                     "NOTE_STYLE_JSON_FIXED context=%s raw_len=%d fixed_len=%d",
                     context,
-                    len(payload),
+                    len(payload_text),
                     fixed_len,
                 )
                 return fixed
 
-        content_text = getattr(message, "content", None)
-        content_json = _load_json(content_text, context="content")
+        content_payload = getattr(message, "content", None)
+        raw_content = _payload_to_text(content_payload)
+        content_json = _load_json(raw_content, context="content")
 
         tool_json = None
+        raw_tool_arguments = None
         tool_calls = getattr(message, "tool_calls", None)
-        if content_text is None and tool_calls:
+        if raw_content is None and tool_calls:
             first_call = tool_calls[0]
             arguments = getattr(getattr(first_call, "function", object()), "arguments", None)
-            tool_json = _load_json(arguments, context="tool")
-        else:
-            arguments = None
+            raw_tool_arguments = _payload_to_text(arguments)
+            tool_json = _load_json(raw_tool_arguments, context="tool")
 
-        mode = "content" if content_text is not None else "tool"
+        mode = "content" if content_payload is not None else "tool"
 
         normalized_response = {
             "mode": mode,
@@ -177,8 +208,8 @@ class AIClient:
             "json": content_json if content_json is not None else tool_json,
             "raw": resp,
             "openai": resp,
-            "raw_content": content_text,
-            "raw_tool_arguments": arguments,
+            "raw_content": raw_content,
+            "raw_tool_arguments": raw_tool_arguments,
         }
 
         if any(value is not None for value in (prompt_tokens, response_tokens, total_tokens)):

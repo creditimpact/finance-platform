@@ -1089,3 +1089,110 @@ def test_note_style_pack_for_account_uses_manifest_paths(
         == result_path.relative_to(paths.base).as_posix()
     )
 
+
+
+def test_note_style_sender_uses_tools_when_env_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sid = "SID120"
+    account_id = "idx-120"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Tool mode please."},
+        },
+    )
+
+    monkeypatch.setattr(config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(config, "NOTE_STYLE_ALLOW_TOOLS", True)
+    monkeypatch.setattr(config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_ALLOW_TOOLS", True)
+    monkeypatch.setattr(
+        note_style_config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    analysis_body = {
+        "note": "Structured analysis",
+        "analysis": {
+            "tone": "empathetic",
+            "context_hints": {
+                "timeframe": {"month": "2024-04", "relative": "this year"},
+                "topic": "repayment plan",
+                "entities": {"creditor": "Example Bank", "amount": 451.0},
+            },
+            "emphasis": ["payment_plan"],
+            "confidence": 0.8,
+            "risk_flags": ["follow_up"],
+        },
+    }
+
+    tool_payload = {
+        "mode": "tool",
+        "tool_json": analysis_body,
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "submit_note_style_analysis",
+                                "arguments": json.dumps(analysis_body, ensure_ascii=False),
+                            },
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+
+    class _ToolClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def chat_completion(self, *, model, messages, temperature, **kwargs):  # type: ignore[override]
+            self.calls.append(
+                {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "kwargs": kwargs,
+                }
+            )
+            return tool_payload
+
+    client = _ToolClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+    assert processed == [account_id]
+    assert len(client.calls) == 1
+    call_kwargs = client.calls[0]["kwargs"]
+    assert "tools" in call_kwargs
+    assert call_kwargs.get("response_format") is None
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    result_lines = [
+        line
+        for line in account_paths.result_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(result_lines) == 1
+    stored_payload = json.loads(result_lines[0])
+    assert stored_payload["analysis"]["tone"] == "empathetic"
+

@@ -45,6 +45,7 @@ LABELS_TOP: List[str] = [
     "Account Description",
     "Dispute Status",
     "Creditor Type",
+    "Original Creditor",
 ]
 
 LABELS_BOTTOM: List[str] = [

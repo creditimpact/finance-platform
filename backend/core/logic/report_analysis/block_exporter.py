@@ -182,6 +182,7 @@ FIELD_LABELS: dict[str, str] = {
     "account description": "account_description",
     "dispute status": "dispute_status",
     "creditor type": "creditor_type",
+    "original creditor": "original_creditor",
     "account status": "account_status",
     "payment status": "payment_status",
     "creditor remarks": "creditor_remarks",
@@ -208,6 +209,10 @@ LABEL_MAP: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^ACCOUNT\s+DESCRIPTION", re.I), "account_description"),
     (re.compile(r"^DISPUTE\s+STATUS", re.I), "dispute_status"),
     (re.compile(r"^CREDITOR\s+TYPE", re.I), "creditor_type"),
+    (
+        re.compile(r"^ORIG(?:INAL)?\.?\s*CREDITOR(?:\s*\d{1,2})?$", re.I),
+        "original_creditor",
+    ),
     (re.compile(r"^ACCOUNT\s+STATUS", re.I), "account_status"),
     (re.compile(r"^PAYMENT\s+STATUS", re.I), "payment_status"),
     (re.compile(r"^CREDITOR\s+REMARKS", re.I), "creditor_remarks"),
@@ -269,6 +274,7 @@ LABELS_TOP = [
     "Account Description",
     "Dispute Status",
     "Creditor Type",
+    "Original Creditor",
 ]
 
 LABELS_BOTTOM = [

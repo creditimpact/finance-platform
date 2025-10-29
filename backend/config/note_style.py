@@ -1,4 +1,12 @@
-"""Environment-backed configuration for the note_style stage."""
+"""Environment-backed configuration for the note_style stage.
+
+The ``NOTE_STYLE_RESPONSE_MODE`` flag controls how note_style requests ask the
+model to return JSON. The supported values are ``"auto"`` (default),
+``"tool"``, and ``"json"``. Downstream code keeps the legacy
+``"json_object"`` alias working by normalizing it to ``"json"``. ``"auto"``
+prefers the tool-calling flow when the tool schema is available, otherwise it
+falls back to plain JSON responses.
+"""
 
 from __future__ import annotations
 

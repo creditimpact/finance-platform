@@ -101,6 +101,57 @@ def _normalize_confidence_value(value: Any) -> Any:
     return value
 
 
+def _looks_like_analysis_payload(candidate: Mapping[str, Any]) -> bool:
+    if not isinstance(candidate, Mapping):
+        return False
+
+    tone_value = candidate.get("tone")
+    if not isinstance(tone_value, str) or not tone_value.strip():
+        return False
+
+    context_payload = candidate.get("context_hints")
+    if not isinstance(context_payload, Mapping):
+        return False
+
+    timeframe_payload = context_payload.get("timeframe")
+    if not isinstance(timeframe_payload, Mapping):
+        return False
+
+    entities_payload = context_payload.get("entities")
+    if not isinstance(entities_payload, Mapping):
+        return False
+
+    emphasis_payload = candidate.get("emphasis")
+    if emphasis_payload is not None and not (
+        isinstance(emphasis_payload, Sequence)
+        and not isinstance(emphasis_payload, (str, bytes, bytearray))
+    ):
+        return False
+
+    risk_flags_payload = candidate.get("risk_flags")
+    if risk_flags_payload is not None and not (
+        isinstance(risk_flags_payload, Sequence)
+        and not isinstance(risk_flags_payload, (str, bytes, bytearray))
+    ):
+        return False
+
+    return True
+
+
+def _maybe_analysis_container(candidate: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    if not isinstance(candidate, Mapping):
+        return None
+
+    analysis_payload = candidate.get("analysis")
+    if isinstance(analysis_payload, Mapping):
+        return candidate
+
+    if _looks_like_analysis_payload(candidate):
+        return candidate
+
+    return None
+
+
 def _normalize_note_style_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("note_style payload must be a JSON object")
@@ -625,10 +676,19 @@ def _build_validated_response(
     source: str,
     strict: bool,
 ) -> NoteStyleParsedResponse:
-    normalized_payload = _normalize_note_style_payload(dict(payload))
+    analysis_candidate: Mapping[str, Any] | None = None
+    if isinstance(payload, Mapping):
+        analysis_candidate = payload.get("analysis") if "analysis" in payload else payload
+        if isinstance(analysis_candidate, Mapping) and strict:
+            _ensure_note_analysis_structure(analysis_candidate, source=source)
+        elif strict:
+            raise NoteStyleParseError(
+                "note_style analysis payload must be an object",
+                code="invalid_schema",
+                details={"source": source},
+            )
 
-    if strict:
-        _ensure_note_analysis_structure(normalized_payload, source=source)
+    normalized_payload = _normalize_note_style_payload(dict(payload))
 
     normalized_analysis = _normalize_analysis_payload(normalized_payload)
     valid, errors = _schema_validate(normalized_analysis)
@@ -730,17 +790,35 @@ def parse_note_style_response_payload(response_payload: Any) -> NoteStyleParsedR
             ("tool_json", "response_payload.tool_json"),
         ):
             value = response_payload.get(key)
-            if isinstance(value, Mapping) and ("analysis" in value or "note" in value):
-                candidate_payload = value
-                candidate_source = source
-                break
+            if isinstance(value, Mapping):
+                container = _maybe_analysis_container(value)
+                if container is not None:
+                    candidate_payload = value
+                    candidate_source = source
+                    break
         else:
-            if "analysis" in response_payload or "note" in response_payload:
+            container = _maybe_analysis_container(response_payload)
+            if container is not None:
                 candidate_payload = response_payload  # type: ignore[assignment]
 
     if strict_mode and candidate_payload is not None:
-        normalized_candidate = _normalize_note_style_payload(dict(candidate_payload))
-        _ensure_note_analysis_structure(normalized_candidate, source=candidate_source)
+        if isinstance(candidate_payload, Mapping):
+            candidate_analysis = (
+                candidate_payload.get("analysis")
+                if isinstance(candidate_payload.get("analysis"), Mapping)
+                else candidate_payload
+            )
+        else:
+            candidate_analysis = None
+
+        if isinstance(candidate_analysis, Mapping):
+            _ensure_note_analysis_structure(candidate_analysis, source=candidate_source)
+        else:
+            raise NoteStyleParseError(
+                "note_style analysis payload must be an object",
+                code="invalid_schema",
+                details={"source": candidate_source},
+            )
 
     if isinstance(response_payload, Mapping) and ("mode" in response_payload or "json" in response_payload):
         return _parse_normalized_response_payload(response_payload, strict=strict_mode)

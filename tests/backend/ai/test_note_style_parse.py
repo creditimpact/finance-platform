@@ -50,30 +50,38 @@ def _analysis_payload() -> dict[str, object]:
     }
 
 
-def _structured_payload() -> dict[str, object]:
+def _enveloped_payload() -> dict[str, object]:
     return {"note": "Example generated note", "analysis": _analysis_payload()}
 
 
 def test_parse_pure_json_response() -> None:
-    payload = _structured_payload()
+    payload = _analysis_payload()
     parsed = parse_note_style_response_payload(_make_response(payload))
 
-    assert parsed.analysis == payload["analysis"]
+    assert parsed.analysis == payload
     assert parsed.payload == payload
     assert parsed.source == "message.content:json"
 
 
 def test_parse_fenced_json_response() -> None:
-    payload = _structured_payload()
+    payload = _analysis_payload()
     parsed = parse_note_style_response_payload(_make_response(payload))
 
-    assert parsed.analysis == payload["analysis"]
+    assert parsed.analysis == payload
     assert parsed.payload == payload
     assert parsed.source == "message.content:json"
 
 
 def test_parse_text_with_inline_json_response() -> None:
-    payload = _structured_payload()
+    payload = _analysis_payload()
+    parsed = parse_note_style_response_payload(_make_response(payload))
+
+    assert parsed.analysis == payload
+    assert parsed.source == "message.content:json"
+
+
+def test_parse_enveloped_payload_still_supported() -> None:
+    payload = _enveloped_payload()
     parsed = parse_note_style_response_payload(_make_response(payload))
 
     assert parsed.analysis == payload["analysis"]
@@ -90,7 +98,7 @@ def test_parse_malformed_json_raises() -> None:
 
 
 def test_parse_missing_content_json_raises_value_error() -> None:
-    payload = _structured_payload()
+    payload = _analysis_payload()
     response = _make_response(payload)
     response["content_json"] = None
 
@@ -101,22 +109,30 @@ def test_parse_missing_content_json_raises_value_error() -> None:
 
 
 def test_parse_uses_tool_call_arguments_when_content_missing() -> None:
-    payload = _structured_payload()
+    payload = _analysis_payload()
     response = _make_tool_response(payload)
 
     parsed = parse_note_style_response_payload(response)
 
-    assert parsed.analysis == payload["analysis"]
+    assert parsed.analysis == payload
     assert parsed.payload == payload
     assert parsed.source == "message.tool_calls[0].function.arguments:json"
 
 
 def test_parse_tool_call_mapping_arguments() -> None:
-    payload = _structured_payload()
+    payload = _analysis_payload()
     response = _make_tool_response(payload)
 
     parsed = parse_note_style_response_payload(response)
 
-    assert parsed.analysis == payload["analysis"]
+    assert parsed.analysis == payload
     assert parsed.payload == payload
     assert parsed.source == "message.tool_calls[0].function.arguments:json"
+
+
+def test_parse_coerces_numeric_month() -> None:
+    payload = _analysis_payload()
+    payload["context_hints"]["timeframe"]["month"] = 9
+    parsed = parse_note_style_response_payload(_make_response(payload))
+
+    assert parsed.analysis["context_hints"]["timeframe"]["month"] == "09"

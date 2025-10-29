@@ -119,7 +119,7 @@ def _ingest(
 
 def test_chat_completion_returns_content_json_and_ingest_succeeds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     analysis = _analysis_payload()
-    response_payload = {"note": "Generated note", "analysis": analysis}
+    response_payload = analysis
     response = SimpleNamespace(
         choices=[
             SimpleNamespace(
@@ -164,7 +164,7 @@ def test_chat_completion_returns_content_json_and_ingest_succeeds(monkeypatch: p
 
 def test_chat_completion_returns_tool_json_and_ingest_succeeds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     analysis = _analysis_payload()
-    tool_arguments = json.dumps({"note": "Generated note", "analysis": analysis})
+    tool_arguments = json.dumps(analysis)
     response = SimpleNamespace(
         choices=[
             SimpleNamespace(
@@ -183,7 +183,7 @@ def test_chat_completion_returns_tool_json_and_ingest_succeeds(monkeypatch: pyte
     payload = client.chat_completion(messages=[{"role": "user", "content": "Test"}], tools=[{"type": "function"}])
 
     assert payload["mode"] == "tool"
-    assert payload["json"] == {"note": "Generated note", "analysis": analysis}
+    assert payload["json"] == analysis
 
     pack_payload = {"note_text": "Example note"}
     result_path = _ingest(

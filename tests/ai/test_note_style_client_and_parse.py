@@ -8,7 +8,7 @@ import pytest
 from backend.ai.note_style.parse import NoteStyleParseError, parse_note_style_response_payload
 from backend.ai.note_style_ingest import ingest_note_style_result
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
-from backend.core.services.ai_client import AIClient, AIConfig
+from backend.core.services.ai_client import AIClient, AIClientProtocolError, AIConfig
 from backend.util.json_tools import try_fix_to_json
 
 
@@ -266,9 +266,5 @@ def test_contract_breach_returns_parse_error(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     client, _ = _make_client(monkeypatch, response)
-    payload = client.chat_completion(messages=[{"role": "user", "content": "Test"}])
-
-    with pytest.raises(NoteStyleParseError) as exc_info:
-        parse_note_style_response_payload(payload)
-
-    assert exc_info.value.code in {"invalid_json", "schema_validation_failed"}
+    with pytest.raises(AIClientProtocolError):
+        client.chat_completion(messages=[{"role": "user", "content": "Test"}])

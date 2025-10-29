@@ -631,6 +631,9 @@ def _determine_request_mode(
     _ = has_response_format
 
     if base_mode is NoteStyleResponseMode.TOOL:
+        if not config.NOTE_STYLE_ALLOW_TOOL_CALLS:
+            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing json mode")
+            return "json"
         if not _tooling_configured():  # pragma: no cover - defensive
             log.debug("NOTE_STYLE_TOOL_MODE_WITHOUT_SCHEMA forcing json mode")
             return "json"
@@ -654,7 +657,7 @@ def _response_kwargs_for_attempt(
         has_response_format=True,
     )
 
-    if request_mode == "tool" or _tooling_configured():
+    if request_mode == "tool":
         return (
             {
                 "tools": [_build_tool_payload()],

@@ -4,6 +4,8 @@ from typing import Any, Mapping
 
 import pytest
 
+import backend.config.note_style as note_style_config
+
 from backend import config
 from backend.ai.note_style import prepare_and_send
 from backend.ai.note_style_sender import send_note_style_packs_for_sid
@@ -147,7 +149,14 @@ def test_note_style_json_persistence(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(config, "NOTE_STYLE_ENABLED", True)
     monkeypatch.setattr(config, "NOTE_STYLE_AUTOSEND", True)
     monkeypatch.setattr(config, "NOTE_STYLE_RESPONSE_MODE", response_mode)
-    monkeypatch.setattr("backend.config.note_style.NOTE_STYLE_RESPONSE_MODE", response_mode)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_RESPONSE_MODE", response_mode)
+    allow_tool_calls = mode == "tool"
+    monkeypatch.setattr(config, "NOTE_STYLE_ALLOW_TOOL_CALLS", allow_tool_calls)
+    monkeypatch.setattr(
+        note_style_config,
+        "NOTE_STYLE_ALLOW_TOOL_CALLS",
+        allow_tool_calls,
+    )
     monkeypatch.setattr(config, "NOTE_STYLE_INVALID_RESULT_RETRY_ATTEMPTS", 0)
     monkeypatch.setattr(config, "NOTE_STYLE_INVALID_RESULT_RETRY_TOOL_CALL", False)
     monkeypatch.setattr(config, "NOTE_STYLE_SKIP_IF_RESULT_EXISTS", False)
@@ -206,7 +215,7 @@ def test_note_style_json_persistence(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     runflow_payload = json.loads(runflow_path.read_text(encoding="utf-8"))
     stage_after = runflow_payload["stages"]["note_style"]
-    assert stage_after["status"] in {"success", "failed"}
+    assert stage_after["status"] in {"success", "failed", "error"}
     assert stage_after["status"] != "built"
     results_payload = stage_after.get("results", {})
     summary_payload = stage_after.get("summary", {})

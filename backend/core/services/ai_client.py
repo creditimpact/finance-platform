@@ -94,7 +94,9 @@ class AIClient:
         presence_penalty = 0
         top_p_value = top_p
 
-        kwargs.setdefault("response_format", {"type": "json_object"})
+        using_tools = bool(kwargs.get("tools"))
+        if not using_tools:
+            kwargs.setdefault("response_format", {"type": "json_object"})
 
         resp = self._client.chat.completions.create(
             model=model,
@@ -124,16 +126,60 @@ class AIClient:
                 )
                 total_tokens = getattr(usage, "total_tokens", None)
 
-        content = resp.choices[0].message.content
-        try:
-            parsed = json.loads(content)
-        except Exception:
-            from backend.util.json_tools import try_fix_to_json
+        choice = resp.choices[0]
+        message = choice.message
 
-            fixed = try_fix_to_json(content)
-            parsed = json.loads(fixed)
-            content = fixed
-            logger.warning("NOTE_STYLE_JSON_FIXED len=%d", len(content))
+        def _load_json(payload: str | None, *, context: str) -> Dict[str, Any] | None:
+            if payload is None:
+                return None
+            try:
+                parsed_payload = json.loads(payload)
+                if not isinstance(parsed_payload, dict):
+                    raise ValueError("Expected JSON object")
+                return parsed_payload
+            except Exception:  # pragma: no cover - defensive
+                from backend.util.json_tools import try_fix_to_json
+
+                fixed = try_fix_to_json(payload)
+                if fixed is None:
+                    logger.exception(
+                        "AI_CLIENT_JSON_PARSE_FAILED context=%s", context
+                    )
+                    raise
+
+                fixed_len = len(json.dumps(fixed, ensure_ascii=False))
+                logger.warning(
+                    "NOTE_STYLE_JSON_FIXED context=%s raw_len=%d fixed_len=%d",
+                    context,
+                    len(payload),
+                    fixed_len,
+                )
+                return fixed
+
+        content_text = getattr(message, "content", None)
+        content_json = _load_json(content_text, context="content")
+
+        tool_json = None
+        tool_calls = getattr(message, "tool_calls", None)
+        if content_text is None and tool_calls:
+            first_call = tool_calls[0]
+            arguments = getattr(getattr(first_call, "function", object()), "arguments", None)
+            tool_json = _load_json(arguments, context="tool")
+        else:
+            arguments = None
+
+        mode = "content" if content_text is not None else "tool"
+
+        normalized_response = {
+            "mode": mode,
+            "content_json": content_json,
+            "tool_json": tool_json,
+            "json": content_json if content_json is not None else tool_json,
+            "raw": resp,
+            "openai": resp,
+            "raw_content": content_text,
+            "raw_tool_arguments": arguments,
+        }
 
         if any(value is not None for value in (prompt_tokens, response_tokens, total_tokens)):
             logger.info(
@@ -144,7 +190,7 @@ class AIClient:
                 total_tokens if total_tokens is not None else "?",
             )
 
-        return {"raw": content, "json": parsed, "openai": resp}
+        return normalized_response
 
     def response_json(
         self,

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -40,6 +41,48 @@ _INDEX_THIN_THRESHOLD_BYTES = 128
 
 
 _PATH_LOG_CACHE: set[str] = set()
+
+
+_PARSE_MODE_COUNTERS: defaultdict[str, dict[str, int]] = defaultdict(
+    lambda: {"success": 0, "failure": 0}
+)
+
+
+def _normalize_parse_mode_label(value: Any) -> str:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return "unknown"
+
+
+def _response_payload_mode(response_payload: Any) -> str:
+    if isinstance(response_payload, Mapping):
+        candidate = response_payload.get("mode")
+        return _normalize_parse_mode_label(candidate)
+    return "unknown"
+
+
+def _record_parse_outcome(*, response_payload: Any, success: bool) -> None:
+    mode_label = _response_payload_mode(response_payload)
+    bucket = "success" if success else "failure"
+    counters = _PARSE_MODE_COUNTERS[mode_label]
+    counters[bucket] += 1
+    log.info(
+        "NOTE_STYLE_PARSE_TALLY mode=%s success_total=%s failure_total=%s outcome=%s",
+        mode_label,
+        counters["success"],
+        counters["failure"],
+        bucket,
+    )
+    log_structured_event(
+        "NOTE_STYLE_PARSE_TALLY",
+        logger=log,
+        mode=mode_label,
+        success_total=counters["success"],
+        failure_total=counters["failure"],
+        outcome=bucket,
+    )
 
 
 def _env_flag_enabled(name: str, default: bool) -> bool:
@@ -204,6 +247,7 @@ def _build_response_metrics(
     request_id = _coerce_attr(response_payload, "id")
     usage = _coerce_attr(response_payload, "usage")
     prompt_tokens, response_tokens = _extract_usage_tokens(usage)
+    response_mode = _response_payload_mode(response_payload)
 
     normalized_request_id: str | None
     if isinstance(request_id, str):
@@ -220,6 +264,7 @@ def _build_response_metrics(
         "response_format": response_format,
         "tool_choice": tool_choice,
         "mode": mode,
+        "response_mode": response_mode,
     }
 
 
@@ -253,6 +298,9 @@ def _log_pack_request_metrics(
         mode_value = metrics.get("mode")
         if mode_value is not None:
             payload["mode"] = mode_value
+        response_mode_value = metrics.get("response_mode")
+        if response_mode_value is not None:
+            payload["response_mode"] = response_mode_value
         for key in ("prompt_tokens", "response_tokens"):
             value = metrics.get(key)
             if value is not None:
@@ -1396,6 +1444,7 @@ def _send_pack_payload(
     ) -> bool:
         nonlocal raw_response_written
         failure_records.append({"attempt": attempt_index + 1, "reason": reason})
+        _record_parse_outcome(response_payload=response_payload, success=False)
         if not raw_response_written:
             _write_raw_response(
                 account_paths=account_paths,
@@ -1498,6 +1547,36 @@ def _send_pack_payload(
                 response_format=request_metadata.get("response_format"),
                 tool_choice=request_metadata.get("tool_choice"),
                 mode=request_mode,
+            )
+            response_payload_mode = _response_payload_mode(response)
+            has_content_payload = bool(
+                response.get("content_json")
+                or (isinstance(response.get("raw_content"), str) and response.get("raw_content").strip())
+            )
+            has_tool_payload = bool(
+                response.get("tool_json")
+                or response.get("raw_tool_arguments")
+            )
+            log.info(
+                "NOTE_STYLE_RESPONSE_MODE sid=%s account_id=%s configured_mode=%s request_mode=%s response_mode=%s has_content=%s has_tool=%s",
+                sid,
+                account_id,
+                response_mode,
+                request_mode,
+                response_payload_mode,
+                has_content_payload,
+                has_tool_payload,
+            )
+            log_structured_event(
+                "NOTE_STYLE_RESPONSE_MODE",
+                logger=log,
+                sid=sid,
+                account_id=account_id,
+                configured_mode=response_mode,
+                request_mode=request_mode,
+                response_mode=response_payload_mode,
+                has_content=bool(has_content_payload),
+                has_tool=bool(has_tool_payload),
             )
         except Exception as exc:
             latency = time.perf_counter() - start
@@ -1648,6 +1727,8 @@ def _send_pack_payload(
             attempts=attempt_index + 1,
             retries_used=max(0, attempt_index),
         )
+
+        _record_parse_outcome(response_payload=response, success=True)
 
         log.info(
             "STYLE_SEND_ACCOUNT_END sid=%s account_id=%s status=completed attempts=%d",

@@ -144,6 +144,43 @@ def test_autosend_skips_when_stage_terminal(tmp_path: Path, monkeypatch: pytest.
     assert task_stub.calls == []
 
 
+def test_autosend_skips_when_stage_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sid = "SID-AUTO-FAILED"
+    accounts = ["idx-601", "idx-602"]
+    run_dir = tmp_path / sid
+
+    prime_stage(
+        tmp_path,
+        sid,
+        expected_accounts=accounts,
+        built_accounts=accounts,
+        failed_accounts=accounts,
+    )
+
+    _write_manifest(run_dir / "manifest.json", sid, validation_status="success")
+
+    task_stub = _TaskStub()
+    monkeypatch.setattr(
+        "backend.ai.note_style.tasks.note_style_prepare_and_send_task",
+        task_stub,
+    )
+
+    decisions: list[dict[str, Any]] = []
+
+    def _record_decision(**kwargs: Any) -> None:
+        decisions.append(kwargs)
+
+    monkeypatch.setattr(
+        "backend.runflow.umbrella._log_autosend_decision",
+        _record_decision,
+    )
+
+    schedule_note_style_after_validation(sid, run_dir=run_dir)
+
+    assert task_stub.calls == []
+    assert any(entry.get("reason") == "already_complete" for entry in decisions)
+
+
 def test_prepare_task_ignores_corrupt_terminal_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

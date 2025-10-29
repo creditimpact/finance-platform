@@ -83,7 +83,7 @@ class NoteStyleStageView:
 
     @property
     def is_terminal(self) -> bool:
-        return self.state in {"success", "empty"}
+        return self.state in {"success", "empty", "failed"}
 
 
 _NOTE_VALUE_PATHS: tuple[tuple[str, ...], ...] = (
@@ -413,6 +413,8 @@ def _determine_stage_state(
         return ("built", True)
     if terminal_total < expected_total:
         return ("in_progress", True)
+    if expected_total and completed_total == 0 and failed_total >= expected_total:
+        return ("failed", True)
     return ("success", True)
 
 

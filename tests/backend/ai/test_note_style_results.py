@@ -1,10 +1,11 @@
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from backend.ai.note_style_results import store_note_style_result
+from backend.ai.note_style_results import _refresh_after_index_update, store_note_style_result
 from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
 
@@ -380,36 +381,101 @@ def test_manifest_status_tracks_partial_and_complete_results(tmp_path: Path) -> 
     manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
     stage_status = manifest_data["ai"]["status"]["note_style"]
     assert stage_status["built"] is True
-    assert stage_status["sent"] is True
-    assert stage_status["completed_at"] is not None
-    assert stage_status["completed_at"].endswith("Z")
+    assert stage_status["sent"] is False
+    assert stage_status["completed_at"] is None
 
-    second_payload = {
-        "sid": sid,
-        "account_id": account_ids[1],
-        "analysis": {
-            "tone": "empathetic",
-            "context_hints": {
-                "topic": "payment_issue",
-                "timeframe": {"month": "2024-04-01", "relative": "later"},
-                "entities": {"creditor": "Capital", "amount": 87.0},
-            },
-            "emphasis": ["follow_up"],
-            "confidence": 0.68,
-            "risk_flags": ["needs_review"],
-        },
-    }
-    store_note_style_result(
-        sid,
-        account_ids[1],
-        second_payload,
-        runs_root=runs_root,
-        completed_at="2025-01-02T00:00:00Z",
+def test_refresh_after_index_update_defers_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    sid = "SID-success-guard"
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir(parents=True, exist_ok=True)
+    paths = ensure_note_style_paths(runs_root, sid, create=True)
+
+    stage_updates: list[dict[str, object]] = []
+    record_calls: list[dict[str, object]] = []
+
+    def _fake_update(
+        sid_arg: str,
+        *,
+        state: str | None = None,
+        sent: bool | None = None,
+        completed_at: str | None | object = None,
+        **_: object,
+    ) -> None:
+        stage_updates.append(
+            {
+                "sid": sid_arg,
+                "state": state,
+                "sent": sent,
+                "completed_at": completed_at,
+            }
+        )
+
+    def _fake_record(
+        sid_arg: str,
+        stage: str,
+        *,
+        status: str | None = None,
+        **_: object,
+    ) -> None:
+        record_calls.append({"sid": sid_arg, "stage": stage, "status": status})
+
+    stage_view = SimpleNamespace(
+        total_expected=3,
+        completed_total=1,
+        failed_total=0,
+        built_complete=True,
+        state="success",
+        is_terminal=True,
     )
 
-    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    stage_status = manifest_data["ai"]["status"]["note_style"]
-    assert stage_status["built"] is True
-    assert stage_status["sent"] is True
-    assert stage_status["completed_at"] is not None
-    assert stage_status["completed_at"].endswith("Z")
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.refresh_note_style_stage_from_results",
+        lambda *args, **kwargs: (3, 1, 0),
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.reconcile_umbrella_barriers",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.note_style_stage_view",
+        lambda *args, **kwargs: stage_view,
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.update_note_style_stage_status",
+        _fake_update,
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.record_stage",
+        _fake_record,
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.runflow_barriers_refresh",
+        lambda *args, **kwargs: None,
+    )
+
+    caplog.set_level("INFO", logger="backend.ai.note_style_results")
+
+    _refresh_after_index_update(
+        sid=sid,
+        account_id="acct-guard",
+        runs_root_path=runs_root,
+        paths=paths,
+        updated_entry={"status": "completed"},
+        totals={"total": 3, "completed": 1, "failed": 0},
+        skipped_count=0,
+    )
+
+    assert stage_updates, "expected stage update to be recorded"
+    update_payload = stage_updates[-1]
+    assert update_payload["state"] == "in_progress"
+    assert update_payload["sent"] is False
+    assert update_payload["completed_at"] is None
+
+    assert record_calls, "expected record_stage call"
+    record_payload = record_calls[-1]
+    assert record_payload["status"] == "in_progress"
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("NOTE_STYLE_SUCCESS_DEFERRED" in message for message in messages)

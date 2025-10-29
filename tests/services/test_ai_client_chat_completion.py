@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +18,7 @@ class StubChatCompletions:
         return self.response
 
 
-def _build_response(*, content: str | None, tool_arguments: str | None = None):
+def _build_response(*, content: str | None, tool_arguments: object | None = None):
     message = SimpleNamespace(content=content)
     if tool_arguments is not None:
         message.tool_calls = [
@@ -90,4 +91,24 @@ def test_chat_completion_tool_mode(client):
     assert result["raw_content"] is None
     assert result["raw_tool_arguments"] == "{\"tool\": true}"
     assert "response_format" not in completions.kwargs
+
+
+def test_chat_completion_tool_mode_with_dict_arguments(client):
+    payload = {"tool": True, "nested": {"value": 3}}
+    response = _build_response(content=None, tool_arguments=payload)
+    completions = StubChatCompletions(response)
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    result = client.chat_completion(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "noop", "parameters": {}}}],
+    )
+
+    assert result["mode"] == "tool"
+    assert result["content_json"] is None
+    assert result["tool_json"] == payload
+    assert result["json"] == payload
+    expected_raw = json.dumps(payload, ensure_ascii=False)
+    assert result["raw_tool_arguments"] == expected_raw
+    assert result["raw_content"] is None
 

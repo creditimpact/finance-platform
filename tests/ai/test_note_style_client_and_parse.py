@@ -202,6 +202,55 @@ def test_chat_completion_returns_tool_json_and_ingest_succeeds(monkeypatch: pyte
     assert stored["note_metrics"] == {"char_len": 12, "word_len": 2}
 
 
+def test_chat_completion_handles_tool_arguments_mapping(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    analysis = _analysis_payload()
+    tool_arguments = {"analysis": analysis}
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=None,
+                    tool_calls=[
+                        SimpleNamespace(function=SimpleNamespace(arguments=tool_arguments))
+                    ],
+                )
+            )
+        ],
+        usage=None,
+    )
+
+    client, _ = _make_client(monkeypatch, response)
+    payload = client.chat_completion(
+        messages=[{"role": "user", "content": "Test"}],
+        tools=[{"type": "function", "function": {"name": "noop", "parameters": {}}}],
+    )
+
+    assert payload["mode"] == "tool"
+    assert payload["json"] == {"analysis": analysis}
+    assert payload["tool_json"] == {"analysis": analysis}
+    assert payload["raw_tool_arguments"] == json.dumps(tool_arguments, ensure_ascii=False)
+
+    pack_payload = {"note_text": "Example note"}
+    result_path = _ingest(
+        tmp_path,
+        sid="SID789",
+        account_id="acct-3",
+        pack_payload=pack_payload,
+        response_payload=payload,
+        monkeypatch=monkeypatch,
+    )
+
+    assert result_path.exists()
+    stored = json.loads(result_path.read_text(encoding="utf-8").splitlines()[-1])
+    stored_analysis = stored["analysis"]
+    assert stored_analysis["tone"] == analysis["tone"]
+    assert stored_analysis["context_hints"]["topic"] == analysis["context_hints"]["topic"]
+    assert stored_analysis["context_hints"]["entities"]["creditor"] == analysis["context_hints"]["entities"]["creditor"]
+    assert stored_analysis["risk_flags"] == analysis["risk_flags"]
+    assert 0.0 <= stored_analysis["confidence"] <= 0.5
+    assert stored["note_metrics"] == {"char_len": 12, "word_len": 2}
+
+
 def test_try_fix_to_json_handles_none() -> None:
     assert try_fix_to_json(None) is None
 

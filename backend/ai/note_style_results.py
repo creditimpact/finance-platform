@@ -1324,8 +1324,23 @@ def _refresh_after_index_update(
     packs_completed = view.completed_total
     packs_failed = view.failed_total
     stage_status = view.state
-    ready = stage_status == "success"
+    total_processed = packs_completed + packs_failed
+    counts_complete = packs_total == total_processed
+    ready = stage_status == "success" and counts_complete
     empty_ok = packs_total == 0
+
+    if stage_status == "success" and not counts_complete:
+        log.info(
+            "NOTE_STYLE_SUCCESS_DEFERRED sid=%s packs_total=%s processed=%s completed=%s failed=%s",
+            sid,
+            packs_total,
+            total_processed,
+            packs_completed,
+            packs_failed,
+        )
+
+    effective_state = stage_status if (stage_status != "success" or counts_complete) else "in_progress"
+    is_effectively_terminal = effective_state in {"success", "failed", "empty"}
 
     counts = {"packs_total": packs_total}
     metrics = {"packs_total": packs_total}
@@ -1349,7 +1364,8 @@ def _refresh_after_index_update(
         logger=log,
         sid=sid,
         ready=ready,
-        status=stage_status,
+        status=effective_state,
+        status_raw=stage_status,
         packs_expected=packs_total,
         packs_total=packs_total,
         packs_completed=packs_completed,
@@ -1360,12 +1376,12 @@ def _refresh_after_index_update(
     completed_timestamp: str | None
     if completed_at_override is not None:
         completed_timestamp = completed_at_override
-    elif view.is_terminal:
+    elif is_effectively_terminal:
         completed_timestamp = _now_iso()
     else:
         completed_timestamp = None
 
-    sent_flag = view.is_terminal or completed_at_override is not None
+    sent_flag = is_effectively_terminal or completed_at_override is not None
 
     try:
         update_note_style_stage_status(
@@ -1375,7 +1391,7 @@ def _refresh_after_index_update(
             sent=sent_flag,
             failed=view.failed_total > 0,
             completed_at=completed_timestamp,
-            state=stage_status,
+            state=effective_state,
         )
     except Exception:  # pragma: no cover - defensive logging
         log.warning("NOTE_STYLE_MANIFEST_STAGE_UPDATE_FAILED sid=%s", sid, exc_info=True)
@@ -1384,7 +1400,7 @@ def _refresh_after_index_update(
         record_stage(
             sid,
             "note_style",
-            status=stage_status,
+            status=effective_state,
             counts=counts,
             empty_ok=empty_ok,
             metrics=metrics,
@@ -1491,7 +1507,7 @@ def store_note_style_result(
     note_text_value = _load_pack_note_text(account_paths.pack_file)
     if isinstance(note_text_value, str):
         normalized_note = note_text_value.strip()
-        if normalized_note:
+        if normalized_note and not _is_short_note_metrics(note_metrics_payload):
             note_hash = hashlib.sha256(
                 normalized_note.encode("utf-8", "ignore")
             ).hexdigest()

@@ -1576,6 +1576,8 @@ def record_note_style_failure(
     error: str | None = None,
     parser_reason: str | None = None,
     raw_path: Path | str | None = None,
+    raw_openai_mode: str | None = None,
+    raw_openai_payload_excerpt: str | None = None,
 ) -> Path:
     """Record a failed note_style model attempt for ``account_id``."""
 
@@ -1607,6 +1609,16 @@ def record_note_style_failure(
 
     if raw_path_value is not None:
         failure_payload["raw_path"] = _relative_to_base(raw_path_value, paths.base)
+
+    if isinstance(raw_openai_mode, str):
+        mode_value = raw_openai_mode.strip()
+        if mode_value:
+            failure_payload["raw_openai_mode"] = mode_value
+
+    if isinstance(raw_openai_payload_excerpt, str):
+        excerpt_value = raw_openai_payload_excerpt.strip()
+        if excerpt_value:
+            failure_payload["raw_openai_payload_excerpt"] = excerpt_value
 
     _atomic_write_jsonl(failure_path, failure_payload)
 

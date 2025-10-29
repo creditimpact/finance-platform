@@ -22,6 +22,7 @@ from backend.ai.note_style.parse import parse_note_style_response_payload
 from backend.ai.note_style_logging import log_structured_event
 from backend.ai.note_style.schema import NOTE_STYLE_TOOL_PARAMETERS_SCHEMA
 from backend.ai.note_style.prompt import build_response_instruction
+from backend.config.note_style import NoteStyleResponseMode
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -595,18 +596,20 @@ def _apply_mode_response_instruction(
         break
 
 
-def _normalize_response_mode(value: str | None) -> str:
-    if not value:
-        return "auto"
+def _normalize_response_mode(
+    value: NoteStyleResponseMode | str | None,
+) -> NoteStyleResponseMode:
+    if isinstance(value, NoteStyleResponseMode):
+        return value
 
-    normalized = str(value).strip().lower()
-    if normalized == "json_object":
-        return "json"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == NoteStyleResponseMode.TOOL.value:
+            return NoteStyleResponseMode.TOOL
+        if normalized in {NoteStyleResponseMode.JSON.value, "json_object"}:
+            return NoteStyleResponseMode.JSON
 
-    if normalized in {"auto", "tool", "json", "prompt_only"}:
-        return normalized
-
-    return "auto"
+    return NoteStyleResponseMode.JSON
 
 
 def _tooling_configured() -> bool:
@@ -618,47 +621,37 @@ def _tooling_configured() -> bool:
 
 def _determine_request_mode(
     *,
-    base_mode: str,
+    base_mode: NoteStyleResponseMode,
     attempt_index: int,
     enable_tool_call_retry: bool,
     has_response_format: bool,
 ) -> str:
     _ = attempt_index  # maintained for signature compatibility
     _ = enable_tool_call_retry
+    _ = has_response_format
 
-    if base_mode == "auto":
-        if _tooling_configured():
-            return "tool"
-        if has_response_format:
+    if base_mode is NoteStyleResponseMode.TOOL:
+        if not _tooling_configured():  # pragma: no cover - defensive
+            log.debug("NOTE_STYLE_TOOL_MODE_WITHOUT_SCHEMA forcing json mode")
             return "json"
-        return "prompt_only"
+        return "tool"
 
-    if base_mode == "json":
-        if has_response_format:
-            return "json"
-        log.debug("NOTE_STYLE_NO_RESPONSE_FORMAT forcing prompt mode")
-        return "prompt_only"
-
-    if base_mode in {"tool", "prompt_only"}:
-        return base_mode
-
-    return "tool"
+    return "json"
 
 
 def _response_kwargs_for_attempt(
     response_format: Mapping[str, Any] | None,
     attempt_index: int,
     *,
-    response_mode: str,
+    response_mode: NoteStyleResponseMode | str | None,
     enable_tool_call_retry: bool,
 ) -> tuple[dict[str, Any], str]:
     normalized_mode = _normalize_response_mode(response_mode)
-    has_format = response_format is not None
     request_mode = _determine_request_mode(
         base_mode=normalized_mode,
         attempt_index=attempt_index,
         enable_tool_call_retry=enable_tool_call_retry,
-        has_response_format=has_format,
+        has_response_format=True,
     )
 
     if request_mode == "tool":
@@ -670,11 +663,8 @@ def _response_kwargs_for_attempt(
             request_mode,
         )
 
-    if request_mode == "json":
-        payload = response_format or {"type": "json_object"}
-        return ({"response_format": copy.deepcopy(payload)}, request_mode)
-
-    return ({}, request_mode)
+    payload = response_format or {"type": "json_object"}
+    return ({"response_format": copy.deepcopy(payload)}, request_mode)
 
 
 def _relativize(path: Path, base: Path) -> str:
@@ -1426,7 +1416,7 @@ def _send_pack_payload(
     messages = _coerce_messages(pack_payload)
 
     response_format = _coerce_response_format(pack_payload)
-    response_mode = config.NOTE_STYLE_RESPONSE_MODE
+    response_mode = _normalize_response_mode(config.NOTE_STYLE_RESPONSE_MODE)
 
     retry_attempts = max(0, int(config.NOTE_STYLE_INVALID_RESULT_RETRY_ATTEMPTS))
     enable_tool_call_retry = bool(config.NOTE_STYLE_INVALID_RESULT_RETRY_TOOL_CALL)
@@ -1561,7 +1551,7 @@ def _send_pack_payload(
                 "NOTE_STYLE_RESPONSE_MODE sid=%s account_id=%s configured_mode=%s request_mode=%s response_mode=%s has_content=%s has_tool=%s",
                 sid,
                 account_id,
-                response_mode,
+                response_mode.value,
                 request_mode,
                 response_payload_mode,
                 has_content_payload,
@@ -1572,7 +1562,7 @@ def _send_pack_payload(
                 logger=log,
                 sid=sid,
                 account_id=account_id,
-                configured_mode=response_mode,
+                configured_mode=response_mode.value,
                 request_mode=request_mode,
                 response_mode=response_payload_mode,
                 has_content=bool(has_content_payload),
@@ -1765,6 +1755,7 @@ def send_note_style_packs_for_sid(
     pending_normalized = expected_normalized - (completed_normalized | failed_normalized)
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
+    response_mode = _normalize_response_mode(config.NOTE_STYLE_RESPONSE_MODE)
     env_glob_raw = os.getenv("NOTE_STYLE_PACK_GLOB")
     env_glob = None
     if env_glob_raw:
@@ -1784,7 +1775,7 @@ def send_note_style_packs_for_sid(
     log.info(
         "NOTE_STYLE_SEND_CONFIG sid=%s response_mode=%s retry_count=%s strict_schema=%s",
         sid,
-        config.NOTE_STYLE_RESPONSE_MODE,
+        response_mode.value,
         config.NOTE_STYLE_RETRY_COUNT,
         int(bool(config.NOTE_STYLE_STRICT_SCHEMA)),
     )

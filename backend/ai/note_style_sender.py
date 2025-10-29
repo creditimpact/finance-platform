@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import time
-import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -17,6 +16,7 @@ from backend import config
 from backend.ai.note_style.io import note_style_snapshot
 from backend.ai.note_style_ingest import ingest_note_style_result
 from backend.ai.note_style_results import record_note_style_failure
+from backend.ai.note_style.parse import parse_note_style_response_payload
 from backend.ai.note_style_logging import log_structured_event
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
@@ -712,54 +712,8 @@ def _extract_response_text(response_payload: Any) -> str:
     return ""
 
 
-def _extract_response_json(response_payload: Any) -> Mapping[str, Any]:
-    text = _extract_response_text(response_payload)
-    if not text or not text.strip():
-        raise ValueError("Model response missing JSON content")
-
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError("Model response is not valid JSON") from exc
-
-    if not isinstance(parsed, Mapping):
-        raise ValueError("Model response payload must be an object")
-
-    return parsed
-
-
-def _validate_response_structure(payload: Mapping[str, Any]) -> None:
-    required_keys = {"tone", "context_hints", "emphasis", "confidence", "risk_flags"}
-    missing = sorted(required_keys.difference(payload.keys()))
-    if missing:
-        raise ValueError(f"Model response missing required fields: {', '.join(missing)}")
-
-    confidence = payload.get("confidence")
-    try:
-        numeric_confidence = float(confidence)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("confidence must be a number between 0 and 1") from exc
-    if math.isnan(numeric_confidence) or math.isinf(numeric_confidence):
-        raise ValueError("confidence must be a finite number between 0 and 1")
-    if numeric_confidence < 0 or numeric_confidence > 1:
-        raise ValueError("confidence must be between 0 and 1")
-
-    emphasis = payload.get("emphasis")
-    if not isinstance(emphasis, Sequence) or isinstance(emphasis, (str, bytes, bytearray)):
-        raise ValueError("emphasis must be an array")
-    if len(emphasis) > 6:
-        raise ValueError("emphasis must contain at most 6 items")
-
-    risk_flags = payload.get("risk_flags")
-    if not isinstance(risk_flags, Sequence) or isinstance(risk_flags, (str, bytes, bytearray)):
-        raise ValueError("risk_flags must be an array")
-    if len(risk_flags) > 6:
-        raise ValueError("risk_flags must contain at most 6 items")
-
-
 def _ensure_valid_json_response(response_payload: Any) -> None:
-    payload = _extract_response_json(response_payload)
-    _validate_response_structure(payload)
+    parse_note_style_response_payload(response_payload)
 
 
 def _write_raw_response(

@@ -74,6 +74,7 @@ NOTE_STYLE_STRICT_SCHEMA: Final[bool] = env_bool("NOTE_STYLE_STRICT_SCHEMA", Tru
 NOTE_STYLE_ALLOW_TOOL_CALLS: Final[bool] = env_bool(
     "NOTE_STYLE_ALLOW_TOOL_CALLS", False
 )
+NOTE_STYLE_ALLOW_TOOLS: Final[bool] = env_bool("NOTE_STYLE_ALLOW_TOOLS", False)
 
 
 __all__ = [
@@ -82,5 +83,6 @@ __all__ = [
     "NOTE_STYLE_RETRY_COUNT",
     "NOTE_STYLE_STRICT_SCHEMA",
     "NOTE_STYLE_ALLOW_TOOL_CALLS",
+    "NOTE_STYLE_ALLOW_TOOLS",
 ]
 

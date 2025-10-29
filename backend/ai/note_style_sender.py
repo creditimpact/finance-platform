@@ -622,13 +622,19 @@ def _determine_request_mode(
     _ = has_response_format
 
     response_mode_value = getattr(base_mode, "value", str(base_mode)).strip().lower()
-    allow_tools = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
+    allow_flag = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
+    env_allow = bool(note_cfg.NOTE_STYLE_ALLOW_TOOLS)
+    allow_tools = allow_flag and env_allow
 
-    if attempt_index <= 0 and (response_mode_value == "tool" or allow_tools):
+    if allow_tools and response_mode_value == "tool":
+        return "tool"
+
+    if attempt_index <= 0 and response_mode_value == "tool":
         log.info(
-            "NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode base_mode=%s allow_tools=%s",
+            "NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode base_mode=%s allow_tools=%s env_allow_tools=%s",
             response_mode_value or "",
-            allow_tools,
+            allow_flag,
+            env_allow,
         )
 
     return "content"
@@ -652,20 +658,26 @@ def _response_kwargs_for_attempt(
         note_cfg.NOTE_STYLE_RESPONSE_MODE, "value", note_cfg.NOTE_STYLE_RESPONSE_MODE
     )
     normalized_config_mode = str(configured_mode).strip().lower()
-    allow_tool_calls = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
+    allow_flag = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
+    env_allow = bool(note_cfg.NOTE_STYLE_ALLOW_TOOLS)
+    allow_tool_calls = bool(allow_flag and env_allow)
 
     if not allow_tool_calls:
         if request_mode != "content":
-            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode")
+            log.info(
+                "NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode allow_tools=%s env_allow_tools=%s",
+                allow_flag,
+                env_allow,
+            )
         request_mode = "content"
     elif normalized_config_mode != "tool":
         if request_mode != "content":
             log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode")
         request_mode = "content"
 
-    payload = response_format or {"type": "json_object"}
-    kwargs = {"response_format": copy.deepcopy(payload)}
-    kwargs["_note_style_request"] = True
+    kwargs: dict[str, Any] = {"_note_style_request": True}
+    if request_mode == "content":
+        kwargs["response_format"] = {"type": "json_object"}
     if request_mode == "tool":
         kwargs["tools"] = [_build_tool_payload()]
         kwargs["tool_choice"] = _build_tool_choice()

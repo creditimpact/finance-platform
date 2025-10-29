@@ -152,18 +152,21 @@ class AIClient:
             note_cfg.NOTE_STYLE_RESPONSE_MODE, "value", note_cfg.NOTE_STYLE_RESPONSE_MODE
         )
         normalized_mode = str(configured_mode).strip().lower()
-        allow_tool_calls = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
+        allow_tool_calls = bool(
+            note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS and note_cfg.NOTE_STYLE_ALLOW_TOOLS
+        )
         wants_tool_mode = allow_tool_calls and normalized_mode == "tool"
 
         if is_note_style_request:
-            kwargs["response_format"] = {"type": "json_object"}
-            if not wants_tool_mode:
-                kwargs.pop("tools", None)
-                kwargs.pop("tool_choice", None)
-            else:
+            if wants_tool_mode:
+                kwargs.pop("response_format", None)
                 tools = _maybe_build_tools("tool")
                 if tools is not None:
                     kwargs.setdefault("tools", tools)
+            else:
+                kwargs["response_format"] = {"type": "json_object"}
+                kwargs.pop("tools", None)
+                kwargs.pop("tool_choice", None)
         else:
             using_tools = bool(kwargs.get("tools"))
             if not using_tools:

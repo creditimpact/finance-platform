@@ -55,3 +55,14 @@ def test_note_style_allow_tool_calls_truthy(monkeypatch):
     finally:
         sys.modules.pop("backend.config.note_style", None)
         sys.modules.pop(_DEF_CONFIG_MODULE, None)
+
+
+def test_note_style_allow_tools_truthy(monkeypatch):
+    """NOTE_STYLE_ALLOW_TOOLS honors truthy environment overrides."""
+
+    try:
+        config = _load_config_with_env(monkeypatch, NOTE_STYLE_ALLOW_TOOLS="1")
+        assert config.NOTE_STYLE_ALLOW_TOOLS is True
+    finally:
+        sys.modules.pop("backend.config.note_style", None)
+        sys.modules.pop(_DEF_CONFIG_MODULE, None)

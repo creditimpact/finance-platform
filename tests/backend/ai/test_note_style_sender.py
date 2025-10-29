@@ -7,6 +7,8 @@ from typing import Any, Mapping
 
 import pytest
 
+import backend.config.note_style as note_style_config
+
 from backend.ai.note_style_results import (
     complete_note_style_result,
     store_note_style_result,
@@ -18,6 +20,7 @@ from backend.ai.note_style_sender import (
 from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
 from backend import config
+from backend.config.note_style import NoteStyleResponseMode
 
 
 def _write_response(path: Path, payload: dict[str, object]) -> None:
@@ -119,6 +122,11 @@ def test_note_style_sender_sends_built_pack(
         },
     )
 
+    monkeypatch.setattr(config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL)
+
     build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
 
     client = _StubClient()
@@ -133,6 +141,7 @@ def test_note_style_sender_sends_built_pack(
     assert "tools" in first_kwargs
     assert first_kwargs["tools"][0]["function"]["name"] == "submit_note_style_analysis"
     assert first_kwargs["tool_choice"]["function"]["name"] == "submit_note_style_analysis"
+    assert first_kwargs.get("_note_style_request") is True
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -278,6 +287,11 @@ def test_note_style_sender_retries_on_invalid_result(
         },
     )
 
+    monkeypatch.setattr(config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL)
+
     build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
 
     invalid_payload = {"choices": [{"message": {"content": "Not JSON"}}]}
@@ -340,9 +354,11 @@ def test_note_style_sender_retries_on_invalid_result(
     first_kwargs = client.calls[0]["kwargs"]
     retry_kwargs = client.calls[1]["kwargs"]
     assert "tools" in first_kwargs
-    assert "response_format" not in first_kwargs
+    assert first_kwargs.get("response_format") == {"type": "json_object"}
+    assert first_kwargs.get("_note_style_request") is True
     assert "tools" in retry_kwargs
-    assert "response_format" not in retry_kwargs
+    assert retry_kwargs.get("response_format") == {"type": "json_object"}
+    assert retry_kwargs.get("_note_style_request") is True
 
     corrective_message = client.calls[1]["messages"][1]
     assert corrective_message["role"] == "system"
@@ -407,6 +423,11 @@ def test_note_style_sender_accepts_string_runs_root(
             "answers": {"explanation": "The balance should be zero."},
         },
     )
+
+    monkeypatch.setattr(config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL)
 
     build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
 
@@ -845,6 +866,11 @@ def test_note_style_sender_normalizes_message_content(tmp_path: Path, monkeypatc
         },
     )
 
+    monkeypatch.setattr(config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_ALLOW_TOOL_CALLS", True)
+    monkeypatch.setattr(note_style_config, "NOTE_STYLE_RESPONSE_MODE", NoteStyleResponseMode.TOOL)
+
     build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
@@ -880,6 +906,8 @@ def test_note_style_sender_normalizes_message_content(tmp_path: Path, monkeypatc
 
     call_kwargs = client.calls[0]["kwargs"]
     assert "tools" in call_kwargs
+    assert call_kwargs.get("response_format") == {"type": "json_object"}
+    assert call_kwargs.get("_note_style_request") is True
 
 
 def test_note_style_sender_ignores_debug_snapshot_files(

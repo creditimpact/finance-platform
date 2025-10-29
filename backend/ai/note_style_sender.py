@@ -20,9 +20,14 @@ from backend.ai.note_style_ingest import ingest_note_style_result
 from backend.ai.note_style_results import record_note_style_failure
 from backend.ai.note_style.parse import parse_note_style_response_payload
 from backend.ai.note_style_logging import log_structured_event
-from backend.ai.note_style.schema import NOTE_STYLE_TOOL_PARAMETERS_SCHEMA
+from backend.ai.note_style.schema import (
+    NOTE_STYLE_TOOL_FUNCTION_NAME,
+    NOTE_STYLE_TOOL_PARAMETERS_SCHEMA,
+    build_note_style_tool,
+)
 from backend.ai.note_style.prompt import build_response_instruction
 from backend.config.note_style import NoteStyleResponseMode
+from backend.config import note_style as note_cfg
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -422,12 +427,6 @@ _CORRECTIVE_SYSTEM_MESSAGE = (
 # prevents partial responses when packs include richer context.
 _NOTE_STYLE_RESPONSE_MAX_TOKENS = 1600
 
-_NOTE_STYLE_TOOL_FUNCTION_NAME = "submit_note_style_analysis"
-_NOTE_STYLE_TOOL_DESCRIPTION = (
-    "Return the strict note_style analysis JSON object that satisfies the schema."
-)
-
-
 def _normalize_message_content(value: Any) -> str | Sequence[Any]:
     """Return content compatible with the chat API."""
 
@@ -510,20 +509,13 @@ def _coerce_response_format(pack_payload: Mapping[str, Any]) -> Mapping[str, Any
 
 
 def _build_tool_payload() -> Mapping[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": _NOTE_STYLE_TOOL_FUNCTION_NAME,
-            "description": _NOTE_STYLE_TOOL_DESCRIPTION,
-            "parameters": copy.deepcopy(NOTE_STYLE_TOOL_PARAMETERS_SCHEMA),
-        },
-    }
+    return build_note_style_tool()
 
 
 def _build_tool_choice() -> Mapping[str, Any]:
     return {
         "type": "function",
-        "function": {"name": _NOTE_STYLE_TOOL_FUNCTION_NAME},
+        "function": {"name": NOTE_STYLE_TOOL_FUNCTION_NAME},
     }
 
 
@@ -630,8 +622,14 @@ def _determine_request_mode(
     _ = enable_tool_call_retry
     _ = has_response_format
 
-    if base_mode is NoteStyleResponseMode.TOOL:
-        if not config.NOTE_STYLE_ALLOW_TOOL_CALLS:
+    response_mode_value = getattr(base_mode, "value", str(base_mode)).lower()
+    allow_tools = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
+
+    if response_mode_value == "json" and not allow_tools:
+        return "json"
+
+    if response_mode_value == "tool" or allow_tools:
+        if not allow_tools and response_mode_value == "tool":
             log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing json mode")
             return "json"
         if not _tooling_configured():  # pragma: no cover - defensive
@@ -656,18 +654,30 @@ def _response_kwargs_for_attempt(
         enable_tool_call_retry=enable_tool_call_retry,
         has_response_format=True,
     )
+    configured_mode = getattr(
+        note_cfg.NOTE_STYLE_RESPONSE_MODE, "value", note_cfg.NOTE_STYLE_RESPONSE_MODE
+    )
+    forced_json_mode = (
+        str(configured_mode).strip().lower() == "json"
+        and not note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS
+    )
+
+    if forced_json_mode:
+        request_mode = "json"
 
     if request_mode == "tool":
-        return (
-            {
-                "tools": [_build_tool_payload()],
-                "tool_choice": dict(_build_tool_choice()),
-            },
-            request_mode,
-        )
+        kwargs = {
+            "response_format": {"type": "json_object"},
+            "tools": [_build_tool_payload()],
+            "tool_choice": dict(_build_tool_choice()),
+        }
+        kwargs["_note_style_request"] = True
+        return (kwargs, request_mode)
 
     payload = response_format or {"type": "json_object"}
-    return ({"response_format": copy.deepcopy(payload)}, request_mode)
+    kwargs = {"response_format": copy.deepcopy(payload)}
+    kwargs["_note_style_request"] = True
+    return (kwargs, "json")
 
 
 def _relativize(path: Path, base: Path) -> str:

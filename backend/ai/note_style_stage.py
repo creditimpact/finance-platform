@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
 from backend import config
+from backend.config import note_style as note_cfg
 from backend.ai.manifest import (
     ensure_note_style_section,
     register_note_style_build,
@@ -746,6 +747,11 @@ def build_note_style_pack_for_account(
     ensure_note_style_section(sid, runs_root=runs_root_path)
     paths = resolve_note_style_stage_paths(runs_root_path, sid, create=True)
     _log_resolved_paths(sid, paths)
+    log.info(
+        "NOTE_STYLE mode: %s, allow_tool_calls=%s",
+        getattr(note_cfg.NOTE_STYLE_RESPONSE_MODE, "value", note_cfg.NOTE_STYLE_RESPONSE_MODE),
+        note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS,
+    )
 
     response_path = _resolve_response_path(sid, account_id, runs_root_path)
     payload = _load_json_data(response_path)

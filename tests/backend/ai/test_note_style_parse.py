@@ -14,6 +14,21 @@ def _make_response(content: str) -> dict[str, object]:
     return {"choices": [{"message": {"content": content}}]}
 
 
+def _make_tool_response(arguments: object, *, content: object | None = "") -> dict[str, object]:
+    return {
+        "choices": [
+            {
+                "message": {
+                    "content": content,
+                    "tool_calls": [
+                        {"function": {"name": "submit_note_style_analysis", "arguments": arguments}}
+                    ],
+                }
+            }
+        ]
+    }
+
+
 def _analysis_payload() -> dict[str, object]:
     return {
         "tone": "formal",
@@ -35,7 +50,7 @@ def test_parse_pure_json_response() -> None:
 
     assert parsed.analysis == analysis
     assert parsed.payload == analysis
-    assert parsed.source == "raw"
+    assert parsed.source == "message.content:raw"
 
 
 def test_parse_fenced_json_response() -> None:
@@ -47,7 +62,7 @@ def test_parse_fenced_json_response() -> None:
 
     assert parsed.analysis == analysis
     assert parsed.payload == payload
-    assert parsed.source.startswith("fenced#")
+    assert parsed.source.startswith("message.content:fenced#")
 
 
 def test_parse_text_with_inline_json_response() -> None:
@@ -58,6 +73,7 @@ def test_parse_text_with_inline_json_response() -> None:
     parsed = parse_note_style_response_payload(_make_response(content))
 
     assert parsed.analysis == analysis
+    assert parsed.source.startswith("message.content:")
 
 
 def test_parse_malformed_json_raises() -> None:
@@ -67,3 +83,27 @@ def test_parse_malformed_json_raises() -> None:
         parse_note_style_response_payload(_make_response(content))
 
     assert exc_info.value.code in {"invalid_json", "schema_validation_failed"}
+
+
+def test_parse_uses_tool_call_arguments_when_content_missing() -> None:
+    analysis = _analysis_payload()
+    payload = {"analysis": analysis}
+    response = _make_tool_response(json.dumps(payload), content=None)
+
+    parsed = parse_note_style_response_payload(response)
+
+    assert parsed.analysis == analysis
+    assert parsed.payload == payload
+    assert parsed.source.startswith("message.tool_calls[0].function.arguments:raw")
+
+
+def test_parse_tool_call_mapping_arguments() -> None:
+    analysis = _analysis_payload()
+    payload = {"analysis": analysis}
+    response = _make_tool_response(payload, content="")
+
+    parsed = parse_note_style_response_payload(response)
+
+    assert parsed.analysis == analysis
+    assert parsed.payload == payload
+    assert parsed.source.startswith("message.tool_calls[0].function.arguments:raw")

@@ -56,7 +56,7 @@ class _StubClient:
             "context_hints": {
                 "timeframe": {"month": "April", "relative": "Last month"},
                 "topic": "Payment_Dispute",
-                "entities": {"creditor": "capital one", "amount": "$123.45 USD"},
+                "entities": {"creditor": "capital one", "amount": 123.45},
             },
             "emphasis": ["paid_already", "Custom", "support_request"],
             "confidence": 0.91,
@@ -228,6 +228,119 @@ def test_note_style_sender_sends_built_pack(
 
     call_kwargs = client.calls[0]["kwargs"]
     assert call_kwargs.get("response_format") == {"type": "json_object"}
+
+
+def test_note_style_sender_retries_on_invalid_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    sid = "SID110"
+    account_id = "idx-110"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Please process with retries."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    invalid_payload = {"choices": [{"message": {"content": "Not JSON"}}]}
+    valid_analysis = {
+        "analysis": {
+            "tone": "formal",
+            "context_hints": {
+                "timeframe": {"month": "March", "relative": "last month"},
+                "topic": "payment plan",
+                "entities": {"creditor": "Example Bank", "amount": 125.5},
+            },
+            "emphasis": ["focus on empathy"],
+            "confidence": 0.92,
+            "risk_flags": ["compliance_check"],
+        }
+    }
+    valid_payload = {
+        "choices": [
+            {"message": {"content": json.dumps(valid_analysis, ensure_ascii=False)}}
+        ]
+    }
+
+    class _RetryClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+            self._responses = [invalid_payload, valid_payload]
+
+        def chat_completion(self, *, model, messages, temperature, **kwargs):  # type: ignore[override]
+            self.calls.append(
+                {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "kwargs": kwargs,
+                }
+            )
+            return self._responses[len(self.calls) - 1]
+
+    client = _RetryClient()
+    monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
+    monkeypatch.setattr(
+        config,
+        "NOTE_STYLE_INVALID_RESULT_RETRY_ATTEMPTS",
+        2,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        config,
+        "NOTE_STYLE_INVALID_RESULT_RETRY_TOOL_CALL",
+        False,
+        raising=False,
+    )
+
+    caplog.set_level("INFO", logger="backend.ai.note_style_sender")
+
+    processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
+
+    assert processed == [account_id]
+    assert len(client.calls) == 2
+
+    corrective_message = client.calls[1]["messages"][1]
+    assert corrective_message["role"] == "system"
+    assert "previous output was not valid JSON" in corrective_message["content"]
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    raw_payload = account_paths.result_raw_file.read_text(encoding="utf-8").strip()
+    assert raw_payload == "Not JSON"
+
+    structured_records = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_sender"
+        and record.getMessage().startswith("{")
+    ]
+
+    retry_events = [
+        entry
+        for entry in structured_records
+        if entry.get("event") == "NOTE_STYLE_INVALID_RESULT_RETRY"
+    ]
+    assert retry_events, "Expected structured retry event"
+    assert retry_events[0]["attempt"] == 1
+
+    sent_events = [
+        entry
+        for entry in structured_records
+        if entry.get("event") == "NOTE_STYLE_SENT"
+    ]
+    assert sent_events and sent_events[0]["retries_used"] == 1
 
 
 def test_note_style_sender_accepts_string_runs_root(

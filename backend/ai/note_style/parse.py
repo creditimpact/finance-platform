@@ -43,7 +43,39 @@ def _coerce_attr(payload: Any, name: str) -> Any:
     return None
 
 
-def _extract_response_content(response_payload: Any) -> str:
+def _extract_tool_call_arguments(message: Any) -> str | None:
+    tool_calls = _coerce_attr(message, "tool_calls")
+    if not isinstance(tool_calls, Sequence) or not tool_calls:
+        return None
+
+    first_call = tool_calls[0]
+    function_payload = _coerce_attr(first_call, "function")
+    if function_payload is None:
+        return None
+
+    arguments = _coerce_attr(function_payload, "arguments")
+    if isinstance(arguments, str):
+        candidate = arguments.strip()
+        return candidate or None
+
+    if isinstance(arguments, Mapping) or (
+        isinstance(arguments, Sequence) and not isinstance(arguments, (bytes, bytearray))
+    ):
+        try:
+            serialized = json.dumps(arguments, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return None
+        candidate = serialized.strip()
+        return candidate or None
+
+    if arguments is not None:
+        candidate = str(arguments).strip()
+        return candidate or None
+
+    return None
+
+
+def _extract_response_content(response_payload: Any) -> tuple[str, str]:
     choices: Sequence[Any] | None = _coerce_attr(response_payload, "choices")
     if not isinstance(choices, Sequence) or not choices:
         raise NoteStyleParseError("Model response missing choices", code="missing_choices")
@@ -54,9 +86,6 @@ def _extract_response_content(response_payload: Any) -> str:
         raise NoteStyleParseError("Model response missing message", code="missing_message")
 
     content = _coerce_attr(message, "content")
-    if content is None:
-        raise NoteStyleParseError("Model response missing content", code="missing_content")
-
     if isinstance(content, str):
         text = content
     elif isinstance(content, Sequence) and not isinstance(content, (bytes, bytearray)):
@@ -69,13 +98,23 @@ def _extract_response_content(response_payload: Any) -> str:
                 if isinstance(text_piece, str):
                     pieces.append(text_piece)
         text = "".join(pieces)
+    elif content is None:
+        text = ""
     else:
         text = str(content)
 
     normalized = text.strip()
-    if not normalized:
-        raise NoteStyleParseError("Model response missing JSON content", code="empty_content")
-    return normalized
+    if normalized:
+        return normalized, "message.content"
+
+    tool_arguments = _extract_tool_call_arguments(message)
+    if tool_arguments:
+        return tool_arguments, "message.tool_calls[0].function.arguments"
+
+    if content is None:
+        raise NoteStyleParseError("Model response missing content", code="missing_content")
+
+    raise NoteStyleParseError("Model response missing JSON content", code="empty_content")
 
 
 def _extract_fenced_candidates(text: str) -> Iterable[str]:
@@ -170,7 +209,11 @@ def _summarize_candidate(label: str, candidate: str) -> str:
     return f"{label}: {preview}"
 
 
-def parse_note_style_response_text(text: str) -> NoteStyleParsedResponse:
+def parse_note_style_response_text(
+    text: str,
+    *,
+    origin: str = "message.content",
+) -> NoteStyleParsedResponse:
     """Parse ``text`` into a validated :class:`NoteStyleParsedResponse`."""
 
     if not isinstance(text, str):
@@ -209,7 +252,11 @@ def parse_note_style_response_text(text: str) -> NoteStyleParsedResponse:
         analysis_payload, path = _resolve_analysis_payload(payload)
         valid, errors = _schema_validate(analysis_payload)
         if valid:
-            return NoteStyleParsedResponse(payload=payload, analysis=analysis_payload, source=label)
+            return NoteStyleParsedResponse(
+                payload=payload,
+                analysis=analysis_payload,
+                source=f"{origin}:{label}",
+            )
 
         attempted.append(payload)
         attempt_details.append(
@@ -229,7 +276,11 @@ def parse_note_style_response_text(text: str) -> NoteStyleParsedResponse:
         analysis_payload, path = _resolve_analysis_payload(relaxed)
         valid, errors = _schema_validate(analysis_payload)
         if valid:
-            return NoteStyleParsedResponse(payload=relaxed, analysis=analysis_payload, source=f"{label}:relaxed")
+            return NoteStyleParsedResponse(
+                payload=relaxed,
+                analysis=analysis_payload,
+                source=f"{origin}:{label}:relaxed",
+            )
 
         attempted.append(relaxed)
         attempt_details.append(
@@ -260,8 +311,8 @@ def _resolve_analysis_payload(payload: Mapping[str, Any]) -> tuple[Mapping[str, 
 def parse_note_style_response_payload(response_payload: Any) -> NoteStyleParsedResponse:
     """Parse and validate the ``response_payload`` from the model."""
 
-    text = _extract_response_content(response_payload)
-    return parse_note_style_response_text(text)
+    text, origin = _extract_response_content(response_payload)
+    return parse_note_style_response_text(text, origin=origin)
 
 
 __all__ = [

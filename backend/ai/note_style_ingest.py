@@ -35,6 +35,11 @@ def ingest_note_style_result(
     """Persist the normalized ``response_payload`` for ``account_id``."""
 
     parsed_response = parse_note_style_response_payload(response_payload)
+    response_mode = "unknown"
+    if isinstance(response_payload, Mapping):
+        mode_value = response_payload.get("mode")
+        if isinstance(mode_value, str) and mode_value:
+            response_mode = mode_value
     analysis_payload = parsed_response.analysis
 
     normalized_analysis = validate_analysis_payload(analysis_payload)
@@ -64,7 +69,13 @@ def ingest_note_style_result(
     if metrics_payload is not None:
         result_payload["note_metrics"] = metrics_payload
 
-    log.info("NOTE_STYLE_PARSED sid=%s account_id=%s", sid, account_id)
+    log.info(
+        "NOTE_STYLE_PARSED sid=%s account_id=%s mode=%s source=%s",
+        sid,
+        account_id,
+        response_mode,
+        parsed_response.source,
+    )
 
     completed_at = _now_iso()
     result_path = store_note_style_result(

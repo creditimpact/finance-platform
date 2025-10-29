@@ -654,7 +654,7 @@ def _response_kwargs_for_attempt(
         has_response_format=True,
     )
 
-    if request_mode == "tool":
+    if request_mode == "tool" or _tooling_configured():
         return (
             {
                 "tools": [_build_tool_payload()],
@@ -1753,6 +1753,14 @@ def send_note_style_packs_for_sid(
     completed_normalized = _normalize_account_id_set(set(snapshot.packs_completed))
     failed_normalized = _normalize_account_id_set(set(snapshot.packs_failed))
     pending_normalized = expected_normalized - (completed_normalized | failed_normalized)
+    log_structured_event(
+        "NOTE_STYLE_SNAPSHOT_COUNTS",
+        logger=log,
+        sid=sid,
+        packs_built=len(snapshot.packs_built),
+        packs_completed=len(snapshot.packs_completed),
+        packs_failed=len(snapshot.packs_failed),
+    )
     packs_dir = _resolve_packs_dir(paths)
     debug_dir = getattr(paths, "debug_dir", paths.base / "debug")
     response_mode = _normalize_response_mode(config.NOTE_STYLE_RESPONSE_MODE)

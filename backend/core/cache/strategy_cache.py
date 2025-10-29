@@ -4,7 +4,7 @@ import random
 import time
 from typing import Any, Dict
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 
 _MIN_TTL_SEC = 14 * 24 * 60 * 60
 _MAX_TTL_SEC = 30 * 24 * 60 * 60

@@ -7,7 +7,8 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List
 
-from backend.analytics.analytics_tracker import emit_counter, set_metric
+from backend.analytics.analytics_tracker import set_metric
+from backend.telemetry.metrics import emit_counter
 from backend.api.session_manager import get_session, update_session
 from backend.audit.audit import emit_event, set_log_context
 from backend.core.locks import account_lock

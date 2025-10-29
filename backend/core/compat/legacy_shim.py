@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.core.case_store.api import get_account_case, list_accounts
 from backend.core.case_store.merge import safe_deep_merge
 from backend.core.case_store.models import AccountCase, Bureau

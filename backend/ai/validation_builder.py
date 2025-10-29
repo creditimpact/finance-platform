@@ -45,6 +45,7 @@ from backend.core.ai.report_compare import (
     classify_reporting_pattern,
     compute_reason_flags,
 )
+from backend.telemetry.metrics import emit_counter
 from backend.core.logic.validation_field_sets import (
     ALL_VALIDATION_FIELD_SET,
     ALL_VALIDATION_FIELDS,
@@ -923,8 +924,6 @@ class ValidationPackWriter:
         ai_needed: bool,
     ) -> None:
         """Log and emit metrics describing the escalation rationale."""
-
-        from backend.analytics.analytics_tracker import emit_counter
 
         missing = bool(flags.get("missing", False))
         mismatch = bool(flags.get("mismatch", False))

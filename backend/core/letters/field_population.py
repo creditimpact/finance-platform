@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from backend.audit.audit import emit_event
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.core.logic.letters.utils import populate_required_fields
 from fields.populate_account_number_masked import populate_account_number_masked
 from fields.populate_address import populate_address

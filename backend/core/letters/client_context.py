@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.assets.paths import ASSETS_ROOT
 from backend.core.ai.paraphrase import paraphrase
 from backend.core.logic.utils.pii import redact_pii

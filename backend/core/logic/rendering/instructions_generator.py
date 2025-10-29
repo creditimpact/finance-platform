@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.assets.paths import templates_path
 from backend.core.letters.field_population import apply_field_fillers
 from backend.core.letters.router import select_template

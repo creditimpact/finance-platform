@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.audit.audit import AuditLogger
 
 TEMPLATES_DIR = Path(__file__).with_name("templates")

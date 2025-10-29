@@ -24,7 +24,7 @@ from backend.ai.manifest import (
     StageManifestPaths,
     extract_stage_manifest_paths,
 )
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.core.runflow import (
     record_validation_results_summary,
     runflow_barriers_refresh,

@@ -10,7 +10,8 @@ import re
 from random import random
 from typing import Dict, Iterable, List, Tuple
 
-from backend.analytics.analytics_tracker import emit_counter, set_metric
+from backend.analytics.analytics_tracker import set_metric
+from backend.telemetry.metrics import emit_counter
 from backend.api.session_manager import get_session, update_session
 from backend.audit.audit import emit_event
 from backend.core.logic.utils.names_normalization import canonicalize_creditor

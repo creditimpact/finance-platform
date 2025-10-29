@@ -21,7 +21,7 @@ from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.note_handling import get_client_address_lines
 from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.api.config import env_bool
 from backend.core.letters.client_context import format_safe_client_context
 from backend.core.letters import validators

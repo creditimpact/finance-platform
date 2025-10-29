@@ -5,7 +5,7 @@ from __future__ import annotations
 from backend.assets.paths import templates_path
 from backend.core.logic.rendering import pdf_renderer
 from backend.core.models.letter import LetterArtifact, LetterContext
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.core.letters import validators
 from backend.core.letters.sanitizer import sanitize_rendered_html
 

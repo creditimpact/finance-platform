@@ -20,7 +20,8 @@ from typing import Any, Mapping
 import backend.config as config
 import tactical
 from backend.analytics.analytics.strategist_failures import tally_failure_reasons
-from backend.analytics.analytics_tracker import emit_counter, save_analytics_snapshot
+from backend.analytics.analytics_tracker import save_analytics_snapshot
+from backend.telemetry.metrics import emit_counter
 from backend.api.config import (
     ENABLE_FIELD_POPULATION,
     ENABLE_PLANNER,

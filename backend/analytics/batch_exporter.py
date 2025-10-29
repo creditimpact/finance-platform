@@ -8,7 +8,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 
 
 def _chunked(iterable: Iterable[Any], size: int) -> Iterator[list[Any]]:

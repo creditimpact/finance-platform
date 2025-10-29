@@ -11,9 +11,9 @@ from typing import Dict, Iterable, List, Literal, Tuple
 
 from backend.analytics.analytics_tracker import (
     check_canary_guardrails,
-    emit_counter,
     log_canary_decision,
 )
+from backend.telemetry.metrics import emit_counter
 from jinja2 import Environment, FileSystemLoader
 
 from . import validators

@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import List, Tuple
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.core.models import AccountState, AccountStatus, StateTransition
 from backend.outcomes.models import OutcomeEvent
 

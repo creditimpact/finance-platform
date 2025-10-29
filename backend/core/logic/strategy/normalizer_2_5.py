@@ -10,7 +10,8 @@ import time
 from jsonschema import Draft7Validator, ValidationError
 
 from backend.audit.audit import emit_event
-from backend.analytics.analytics_tracker import emit_counter, get_counters, set_metric
+from backend.analytics.analytics_tracker import get_counters, set_metric
+from backend.telemetry.metrics import emit_counter
 from backend.core.logic.utils.pii import redact_pii
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import get_ai_client

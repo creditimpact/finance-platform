@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from backend.ai.validation_index import ValidationPackIndexWriter
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.core.ai.paths import (
     ensure_validation_paths,
     validation_pack_filename_for_account,

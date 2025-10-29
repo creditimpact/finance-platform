@@ -7,7 +7,7 @@ from typing import Any, Mapping
 import pdfkit
 from jinja2 import Environment, FileSystemLoader
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 from backend.api.config import get_app_config
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLogger, emit_event

@@ -6,7 +6,7 @@ from typing import Any
 from backend.assets.paths import templates_path
 from backend.core.logic.rendering import pdf_renderer
 from backend.core.models.letter import LetterContext
-from backend.analytics.analytics_tracker import emit_counter
+from backend.telemetry.metrics import emit_counter
 
 
 def render_instruction_html(

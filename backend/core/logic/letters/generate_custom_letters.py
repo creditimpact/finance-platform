@@ -10,10 +10,10 @@ import pdfkit
 from jinja2 import Environment, FileSystemLoader
 
 from backend.analytics.analytics_tracker import (
-    emit_counter,
     log_letter_without_strategy,
     log_policy_override_reason,
 )
+from backend.telemetry.metrics import emit_counter
 from backend.api import config as api_config
 from backend.api.config import get_app_config
 from backend.api.session_manager import get_session

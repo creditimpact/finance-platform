@@ -7,7 +7,8 @@ from typing import Any, Dict
 
 from jsonschema import Draft7Validator, ValidationError
 
-from backend.analytics.analytics_tracker import emit_counter, log_ai_request
+from backend.analytics.analytics_tracker import log_ai_request
+from backend.telemetry.metrics import emit_counter
 from backend.api.config import STAGE4_POLICY_CANARY, STAGE4_POLICY_ENFORCEMENT
 from backend.audit.audit import AuditLogger, emit_event
 from backend.analytics.analytics_tracker import log_policy_override_reason

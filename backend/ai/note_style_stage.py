@@ -25,6 +25,7 @@ from backend.ai.note_style.io import (
     note_style_snapshot,
     note_style_stage_view,
 )
+from backend.ai.note_style.prompt import build_response_instruction
 from backend.ai.note_style_logging import log_note_style_decision
 from backend.core.ai.paths import (
     NoteStylePaths,
@@ -53,7 +54,8 @@ _NOTE_STYLE_SYSTEM_PROMPT = (
     "- If note is empty/meaningless → tone='neutral', topic='unspecified', confidence ≤ 0.2, add risk_flags ['empty_note'].\n"
     "- If a legal claim is asserted without supporting docs mentioned → add ['unsupported_claim'].\n"
     "- Calibrate confidence: short/ambiguous notes ≤ 0.5.\n"
-    "Do not include explanations or extra keys."
+    "Do not include explanations or extra keys.\n"
+    f"{build_response_instruction(use_tools=False)}"
 )
 
 _NOTE_KEYS = {

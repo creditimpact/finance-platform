@@ -20,6 +20,7 @@ from backend.ai.note_style_results import record_note_style_failure
 from backend.ai.note_style.parse import parse_note_style_response_payload
 from backend.ai.note_style_logging import log_structured_event
 from backend.ai.note_style.schema import NOTE_STYLE_TOOL_PARAMETERS_SCHEMA
+from backend.ai.note_style.prompt import build_response_instruction
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -508,6 +509,42 @@ def _messages_for_attempt(
     else:
         messages.insert(0, corrective)
     return messages
+
+
+def _append_instruction_text(base: str, instruction: str) -> str:
+    base_text = base.rstrip()
+    if instruction in base_text.splitlines():
+        return base_text if base_text else instruction
+    if not base_text:
+        return instruction
+    return f"{base_text}\n{instruction}"
+
+
+def _apply_mode_response_instruction(
+    messages: list[Mapping[str, Any]], request_mode: str
+) -> None:
+    use_tools = request_mode == "tool"
+    instruction = build_response_instruction(use_tools=use_tools)
+    if not instruction:
+        return
+
+    for message in messages:
+        role = str(message.get("role", "")).lower()
+        if role != "system":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = _append_instruction_text(content, instruction)
+        elif isinstance(content, Sequence) and not isinstance(
+            content, (str, bytes, bytearray)
+        ):
+            serialized = [str(part) for part in content]
+            if instruction not in serialized:
+                serialized.append(instruction)
+            message["content"] = serialized
+        else:
+            message["content"] = instruction
+        break
 
 
 def _normalize_response_mode(value: str | None) -> str:
@@ -1320,7 +1357,6 @@ def _send_pack_payload(
         return True
 
     for attempt_index in range(total_attempts):
-        attempt_messages = _messages_for_attempt(messages, attempt_index)
         response_kwargs, request_mode = _response_kwargs_for_attempt(
             response_format,
             attempt_index,
@@ -1331,6 +1367,9 @@ def _send_pack_payload(
         request_metadata = _resolve_request_metadata(
             response_kwargs, mode=request_mode
         )
+
+        attempt_messages = _messages_for_attempt(messages, attempt_index)
+        _apply_mode_response_instruction(attempt_messages, request_mode)
 
         response_metrics: Mapping[str, Any] | None = None
         start = time.perf_counter()

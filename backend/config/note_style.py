@@ -7,8 +7,14 @@ from typing import Final
 
 from . import _coerce_positive_int, _warn_default, env_bool
 
-_DEFAULT_RESPONSE_MODE: Final[str] = "tool"
-_VALID_RESPONSE_MODES: Final[set[str]] = {"tool", "json_object", "prompt_only"}
+_DEFAULT_RESPONSE_MODE: Final[str] = "auto"
+_VALID_RESPONSE_MODES: Final[set[str]] = {
+    "auto",
+    "tool",
+    "json",
+    "json_object",
+    "prompt_only",
+}
 
 
 def _coerce_response_mode() -> str:
@@ -29,6 +35,9 @@ def _coerce_response_mode() -> str:
             "invalid_choice",
         )
         return _DEFAULT_RESPONSE_MODE
+
+    if candidate == "json_object":
+        return "json"
 
     return candidate
 

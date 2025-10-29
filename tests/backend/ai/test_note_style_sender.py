@@ -337,8 +337,12 @@ def test_note_style_sender_retries_on_invalid_result(
 
     assert processed == [account_id]
     assert len(client.calls) == 2
-    assert "tools" in client.calls[0]["kwargs"]
-    assert "response_format" in client.calls[1]["kwargs"]
+    first_kwargs = client.calls[0]["kwargs"]
+    retry_kwargs = client.calls[1]["kwargs"]
+    assert "tools" in first_kwargs
+    assert "response_format" not in first_kwargs
+    assert "tools" in retry_kwargs
+    assert "response_format" not in retry_kwargs
 
     corrective_message = client.calls[1]["messages"][1]
     assert corrective_message["role"] == "system"

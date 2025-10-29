@@ -512,11 +512,23 @@ def _messages_for_attempt(
 
 def _normalize_response_mode(value: str | None) -> str:
     if not value:
-        return "tool"
+        return "auto"
+
     normalized = str(value).strip().lower()
-    if normalized in {"tool", "json_object", "prompt_only"}:
+    if normalized == "json_object":
+        return "json"
+
+    if normalized in {"auto", "tool", "json", "prompt_only"}:
         return normalized
-    return "tool"
+
+    return "auto"
+
+
+def _tooling_configured() -> bool:
+    try:
+        return bool(NOTE_STYLE_TOOL_PARAMETERS_SCHEMA)
+    except Exception:  # pragma: no cover - defensive
+        return False
 
 
 def _determine_request_mode(
@@ -526,29 +538,26 @@ def _determine_request_mode(
     enable_tool_call_retry: bool,
     has_response_format: bool,
 ) -> str:
-    if attempt_index <= 0:
-        return base_mode
+    _ = attempt_index  # maintained for signature compatibility
+    _ = enable_tool_call_retry
 
-    if base_mode == "tool":
-        if enable_tool_call_retry:
+    if base_mode == "auto":
+        if _tooling_configured():
             return "tool"
         if has_response_format:
-            return "json_object"
-        return "tool"
-
-    if base_mode == "json_object":
-        if enable_tool_call_retry:
-            return "tool"
-        return "json_object"
-
-    if base_mode == "prompt_only":
-        if enable_tool_call_retry:
-            return "tool"
-        if has_response_format:
-            return "json_object"
+            return "json"
         return "prompt_only"
 
-    return base_mode
+    if base_mode == "json":
+        if has_response_format:
+            return "json"
+        log.debug("NOTE_STYLE_NO_RESPONSE_FORMAT forcing prompt mode")
+        return "prompt_only"
+
+    if base_mode in {"tool", "prompt_only"}:
+        return base_mode
+
+    return "tool"
 
 
 def _response_kwargs_for_attempt(
@@ -576,7 +585,7 @@ def _response_kwargs_for_attempt(
             request_mode,
         )
 
-    if request_mode == "json_object":
+    if request_mode == "json":
         payload = response_format or {"type": "json_object"}
         return ({"response_format": copy.deepcopy(payload)}, request_mode)
 

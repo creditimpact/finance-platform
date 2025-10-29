@@ -193,13 +193,14 @@ class AIClient:
         tool_json = None
         raw_tool_arguments = None
         tool_calls = getattr(message, "tool_calls", None)
-        if raw_content is None and tool_calls:
+        if tool_calls:
             first_call = tool_calls[0]
             arguments = getattr(getattr(first_call, "function", object()), "arguments", None)
             raw_tool_arguments = _payload_to_text(arguments)
             tool_json = _load_json(raw_tool_arguments, context="tool")
 
-        mode = "content" if content_payload is not None else "tool"
+        has_tool_payload = tool_json is not None or raw_tool_arguments is not None
+        mode = "content" if content_payload is not None and not has_tool_payload else "tool"
 
         normalized_response = {
             "mode": mode,

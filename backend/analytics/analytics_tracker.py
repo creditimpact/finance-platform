@@ -7,8 +7,51 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Mapping, Optional
 
-from backend.api import config
 from backend.core.logic.utils.pii import redact_pii
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Best effort boolean environment reader."""
+
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() not in {"0", "false", "no", "off"}
+
+
+def _get_config_module():
+    """Lazily import ``backend.api.config`` to avoid circular imports."""
+
+    try:
+        from backend.api import config as config_module  # type: ignore import-not-found
+    except Exception:  # pragma: no cover - best effort fallback
+        return None
+    return config_module
+
+
+def _is_observability_enabled() -> bool:
+    """Return the observability flag with environment fallback."""
+
+    config_module = _get_config_module()
+    if config_module is not None:
+        return bool(getattr(config_module, "ENABLE_OBSERVABILITY_H", True))
+    return _env_bool("ENABLE_OBSERVABILITY_H", True)
+
+
+def _get_ai_base_url() -> str:
+    """Return the configured AI base URL with a safe default."""
+
+    config_module = _get_config_module()
+    if config_module is not None:
+        try:
+            ai_config = config_module.get_ai_config()
+        except Exception:  # pragma: no cover - configuration may be incomplete
+            ai_config = None
+        if ai_config is not None:
+            base_url = getattr(ai_config, "base_url", None)
+            if base_url:
+                return str(base_url)
+    return os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
 # Cache metrics --------------------------------------------------------------
 
@@ -38,7 +81,7 @@ _CANARY_DECISIONS: List[Dict[str, str]] = []
 
 def log_canary_decision(decision: str, template: str | None = None) -> None:
     """Record a canary routing decision for analytics snapshots."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     entry = {"timestamp": datetime.now().isoformat(), "decision": decision}
     if template:
@@ -65,7 +108,7 @@ def emit_counter(name: str, increment: float | Mapping[str, Any] = 1) -> None:
     generates dimensioned counters of the form ``"name.key.value"``.
     """
 
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     with _COUNTER_LOCK:
         if isinstance(increment, Mapping):
@@ -82,7 +125,7 @@ def emit_counter(name: str, increment: float | Mapping[str, Any] = 1) -> None:
 
 def set_metric(name: str, value: float) -> None:
     """Set a named metric to an explicit value."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     with _COUNTER_LOCK:
         _COUNTERS[name] = value
@@ -139,7 +182,7 @@ def get_router_skipped_counts() -> Dict[str, int]:
 
 def _write_cache_snapshot() -> None:
     """Persist current cache metrics to ``analytics_data`` and reset counters."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     global _OPS
     analytics_dir = Path("analytics_data")
@@ -171,7 +214,7 @@ def _log_cache_event(key: str) -> None:
 
 def log_cache_hit() -> None:
     """Record a classification cache hit."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     _log_cache_event("hits")
     emit_counter("cache_hit")
@@ -179,14 +222,14 @@ def log_cache_hit() -> None:
 
 def log_cache_miss() -> None:
     """Record a classification cache miss."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     _log_cache_event("misses")
 
 
 def log_cache_eviction() -> None:
     """Record a classification cache eviction."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     _log_cache_event("evictions")
 
@@ -214,14 +257,14 @@ def log_policy_violations_prevented(count: int) -> None:
 
 def log_letter_without_strategy() -> None:
     """Record that a letter was attempted without strategy context."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     emit_counter("letters_without_strategy_context")
 
 
 def log_policy_override_reason(reason: str) -> None:
     """Record a policy override along with the associated reason."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     sanitized = str(reason).replace(" ", "_")
     emit_counter(f"policy_override_reason.{sanitized}")
@@ -234,7 +277,7 @@ def log_guardrail_fix(letter_type: str | None = None) -> None:
     keeping a global total for backward compatibility.
     """
 
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     emit_counter("guardrail_fix_count")
     if letter_type:
@@ -248,7 +291,7 @@ def log_ai_request(
     tokens_in: int, tokens_out: int, cost: float, latency_ms: float
 ) -> None:
     """Record tokens, estimated cost, and latency for an AI call."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     _AI_METRICS["tokens_in"] += tokens_in
     _AI_METRICS["tokens_out"] += tokens_out
@@ -258,7 +301,7 @@ def log_ai_request(
 
 def log_ai_stage(stage: str, tokens: int, cost: float) -> None:
     """Record token and cost usage for a specific pipeline stage."""
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     emit_counter(f"ai.tokens.{stage}", tokens)
     emit_counter(f"ai.cost.{stage}", cost)
@@ -339,10 +382,10 @@ def save_analytics_snapshot(
     report_summary: dict,
     strategist_failures: Optional[Dict[str, int]] = None,
 ) -> None:
-    if not config.ENABLE_OBSERVABILITY_H:
+    if not _is_observability_enabled():
         return
     logging.getLogger(__name__).info(
-        "Analytics tracker using OPENAI_BASE_URL=%s", config.get_ai_config().base_url
+        "Analytics tracker using OPENAI_BASE_URL=%s", _get_ai_base_url()
     )
     analytics_dir = Path("analytics_data")
     analytics_dir.mkdir(exist_ok=True)

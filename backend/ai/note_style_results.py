@@ -1350,6 +1350,7 @@ def _refresh_after_index_update(
         sid=sid,
         ready=ready,
         status=stage_status,
+        packs_expected=packs_total,
         packs_total=packs_total,
         packs_completed=packs_completed,
         packs_failed=packs_failed,

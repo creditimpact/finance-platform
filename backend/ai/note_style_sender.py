@@ -93,6 +93,165 @@ def _normalize_account_id_set(accounts: set[str]) -> set[str]:
     return set(_build_normalized_lookup(accounts).keys())
 
 
+def _coerce_attr(payload: Any, name: str) -> Any:
+    if hasattr(payload, name):
+        return getattr(payload, name)
+    if isinstance(payload, Mapping):
+        return payload.get(name)
+    return None
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(float(stripped))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _extract_usage_tokens(usage: Any) -> tuple[int | None, int | None]:
+    if usage is None:
+        return (None, None)
+
+    prompt = _coerce_attr(usage, "prompt_tokens")
+    if prompt is None:
+        prompt = _coerce_attr(usage, "input_tokens")
+
+    response = _coerce_attr(usage, "completion_tokens")
+    if response is None:
+        response = _coerce_attr(usage, "output_tokens")
+    if response is None:
+        response = _coerce_attr(usage, "response_tokens")
+
+    return (_coerce_int(prompt), _coerce_int(response))
+
+
+def _describe_response_format(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        type_value = value.get("type")
+        if isinstance(type_value, str) and type_value.strip():
+            return type_value.strip()
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
+def _describe_tool_choice(tool_choice: Any, tools: Any) -> str | None:
+    if isinstance(tool_choice, Mapping):
+        function_payload = tool_choice.get("function")
+        if isinstance(function_payload, Mapping):
+            name = function_payload.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+
+    if isinstance(tools, Sequence):
+        for tool in tools:
+            if not isinstance(tool, Mapping):
+                continue
+            function_payload = tool.get("function")
+            if not isinstance(function_payload, Mapping):
+                continue
+            name = function_payload.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    return None
+
+
+def _resolve_request_metadata(response_kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    response_format = None
+    tool_choice = None
+    if "response_format" in response_kwargs:
+        response_format = _describe_response_format(response_kwargs.get("response_format"))
+    if "tools" in response_kwargs or "tool_choice" in response_kwargs:
+        tool_choice = _describe_tool_choice(
+            response_kwargs.get("tool_choice"),
+            response_kwargs.get("tools"),
+        )
+    return {
+        "response_format": response_format,
+        "tool_choice": tool_choice,
+    }
+
+
+def _build_response_metrics(
+    response_payload: Any,
+    *,
+    response_format: str | None,
+    tool_choice: str | None,
+) -> dict[str, Any]:
+    request_id = _coerce_attr(response_payload, "id")
+    usage = _coerce_attr(response_payload, "usage")
+    prompt_tokens, response_tokens = _extract_usage_tokens(usage)
+
+    normalized_request_id: str | None
+    if isinstance(request_id, str):
+        normalized_request_id = request_id.strip() or None
+    elif request_id is None:
+        normalized_request_id = None
+    else:
+        normalized_request_id = str(request_id)
+
+    return {
+        "request_id": normalized_request_id,
+        "prompt_tokens": prompt_tokens,
+        "response_tokens": response_tokens,
+        "response_format": response_format,
+        "tool_choice": tool_choice,
+    }
+
+
+def _log_pack_request_metrics(
+    *,
+    sid: str,
+    account_id: str,
+    model: str,
+    metrics: Mapping[str, Any] | None,
+    parse_ok: bool,
+    retry_count: int,
+) -> None:
+    payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "request_id": None,
+        "model": model,
+        "response_format": None,
+        "tool_choice": None,
+        "prompt_tokens": None,
+        "response_tokens": None,
+        "parse_ok": bool(parse_ok),
+        "retry_count": max(0, retry_count),
+    }
+
+    if metrics:
+        for key in ("request_id", "response_format", "tool_choice"):
+            value = metrics.get(key)
+            if value is not None:
+                payload[key] = value
+        for key in ("prompt_tokens", "response_tokens"):
+            value = metrics.get(key)
+            if value is not None:
+                payload[key] = value
+
+    log_structured_event("NOTE_STYLE_MODEL_METRICS", logger=log, **payload)
+
+
 def _extract_pack_note_text(pack_payload: Mapping[str, Any]) -> str | None:
     candidate = pack_payload.get("note_text")
     if isinstance(candidate, str) and candidate.strip():
@@ -1020,6 +1179,7 @@ def _send_pack_payload(
         attempt_index: int,
         reason: str,
         response_payload: Any,
+        response_metrics: Mapping[str, Any] | None = None,
     ) -> bool:
         nonlocal raw_response_written
         failure_records.append({"attempt": attempt_index + 1, "reason": reason})
@@ -1038,6 +1198,14 @@ def _send_pack_payload(
 
         remaining_attempts = total_attempts - attempt_index - 1
         if remaining_attempts <= 0:
+            _log_pack_request_metrics(
+                sid=sid,
+                account_id=account_id,
+                model=model or "",
+                metrics=response_metrics,
+                parse_ok=False,
+                retry_count=attempt_index,
+            )
             _handle_invalid_response(
                 sid=sid,
                 account_id=account_id,
@@ -1086,7 +1254,9 @@ def _send_pack_payload(
             enable_tool_call_retry=enable_tool_call_retry,
         )
         response_kwargs.setdefault("max_tokens", _NOTE_STYLE_RESPONSE_MAX_TOKENS)
+        request_metadata = _resolve_request_metadata(response_kwargs)
 
+        response_metrics: Mapping[str, Any] | None = None
         start = time.perf_counter()
         try:
             response = client.chat_completion(
@@ -1104,6 +1274,11 @@ def _send_pack_payload(
                 model or "",
                 attempt_index + 1,
                 latency,
+            )
+            response_metrics = _build_response_metrics(
+                response,
+                response_format=request_metadata.get("response_format"),
+                tool_choice=request_metadata.get("tool_choice"),
             )
         except Exception as exc:
             latency = time.perf_counter() - start
@@ -1129,6 +1304,14 @@ def _send_pack_payload(
                 account_id,
                 _relativize(failure_path, paths.base),
             )
+            _log_pack_request_metrics(
+                sid=sid,
+                account_id=account_id,
+                model=model or "",
+                metrics=request_metadata,
+                parse_ok=False,
+                retry_count=attempt_index,
+            )
             try:
                 record_note_style_failure(
                     sid,
@@ -1153,6 +1336,7 @@ def _send_pack_payload(
                 attempt_index=attempt_index,
                 reason=reason_text,
                 response_payload=response,
+                response_metrics=response_metrics,
             ):
                 return False
             continue
@@ -1178,6 +1362,7 @@ def _send_pack_payload(
                 attempt_index=attempt_index,
                 reason=reason_text,
                 response_payload=response,
+                response_metrics=response_metrics,
             ):
                 return False
             continue
@@ -1194,6 +1379,14 @@ def _send_pack_payload(
                 response_payload=response,
                 preserve_existing=raw_response_written,
             )
+            _log_pack_request_metrics(
+                sid=sid,
+                account_id=account_id,
+                model=model or "",
+                metrics=response_metrics,
+                parse_ok=False,
+                retry_count=attempt_index,
+            )
             record_note_style_failure(
                 sid,
                 account_id,
@@ -1202,6 +1395,14 @@ def _send_pack_payload(
             )
             raise
 
+        _log_pack_request_metrics(
+            sid=sid,
+            account_id=account_id,
+            model=model or "",
+            metrics=response_metrics,
+            parse_ok=True,
+            retry_count=attempt_index,
+        )
         result_path = _coerce_result_path(written_path) or account_paths.result_file
         log.info(
             "NOTE_STYLE_SENT sid=%s account_id=%s result=%s attempts=%d",

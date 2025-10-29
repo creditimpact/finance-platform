@@ -308,8 +308,77 @@ def _resolve_analysis_payload(payload: Mapping[str, Any]) -> tuple[Mapping[str, 
     return payload, "root"
 
 
+def _build_validated_response(
+    payload: Mapping[str, Any],
+    *,
+    origin: str,
+    source: str,
+) -> NoteStyleParsedResponse:
+    analysis_payload, path = _resolve_analysis_payload(payload)
+    valid, errors = _schema_validate(analysis_payload)
+    if not valid:
+        raise NoteStyleParseError(
+            "Model response missing valid note_style analysis JSON",
+            code="schema_validation_failed",
+            details={
+                "source": source,
+                "messages": errors,
+                "path": path,
+            },
+        )
+
+    return NoteStyleParsedResponse(payload=payload, analysis=analysis_payload, source=source)
+
+
+def _parse_normalized_response_payload(
+    response_payload: Mapping[str, Any],
+) -> NoteStyleParsedResponse:
+    mode = str(response_payload.get("mode") or "").strip()
+
+    if mode == "tool":
+        origin = "message.tool_calls[0].function.arguments"
+        json_payload = response_payload.get("tool_json")
+    else:
+        origin = "message.content"
+        json_payload = response_payload.get("content_json")
+
+    if not isinstance(json_payload, Mapping):
+        fallback = response_payload.get("json")
+        if isinstance(fallback, Mapping):
+            json_payload = fallback
+
+    if isinstance(json_payload, Mapping):
+        return _build_validated_response(json_payload, origin=origin, source=f"{origin}:json")
+
+    # Fall back to attempting to parse the raw text if available.
+    if mode == "tool":
+        raw_candidate = response_payload.get("raw_tool_arguments")
+    else:
+        raw_candidate = response_payload.get("raw_content")
+
+    if isinstance(raw_candidate, str) and raw_candidate.strip():
+        return parse_note_style_response_text(raw_candidate, origin=origin)
+
+    if raw_candidate is not None and mode == "tool":
+        try:
+            serialized = json.dumps(raw_candidate, ensure_ascii=False)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if serialized.strip():
+                return parse_note_style_response_text(serialized, origin=origin)
+
+    raise NoteStyleParseError("Model response missing JSON content", code="empty_content")
+
+
 def parse_note_style_response_payload(response_payload: Any) -> NoteStyleParsedResponse:
     """Parse and validate the ``response_payload`` from the model."""
+
+    if isinstance(response_payload, Mapping) and ("mode" in response_payload or "json" in response_payload):
+        try:
+            return _parse_normalized_response_payload(response_payload)
+        except NoteStyleParseError:
+            raise
 
     text, origin = _extract_response_content(response_payload)
     return parse_note_style_response_text(text, origin=origin)

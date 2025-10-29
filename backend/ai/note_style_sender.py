@@ -246,27 +246,31 @@ def _sanitize_message_entry(entry: Mapping[str, Any]) -> Mapping[str, Any]:
     return sanitized
 
 
-def _coerce_response_format(pack_payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+def _coerce_response_format(pack_payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return a strict JSON response format for the model call.
+
+    Older packs occasionally specified custom ``response_format`` payloads which
+    allowed free-form text responses. For the note_style stage we want to enforce
+    structured JSON output regardless of the pack configuration, so we coerce any
+    provided value back into the "json_object" type. This keeps the contract
+    simple and prevents accidental regressions when older packs are replayed.
+    """
+
     candidate = pack_payload.get("response_format")
-    if candidate is None:
-        return {"type": "json_object"}
-
     if isinstance(candidate, Mapping):
-        sanitized: dict[str, Any] = {}
+        extras: dict[str, Any] = {}
         for key, value in candidate.items():
-            sanitized[str(key)] = value
-        type_value = sanitized.get("type")
-        if isinstance(type_value, str):
-            sanitized["type"] = type_value.strip() or "json_object"
-        elif type_value is None:
-            sanitized["type"] = "json_object"
-        return sanitized
+            key_text = str(key)
+            if key_text == "type":
+                continue
+            extras[key_text] = value
+        return {"type": "json_object", **extras}
 
-    if isinstance(candidate, str):
-        type_text = candidate.strip()
-        if type_text:
-            return {"type": type_text}
-        return {"type": "json_object"}
+    if isinstance(candidate, str) and candidate.strip():
+        if candidate.strip().lower() != "json_object":
+            log.debug(
+                "NOTE_STYLE_FORCE_JSON_RESPONSE format=%s", candidate.strip()
+            )
 
     return {"type": "json_object"}
 

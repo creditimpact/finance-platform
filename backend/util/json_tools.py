@@ -16,6 +16,13 @@ def try_fix_to_json(text: str | None) -> Dict[str, Any] | None:
     if text is None:
         return None
 
+    if not isinstance(text, str):  # Defensive guard for unexpected payloads.
+        return None
+
+    stripped_text = text.strip()
+    if not stripped_text:
+        return None
+
     candidates = []
     fenced = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.S)
     if fenced:

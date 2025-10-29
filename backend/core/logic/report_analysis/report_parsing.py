@@ -187,8 +187,11 @@ ALIAS_TO_STD: dict[str, str] = {
     "dispute flag": "dispute_status",
     "account dispute status": "dispute_status",
     "original creditor": "original_creditor",
+    "original creditor 01": "original_creditor",
+    "original creditor 02": "original_creditor",
     "originalcreditor": "original_creditor",
     "orig creditor": "original_creditor",
+    "orig. creditor": "original_creditor",
     # Remarks
     "creditor remarks": "creditor_remarks",
     "remarks": "creditor_remarks",

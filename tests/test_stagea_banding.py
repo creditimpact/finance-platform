@@ -274,6 +274,38 @@ def test_cleaning_empty_vs_dashes_and_masks(split_module) -> None:
     assert triad_fields["experian"]["credit_limit"] == ""
 
 
+def test_triad_label_variant_orig_abbrev(split_module) -> None:
+    layout = _layout()
+    triad_fields: Dict[str, Dict[str, str]] = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+    }
+    triad_order = ["transunion", "experian", "equifax"]
+
+    tokens = [
+        _token(5, 100.0, 140.0, "Orig."),
+        _token(5, 140.0, 190.0, "Creditor"),
+        _token(5, COLON_LEFT, COLON_RIGHT, ":"),
+        _token(5, TU_X0 + 15.0, TU_X0 + 70.0, "PALISADES FUNDING CORP"),
+        _token(5, XP_X0 + 15.0, XP_X0 + 70.0, "ATLANTIC CAPITAL"),
+        _token(5, EQ_X0 + 15.0, EQ_X0 + 70.0, "PACIFIC HOLDINGS"),
+    ]
+
+    split_module.process_triad_labeled_line(
+        tokens,
+        layout,
+        split_module.LABEL_MAP,
+        None,
+        triad_fields,
+        triad_order,
+    )
+
+    assert triad_fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
+    assert triad_fields["experian"]["original_creditor"] == "ATLANTIC CAPITAL"
+    assert triad_fields["equifax"]["original_creditor"] == "PACIFIC HOLDINGS"
+
+
 def test_no_bleed_with_explicit_dashes(split_module) -> None:
     layout = _layout()
     triad_fields: Dict[str, Dict[str, str]] = {

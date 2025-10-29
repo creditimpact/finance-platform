@@ -5,6 +5,10 @@ import pytest
 import backend.config as config
 from backend.core.case_store import api as cs_api
 from backend.core.logic.report_analysis import problem_detection as pd
+from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
+from backend.core.logic.report_analysis.problem_case_builder import (
+    _build_bureaus_payload_from_stagea,
+)
 
 
 class ExplodingAccounts:
@@ -107,3 +111,18 @@ def test_stagea_reads_only_case_store(tmp_path, monkeypatch):
     pd.run_stage_a(session_id, ExplodingAccounts())
     case = cs_api.get_account_case(session_id, "acc1")
     assert "stageA_detection.EX" in case.artifacts
+
+
+def test_stagea_bureaus_payload_includes_original_creditor():
+    triad_fields = {
+        "transunion": ensure_all_keys({"original_creditor": "PALISADES"}),
+        "experian": ensure_all_keys({}),
+        "equifax": ensure_all_keys({"original_creditor": "EQ VALUE"}),
+    }
+
+    account = {"triad_fields": triad_fields}
+    bureaus_payload = _build_bureaus_payload_from_stagea(account)
+
+    assert bureaus_payload["transunion"]["original_creditor"] == "PALISADES"
+    assert bureaus_payload["experian"]["original_creditor"] == ""
+    assert bureaus_payload["equifax"]["original_creditor"] == "EQ VALUE"

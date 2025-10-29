@@ -32,6 +32,7 @@ class _StubClient:
 
         if call_index == 0:
             payload = {
+                "note": "Thank you for your patience while we review your account.",
                 "analysis": {
                     "tone": "Warm",
                     "context_hints": {
@@ -42,12 +43,19 @@ class _StubClient:
                     "emphasis": ["already_paid", "support_request"],
                     "confidence": 0.91,
                     "risk_flags": ["follow_up"],
-                }
+                },
             }
-            return {"choices": [{"message": {"content": json.dumps(payload)}}]}
+            serialized = json.dumps(payload, ensure_ascii=False)
+            return {
+                "mode": "content",
+                "content_json": payload,
+                "raw_content": serialized,
+                "choices": [{"message": {"content": serialized}}],
+            }
 
         if call_index == 1:
             payload = {
+                "note": "We are looking into the billing concern you raised.",
                 "analysis": {
                     "tone": "Calm",
                     "context_hints": {
@@ -58,9 +66,13 @@ class _StubClient:
                     "emphasis": ["billing_issue"],
                     "confidence": 0.88,
                     "risk_flags": ["escalate"],
-                }
+                },
             }
+            serialized = json.dumps(payload, ensure_ascii=False)
             return {
+                "mode": "tool",
+                "tool_json": payload,
+                "raw_tool_arguments": serialized,
                 "choices": [
                     {
                         "message": {
@@ -69,13 +81,13 @@ class _StubClient:
                                 {
                                     "function": {
                                         "name": "submit_note_style_analysis",
-                                        "arguments": json.dumps(payload),
+                                        "arguments": serialized,
                                     }
                                 }
                             ],
                         }
                     }
-                ]
+                ],
             }
 
         return {"choices": [{"message": {"content": "not-json"}}]}

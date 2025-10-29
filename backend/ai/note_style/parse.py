@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
@@ -15,6 +16,11 @@ from backend.ai.note_style.schema import validate_note_style_analysis
 log = logging.getLogger(__name__)
 
 _FENCED_BLOCK_PATTERN = re.compile(r"```(?:json|JSON)?\s*(?P<body>.+?)```", re.DOTALL)
+
+_REQUIRED_ANALYSIS_KEYS = ("tone", "context_hints", "emphasis", "confidence", "risk_flags")
+_REQUIRED_CONTEXT_KEYS = ("timeframe", "topic", "entities")
+_REQUIRED_TIMEFRAME_KEYS = ("month", "relative")
+_REQUIRED_ENTITY_KEYS = ("creditor", "amount")
 
 
 @dataclass(frozen=True)
@@ -169,6 +175,87 @@ def _schema_validate(payload: Mapping[str, Any]) -> tuple[bool, list[str]]:
     return validate_note_style_analysis(payload)
 
 
+def _strict_parser_enabled() -> bool:
+    value = os.getenv("NOTE_STYLE_PARSER_STRICT")
+    if value is None:
+        return True
+    lowered = value.strip().lower()
+    if lowered in {"", "1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def _gather_analysis_field_errors(analysis: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    missing_keys = [key for key in _REQUIRED_ANALYSIS_KEYS if key not in analysis]
+    if missing_keys:
+        errors.append(
+            "analysis missing keys: " + ", ".join(sorted(missing_keys))
+        )
+
+    context = analysis.get("context_hints")
+    if not isinstance(context, Mapping):
+        errors.append("analysis.context_hints must be an object")
+    else:
+        context_missing = [key for key in _REQUIRED_CONTEXT_KEYS if key not in context]
+        if context_missing:
+            errors.append(
+                "analysis.context_hints missing keys: "
+                + ", ".join(sorted(context_missing))
+            )
+
+        timeframe = context.get("timeframe")
+        if not isinstance(timeframe, Mapping):
+            errors.append("analysis.context_hints.timeframe must be an object")
+        else:
+            timeframe_missing = [
+                key for key in _REQUIRED_TIMEFRAME_KEYS if key not in timeframe
+            ]
+            if timeframe_missing:
+                errors.append(
+                    "analysis.context_hints.timeframe missing keys: "
+                    + ", ".join(sorted(timeframe_missing))
+                )
+
+        entities = context.get("entities") if isinstance(context, Mapping) else None
+        if not isinstance(entities, Mapping):
+            errors.append("analysis.context_hints.entities must be an object")
+        else:
+            entity_missing = [
+                key for key in _REQUIRED_ENTITY_KEYS if key not in entities
+            ]
+            if entity_missing:
+                errors.append(
+                    "analysis.context_hints.entities missing keys: "
+                    + ", ".join(sorted(entity_missing))
+                )
+
+    return errors
+
+
+def _ensure_note_analysis_structure(payload: Mapping[str, Any], *, source: str) -> None:
+    errors: list[str] = []
+
+    note_value = payload.get("note")
+    if not isinstance(note_value, str) or not note_value.strip():
+        errors.append("note must be a non-empty string")
+
+    analysis = payload.get("analysis")
+    if not isinstance(analysis, Mapping):
+        errors.append("analysis must be an object with required keys")
+    else:
+        errors.extend(_gather_analysis_field_errors(analysis))
+
+    if errors:
+        raise NoteStyleParseError(
+            "Model response missing required note/analysis fields",
+            code="invalid_schema",
+            details={"source": source, "messages": errors},
+        )
+
+
 def _coerce_relaxed_value(value: Any) -> Any:
     if isinstance(value, dict):
         coerced: MutableMapping[str, Any] = {}
@@ -213,11 +300,14 @@ def parse_note_style_response_text(
     text: str,
     *,
     origin: str = "message.content",
+    strict: bool | None = None,
 ) -> NoteStyleParsedResponse:
     """Parse ``text`` into a validated :class:`NoteStyleParsedResponse`."""
 
     if not isinstance(text, str):
         raise NoteStyleParseError("Response content must be text", code="invalid_content_type")
+
+    strict_mode = _strict_parser_enabled() if strict is None else strict
 
     candidates = _generate_candidates(text)
     if not candidates:
@@ -252,11 +342,14 @@ def parse_note_style_response_text(
         analysis_payload, path = _resolve_analysis_payload(payload)
         valid, errors = _schema_validate(analysis_payload)
         if valid:
-            return NoteStyleParsedResponse(
+            response = NoteStyleParsedResponse(
                 payload=payload,
                 analysis=analysis_payload,
                 source=f"{origin}:{label}",
             )
+            if strict_mode:
+                _ensure_note_analysis_structure(payload, source=response.source)
+            return response
 
         attempted.append(payload)
         attempt_details.append(
@@ -269,29 +362,31 @@ def parse_note_style_response_text(
             }
         )
 
-    for label, candidate in candidates:
-        relaxed = _attempt_relaxed_parse(candidate)
-        if relaxed is None:
-            continue
-        analysis_payload, path = _resolve_analysis_payload(relaxed)
-        valid, errors = _schema_validate(analysis_payload)
-        if valid:
-            return NoteStyleParsedResponse(
-                payload=relaxed,
-                analysis=analysis_payload,
-                source=f"{origin}:{label}:relaxed",
-            )
+    if not strict_mode:
+        for label, candidate in candidates:
+            relaxed = _attempt_relaxed_parse(candidate)
+            if relaxed is None:
+                continue
+            analysis_payload, path = _resolve_analysis_payload(relaxed)
+            valid, errors = _schema_validate(analysis_payload)
+            if valid:
+                response = NoteStyleParsedResponse(
+                    payload=relaxed,
+                    analysis=analysis_payload,
+                    source=f"{origin}:{label}:relaxed",
+                )
+                return response
 
-        attempted.append(relaxed)
-        attempt_details.append(
-            {
-                "source": f"{label}:relaxed",
-                "error": "schema_validation_failed",
-                "messages": errors,
-                "preview": _summarize_candidate(label, candidate),
-                "path": path,
-            }
-        )
+            attempted.append(relaxed)
+            attempt_details.append(
+                {
+                    "source": f"{label}:relaxed",
+                    "error": "schema_validation_failed",
+                    "messages": errors,
+                    "preview": _summarize_candidate(label, candidate),
+                    "path": path,
+                }
+            )
 
     error_code = "schema_validation_failed" if attempted else "invalid_json"
     raise NoteStyleParseError(
@@ -313,7 +408,11 @@ def _build_validated_response(
     *,
     origin: str,
     source: str,
+    strict: bool,
 ) -> NoteStyleParsedResponse:
+    if strict:
+        _ensure_note_analysis_structure(payload, source=source)
+
     analysis_payload, path = _resolve_analysis_payload(payload)
     valid, errors = _schema_validate(analysis_payload)
     if not valid:
@@ -332,6 +431,8 @@ def _build_validated_response(
 
 def _parse_normalized_response_payload(
     response_payload: Mapping[str, Any],
+    *,
+    strict: bool,
 ) -> NoteStyleParsedResponse:
     mode = str(response_payload.get("mode") or "").strip()
 
@@ -348,7 +449,12 @@ def _parse_normalized_response_payload(
             json_payload = fallback
 
     if isinstance(json_payload, Mapping):
-        return _build_validated_response(json_payload, origin=origin, source=f"{origin}:json")
+        return _build_validated_response(
+            json_payload,
+            origin=origin,
+            source=f"{origin}:json",
+            strict=strict,
+        )
 
     # Fall back to attempting to parse the raw text if available.
     if mode == "tool":
@@ -357,7 +463,7 @@ def _parse_normalized_response_payload(
         raw_candidate = response_payload.get("raw_content")
 
     if isinstance(raw_candidate, str) and raw_candidate.strip():
-        return parse_note_style_response_text(raw_candidate, origin=origin)
+        return parse_note_style_response_text(raw_candidate, origin=origin, strict=strict)
 
     if raw_candidate is not None and mode == "tool":
         try:
@@ -366,7 +472,9 @@ def _parse_normalized_response_payload(
             pass
         else:
             if serialized.strip():
-                return parse_note_style_response_text(serialized, origin=origin)
+                return parse_note_style_response_text(
+                    serialized, origin=origin, strict=strict
+                )
 
     raise NoteStyleParseError("Model response missing JSON content", code="empty_content")
 
@@ -374,14 +482,33 @@ def _parse_normalized_response_payload(
 def parse_note_style_response_payload(response_payload: Any) -> NoteStyleParsedResponse:
     """Parse and validate the ``response_payload`` from the model."""
 
+    strict_mode = _strict_parser_enabled()
+
+    candidate_payload: Mapping[str, Any] | None = None
+    candidate_source = "response_payload"
+    if isinstance(response_payload, Mapping):
+        for key, source in (
+            ("json", "response_payload.json"),
+            ("content_json", "response_payload.content_json"),
+            ("tool_json", "response_payload.tool_json"),
+        ):
+            value = response_payload.get(key)
+            if isinstance(value, Mapping) and ("analysis" in value or "note" in value):
+                candidate_payload = value
+                candidate_source = source
+                break
+        else:
+            if "analysis" in response_payload or "note" in response_payload:
+                candidate_payload = response_payload  # type: ignore[assignment]
+
+    if strict_mode and candidate_payload is not None:
+        _ensure_note_analysis_structure(candidate_payload, source=candidate_source)
+
     if isinstance(response_payload, Mapping) and ("mode" in response_payload or "json" in response_payload):
-        try:
-            return _parse_normalized_response_payload(response_payload)
-        except NoteStyleParseError:
-            raise
+        return _parse_normalized_response_payload(response_payload, strict=strict_mode)
 
     text, origin = _extract_response_content(response_payload)
-    return parse_note_style_response_text(text, origin=origin)
+    return parse_note_style_response_text(text, origin=origin, strict=strict_mode)
 
 
 __all__ = [

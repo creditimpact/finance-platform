@@ -50,62 +50,62 @@ def _analysis_payload() -> dict[str, object]:
     }
 
 
-def test_parse_pure_json_response() -> None:
-    analysis = _analysis_payload()
-    parsed = parse_note_style_response_payload(_make_response(analysis))
+def _structured_payload() -> dict[str, object]:
+    return {"note": "Example generated note", "analysis": _analysis_payload()}
 
-    assert parsed.analysis == analysis
-    assert parsed.payload == analysis
+
+def test_parse_pure_json_response() -> None:
+    payload = _structured_payload()
+    parsed = parse_note_style_response_payload(_make_response(payload))
+
+    assert parsed.analysis == payload["analysis"]
+    assert parsed.payload == payload
     assert parsed.source == "message.content:json"
 
 
 def test_parse_fenced_json_response() -> None:
-    analysis = _analysis_payload()
-    payload = {"analysis": analysis}
+    payload = _structured_payload()
     parsed = parse_note_style_response_payload(_make_response(payload))
 
-    assert parsed.analysis == analysis
+    assert parsed.analysis == payload["analysis"]
     assert parsed.payload == payload
     assert parsed.source == "message.content:json"
 
 
 def test_parse_text_with_inline_json_response() -> None:
-    analysis = _analysis_payload()
-    payload = {"analysis": analysis}
+    payload = _structured_payload()
     parsed = parse_note_style_response_payload(_make_response(payload))
 
-    assert parsed.analysis == analysis
+    assert parsed.analysis == payload["analysis"]
     assert parsed.source == "message.content:json"
 
 
 def test_parse_malformed_json_raises() -> None:
-    malformed = {"tone": "missing required fields"}
+    malformed = {"note": "", "analysis": {"tone": "missing required fields"}}
 
     with pytest.raises(NoteStyleParseError) as exc_info:
         parse_note_style_response_payload(_make_response(malformed))
 
-    assert exc_info.value.code in {"invalid_json", "schema_validation_failed"}
+    assert exc_info.value.code in {"invalid_schema", "schema_validation_failed", "invalid_json"}
 
 
 def test_parse_uses_tool_call_arguments_when_content_missing() -> None:
-    analysis = _analysis_payload()
-    payload = {"analysis": analysis}
+    payload = _structured_payload()
     response = _make_tool_response(payload)
 
     parsed = parse_note_style_response_payload(response)
 
-    assert parsed.analysis == analysis
+    assert parsed.analysis == payload["analysis"]
     assert parsed.payload == payload
     assert parsed.source == "message.tool_calls[0].function.arguments:json"
 
 
 def test_parse_tool_call_mapping_arguments() -> None:
-    analysis = _analysis_payload()
-    payload = {"analysis": analysis}
+    payload = _structured_payload()
     response = _make_tool_response(payload)
 
     parsed = parse_note_style_response_payload(response)
 
-    assert parsed.analysis == analysis
+    assert parsed.analysis == payload["analysis"]
     assert parsed.payload == payload
     assert parsed.source == "message.tool_calls[0].function.arguments:json"

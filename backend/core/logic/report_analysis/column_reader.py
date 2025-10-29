@@ -44,6 +44,7 @@ def _is_label(text: str) -> str | None:
         "ACCOUNT DESCRIPTION",
         "DISPUTE STATUS",
         "CREDITOR TYPE",
+        "ORIGINAL CREDITOR",
         "ACCOUNT STATUS",
         "PAYMENT STATUS",
         "CREDITOR REMARKS",

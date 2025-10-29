@@ -910,7 +910,9 @@ def _handle_invalid_response(
         sid,
         account_id,
         runs_root=runs_root_path,
-        error=reason,
+        error="invalid_result",
+        parser_reason=reason,
+        raw_path=raw_path,
     )
 
 

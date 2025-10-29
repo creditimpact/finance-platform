@@ -1181,6 +1181,7 @@ class NoteStyleIndexWriter:
         *,
         pack_path: Path | None,
         error: str | None = None,
+        result_path: Path | None = None,
     ) -> tuple[Mapping[str, Any], dict[str, int]]:
         document = self._load_document()
         key, entries = self._extract_entries(document)
@@ -1203,7 +1204,12 @@ class NoteStyleIndexWriter:
                     entry_payload.setdefault(
                         "pack", _relativize(pack_path, self._paths.base)
                     )
-                entry_payload.setdefault("result_path", "")
+                if result_path is not None:
+                    entry_payload["result_path"] = _relativize(
+                        result_path, self._paths.base
+                    )
+                else:
+                    entry_payload.setdefault("result_path", "")
                 entry_payload["updated_at"] = timestamp
                 updated_entry = entry_payload
             rewritten.append(entry_payload)
@@ -1213,8 +1219,13 @@ class NoteStyleIndexWriter:
                 "account_id": normalized_account,
                 "status": "failed",
                 "failed_at": timestamp,
-                "result_path": "",
             }
+            if result_path is not None:
+                entry_payload["result_path"] = _relativize(
+                    result_path, self._paths.base
+                )
+            else:
+                entry_payload["result_path"] = ""
             if pack_path is not None:
                 entry_payload["pack"] = _relativize(pack_path, self._paths.base)
             if error:
@@ -1562,6 +1573,8 @@ def record_note_style_failure(
     *,
     runs_root: Path | str | None = None,
     error: str | None = None,
+    parser_reason: str | None = None,
+    raw_path: Path | str | None = None,
 ) -> Path:
     """Record a failed note_style model attempt for ``account_id``."""
 
@@ -1570,11 +1583,38 @@ def record_note_style_failure(
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
+    failure_path = account_paths.result_file
+    failure_payload: dict[str, Any] = {
+        "status": "failed",
+        "error": (str(error).strip() or "error") if error is not None else "error",
+    }
+
+    if parser_reason is not None:
+        parser_reason_text = str(parser_reason).strip()
+        if parser_reason_text:
+            failure_payload["parser_reason"] = parser_reason_text
+
+    raw_path_value: Path | None = None
+    if raw_path is not None:
+        raw_path_text = str(raw_path).strip()
+        if raw_path_text:
+            raw_path_value = Path(raw_path_text)
+    else:
+        candidate = account_paths.result_raw_file
+        if candidate.exists():
+            raw_path_value = candidate
+
+    if raw_path_value is not None:
+        failure_payload["raw_path"] = _relative_to_base(raw_path_value, paths.base)
+
+    _atomic_write_jsonl(failure_path, failure_payload)
+
     writer = NoteStyleIndexWriter(sid=sid, paths=paths)
     updated_entry, totals, skipped_count = writer.mark_failed(
         account_id,
         pack_path=account_paths.pack_file,
         error=error,
+        result_path=failure_path,
     )
 
     log.info(
@@ -1601,7 +1641,7 @@ def record_note_style_failure(
         skipped_count=skipped_count,
     )
 
-    return account_paths.result_file
+    return failure_path
 
 
 __all__ = [

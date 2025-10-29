@@ -220,7 +220,7 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     assert analysis["emphasis"] == ["support_request", "evidence_provided"]
     context = analysis["context_hints"]
     assert context["topic"] == "billing_error"
-    assert context["timeframe"] == {"month": "2024-01-01", "relative": "last_year"}
+    assert context["timeframe"] == {"month": 1, "relative": "last_year"}
     assert context["entities"] == {"creditor": "Capital Bank", "amount": 123.45}
     assert analysis["risk_flags"] == ["needs_review", "follow_up"]
 
@@ -295,12 +295,71 @@ def test_store_note_style_result_handles_short_note(
         "evaluated_at",
         "analysis",
         "note_metrics",
+        "note_hash",
     }
     assert stored_payload["analysis"]["tone"] == "neutral"
-    assert "note_hash" not in stored_payload
+    assert isinstance(stored_payload["note_hash"], str)
+    assert stored_payload["note_hash"].strip()
     assert "prompt_salt" not in stored_payload
     assert stored_payload["evaluated_at"].endswith("Z")
     assert set(stored_payload["note_metrics"].keys()) == {"char_len", "word_len"}
+
+
+def test_store_note_style_result_writes_failure_on_validation_error(
+    tmp_path: Path,
+) -> None:
+    sid = "SID910"
+    account_id = "idx-910"
+    runs_root = tmp_path / "runs"
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    run_dir = runs_root / sid
+    _write_manifest(run_dir, account_id)
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"note": "sample"},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    invalid_payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "analysis": None,
+        "note_metrics": {"char_len": 12, "word_len": 3},
+    }
+
+    with pytest.raises(ValueError) as excinfo:
+        store_note_style_result(
+            sid,
+            account_id,
+            invalid_payload,
+            runs_root=runs_root,
+            update_index=False,
+        )
+
+    assert "validation_error" in str(excinfo.value)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    stored_lines = [
+        line
+        for line in account_paths.result_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(stored_lines) == 1
+    failure_payload = json.loads(stored_lines[0])
+    assert failure_payload["status"] == "failed"
+    assert failure_payload["error"] == "validation_error"
+    assert failure_payload["sid"] == sid
+    assert failure_payload["account_id"] == account_id
+    assert failure_payload["details"]
+    assert failure_payload["evaluated_at"].endswith("Z")
 
 
 def test_manifest_status_tracks_partial_and_complete_results(tmp_path: Path) -> None:

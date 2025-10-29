@@ -1046,6 +1046,14 @@ def _guard_result_analysis(
             f"sid={sid} account_id={account_id} guard_adjustments={detail}",
         )
 
+    context_sanitized = sanitized.get("context_hints")
+    if isinstance(context_sanitized, MutableMapping):
+        timeframe_sanitized = context_sanitized.get("timeframe")
+        if isinstance(timeframe_sanitized, MutableMapping):
+            timeframe_sanitized["month"] = _normalize_month_value(
+                timeframe_sanitized.get("month")
+            )
+
     payload["analysis"] = sanitized
 
 
@@ -1695,11 +1703,28 @@ def store_note_style_result(
     note_text_value = _load_pack_note_text(account_paths.pack_file)
     if isinstance(note_text_value, str):
         normalized_note = note_text_value.strip()
-        if normalized_note and not _is_short_note_metrics(note_metrics_payload):
-            note_hash = hashlib.sha256(
+        if normalized_note:
+            normalized_payload["note_hash"] = hashlib.sha256(
                 normalized_note.encode("utf-8", "ignore")
             ).hexdigest()
-            normalized_payload["note_hash"] = note_hash
+
+    note_hash_value = normalized_payload.get("note_hash")
+    if not isinstance(note_hash_value, str) or not note_hash_value.strip():
+        fallback_seed = {
+            "sid": normalized_payload.get("sid"),
+            "account_id": normalized_payload.get("account_id"),
+            "analysis": normalized_payload.get("analysis"),
+            "note_metrics": normalized_payload.get("note_metrics"),
+        }
+        try:
+            serialized_seed = json.dumps(
+                fallback_seed, ensure_ascii=False, sort_keys=True, default=str
+            )
+        except TypeError:
+            serialized_seed = str(fallback_seed)
+        normalized_payload["note_hash"] = hashlib.sha256(
+            serialized_seed.encode("utf-8", "ignore")
+        ).hexdigest()
 
     evaluated_at_value = normalized_payload.get("evaluated_at")
     if not isinstance(evaluated_at_value, str) or not evaluated_at_value.strip():
@@ -1715,14 +1740,68 @@ def store_note_style_result(
         payload=normalized_payload,
     )
 
-    bytes_written = _atomic_write_jsonl(result_file_path, normalized_payload)
+    try:
+        validated_result = NoteStyleResult.model_validate(normalized_payload)
+    except ValidationError as exc:
+        failure_details = json.dumps(exc.errors(), ensure_ascii=False)
+        failure_evaluated_at = normalized_payload.get("evaluated_at")
+        if not isinstance(failure_evaluated_at, str) or not failure_evaluated_at.strip():
+            failure_evaluated_at = _now_iso()
+        failure_payload: dict[str, Any] = {
+            "status": "failed",
+            "error": "validation_error",
+            "details": failure_details,
+            "sid": sid,
+            "account_id": account_id,
+            "evaluated_at": failure_evaluated_at,
+        }
+        _atomic_write_jsonl(result_file_path, failure_payload)
+        failure_relative = _relative_to_base(result_file_path, paths.base)
+        log.error(
+            "NOTE_STYLE_RESULT_VALIDATION_FAILED sid=%s account_id=%s path=%s",
+            sid,
+            account_id,
+            failure_relative,
+            exc_info=True,
+        )
+        log_structured_event(
+            "NOTE_STYLE_RESULT_VALIDATION_FAILED",
+            logger=log,
+            sid=sid,
+            account_id=account_id,
+            result_path=failure_relative,
+            details=failure_details,
+        )
+        if update_index:
+            writer = NoteStyleIndexWriter(sid=sid, paths=paths)
+            updated_entry, totals, skipped_count = writer.mark_failed(
+                account_id,
+                pack_path=account_paths.pack_file,
+                error="validation_error",
+                result_path=result_file_path,
+            )
+            _refresh_after_index_update(
+                sid=sid,
+                account_id=account_id,
+                runs_root_path=runs_root_path,
+                paths=paths,
+                updated_entry=updated_entry,
+                totals=totals,
+                skipped_count=skipped_count,
+                completed_at_override=completed_at,
+            )
+        raise ValueError(f"validation_error|{failure_details}") from exc
+
+    validated_payload = validated_result.model_dump(mode="json")
+    bytes_written = _atomic_write_jsonl(result_file_path, validated_payload)
     _validate_result_payload(
         sid=sid,
         account_id=account_id,
         paths=paths,
         account_paths=account_paths,
-        payload=normalized_payload,
+        payload=validated_payload,
     )
+    normalized_payload = validated_payload
     result_relative = _relative_to_base(result_file_path, paths.base)
     log.info(
         "NOTE_STYLE_PARSED sid=%s account_id=%s path=%s bytes=%d",
@@ -1782,6 +1861,7 @@ def record_note_style_failure(
     raw_path: Path | str | None = None,
     raw_openai_mode: str | None = None,
     raw_openai_payload_excerpt: str | None = None,
+    failure_payload: Mapping[str, Any] | None = None,
 ) -> Path:
     """Record a failed note_style model attempt for ``account_id``."""
 
@@ -1791,15 +1871,46 @@ def record_note_style_failure(
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
     failure_path = _account_result_jsonl_path(account_paths)
-    failure_payload: dict[str, Any] = {
-        "status": "failed",
-        "error": (str(error).strip() or "error") if error is not None else "error",
-    }
+    payload: dict[str, Any]
+    if failure_payload is not None:
+        payload = dict(failure_payload)
+    else:
+        payload = {}
 
-    if parser_reason is not None:
-        parser_reason_text = str(parser_reason).strip()
-        if parser_reason_text:
-            failure_payload["parser_reason"] = parser_reason_text
+    error_text = (str(error).strip() or "error") if error is not None else "error"
+
+    parser_reason_text = str(parser_reason).strip() if parser_reason is not None else ""
+    validation_details: str | None = None
+    if parser_reason_text:
+        payload.setdefault("parser_reason", parser_reason_text)
+        if parser_reason_text.startswith("validation_error"):
+            error_text = "validation_error"
+            _, _, detail_part = parser_reason_text.partition("|")
+            detail_candidate = detail_part.strip()
+            if detail_candidate:
+                validation_details = detail_candidate
+            else:
+                suffix = parser_reason_text[len("validation_error") :].lstrip("|: ")
+                validation_details = suffix or parser_reason_text
+
+    payload.setdefault("status", "failed")
+    payload.setdefault("error", error_text)
+    if validation_details and "details" not in payload:
+        payload["details"] = validation_details
+
+    payload["sid"] = str(sid)
+    payload["account_id"] = str(account_id)
+
+    evaluated_at_value = payload.get("evaluated_at")
+    evaluated_at_text = (
+        evaluated_at_value.strip()
+        if isinstance(evaluated_at_value, str)
+        else ""
+    )
+    if evaluated_at_text:
+        payload["evaluated_at"] = evaluated_at_text
+    else:
+        payload["evaluated_at"] = _now_iso()
 
     raw_path_value: Path | None = None
     if raw_path is not None:
@@ -1812,25 +1923,25 @@ def record_note_style_failure(
             raw_path_value = candidate
 
     if raw_path_value is not None:
-        failure_payload["raw_path"] = _relative_to_base(raw_path_value, paths.base)
+        payload.setdefault("raw_path", _relative_to_base(raw_path_value, paths.base))
 
     if isinstance(raw_openai_mode, str):
         mode_value = raw_openai_mode.strip()
         if mode_value:
-            failure_payload["raw_openai_mode"] = mode_value
+            payload.setdefault("raw_openai_mode", mode_value)
 
     if isinstance(raw_openai_payload_excerpt, str):
         excerpt_value = raw_openai_payload_excerpt.strip()
         if excerpt_value:
-            failure_payload["raw_openai_payload_excerpt"] = excerpt_value
+            payload.setdefault("raw_openai_payload_excerpt", excerpt_value)
 
-    _atomic_write_jsonl(failure_path, failure_payload)
+    _atomic_write_jsonl(failure_path, payload)
 
     writer = NoteStyleIndexWriter(sid=sid, paths=paths)
     updated_entry, totals, skipped_count = writer.mark_failed(
         account_id,
         pack_path=account_paths.pack_file,
-        error=error,
+        error=error_text,
         result_path=failure_path,
     )
 
@@ -1838,14 +1949,14 @@ def record_note_style_failure(
         "NOTE_STYLE_RESULT_FAILED sid=%s acc=%s error=%s",
         sid,
         account_id,
-        error or "",
+        error_text,
     )
     log_structured_event(
         "NOTE_STYLE_RESULT_FAILED",
         logger=log,
         sid=sid,
         account_id=account_id,
-        error=error or "",
+        error=error_text,
     )
 
     _refresh_after_index_update(

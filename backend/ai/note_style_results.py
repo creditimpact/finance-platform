@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import copy
 import json
 import logging
@@ -15,12 +16,15 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
+from pydantic import ValidationError
+
 from backend import config
 from backend.ai.manifest import (
     ensure_note_style_section,
     update_note_style_stage_status,
 )
 from backend.ai.note_style.io import note_style_stage_view
+from backend.ai.note_style.schema import NoteStyleResult
 from backend.ai.note_style_logging import (
     append_note_style_warning,
     log_structured_event,
@@ -98,6 +102,21 @@ _NO_DOCUMENT_PATTERNS = (
     "don't have proof",
     "do not have proof",
 )
+
+
+_MONTH_NAME_TO_NUMBER: dict[str, int] = {
+    name.lower(): index
+    for index, name in enumerate(calendar.month_name)
+    if name
+}
+_MONTH_NAME_TO_NUMBER.update(
+    {
+        name.lower(): index
+        for index, name in enumerate(calendar.month_abbr)
+        if name
+    }
+)
+_MONTH_NAME_TO_NUMBER.setdefault("sept", 9)
 
 
 def _resolve_runs_root(runs_root: Path | str | None) -> Path:
@@ -297,6 +316,31 @@ def _normalize_date_field(value: Any) -> str | None:
         except ValueError:
             continue
         return datetime(parsed.year, parsed.month, 1).date().isoformat()
+    return None
+
+
+def _normalize_month_value(value: Any) -> int | None:
+    normalized_date = _normalize_date_field(value)
+    if normalized_date:
+        try:
+            parsed = datetime.fromisoformat(normalized_date)
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            return parsed.month
+
+    numeric = _coerce_positive_int(value)
+    if numeric is not None and 1 <= numeric <= 12:
+        return numeric
+
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text:
+            sanitized = re.sub(r"[\s._-]+", " ", text).strip()
+            mapped = _MONTH_NAME_TO_NUMBER.get(sanitized)
+            if mapped is not None:
+                return mapped
+
     return None
 
 
@@ -577,7 +621,47 @@ def _looks_like_analysis_payload(candidate: Mapping[str, Any]) -> bool:
     return True
 
 
-def _result_file_status(result_path: Path | None) -> tuple[bool, bool]:
+def _prepare_result_for_validation(
+    payload: Mapping[str, Any], *, pack_path: Path | None = None
+) -> MutableMapping[str, Any]:
+    if isinstance(payload, MutableMapping):
+        sanitized: MutableMapping[str, Any] = copy.deepcopy(payload)
+    else:
+        sanitized = copy.deepcopy(dict(payload))
+
+    analysis_payload = sanitized.get("analysis")
+    if isinstance(analysis_payload, Mapping):
+        analysis_mutable = _ensure_mutable_mapping(analysis_payload)
+        sanitized["analysis"] = analysis_mutable
+        context_payload = analysis_mutable.get("context_hints")
+        if isinstance(context_payload, Mapping):
+            context_mutable = _ensure_mutable_mapping(context_payload)
+            analysis_mutable["context_hints"] = context_mutable
+            timeframe_payload = context_mutable.get("timeframe")
+            if isinstance(timeframe_payload, Mapping):
+                timeframe_mutable = _ensure_mutable_mapping(timeframe_payload)
+                timeframe_mutable["month"] = _normalize_month_value(
+                    timeframe_mutable.get("month")
+                )
+                context_mutable["timeframe"] = timeframe_mutable
+
+    if pack_path is not None:
+        _resolve_note_metrics(sanitized, pack_path=pack_path)
+        if not sanitized.get("note_hash"):
+            note_text = _load_pack_note_text(pack_path)
+            if isinstance(note_text, str):
+                normalized = note_text.strip()
+                if normalized:
+                    sanitized["note_hash"] = hashlib.sha256(
+                        normalized.encode("utf-8", "ignore")
+                    ).hexdigest()
+
+    return sanitized
+
+
+def _result_file_status(
+    result_path: Path | None, *, pack_path: Path | None = None
+) -> tuple[bool, bool]:
     """Return ``(valid_json, analysis_valid)`` for ``result_path``."""
 
     if result_path is None or not result_path.exists():
@@ -585,7 +669,7 @@ def _result_file_status(result_path: Path | None) -> tuple[bool, bool]:
 
     try:
         with result_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 text = line.strip()
                 if not text:
                     continue
@@ -593,18 +677,33 @@ def _result_file_status(result_path: Path | None) -> tuple[bool, bool]:
                     payload = json.loads(text)
                 except json.JSONDecodeError:
                     log.warning(
-                        "NOTE_STYLE_RESULT_PARSE_FAILED path=%s",
+                        "NOTE_STYLE_RESULT_JSON_INVALID path=%s line=%d",
                         result_path,
+                        line_number,
                         exc_info=True,
                     )
-                    return (False, False)
+                    continue
                 if not isinstance(payload, Mapping):
-                    return (False, False)
-                analysis_valid = _looks_like_analysis_payload(payload)
-                if not analysis_valid:
-                    analysis_payload = payload.get("analysis")
-                    if isinstance(analysis_payload, Mapping):
-                        analysis_valid = _looks_like_analysis_payload(analysis_payload)
+                    log.warning(
+                        "NOTE_STYLE_RESULT_LINE_NOT_MAPPING path=%s line=%d",
+                        result_path,
+                        line_number,
+                    )
+                    continue
+                prepared_payload = _prepare_result_for_validation(
+                    payload, pack_path=pack_path
+                )
+                try:
+                    result_object = NoteStyleResult.model_validate(prepared_payload)
+                except ValidationError as exc:
+                    log.warning(
+                        "NOTE_STYLE_RESULT_VALIDATION_FAILED path=%s line=%d errors=%s",
+                        result_path,
+                        line_number,
+                        exc.errors(),
+                    )
+                    continue
+                analysis_valid = result_object.analysis is not None
                 return (True, analysis_valid)
     except FileNotFoundError:
         return (False, False)
@@ -1157,7 +1256,9 @@ class NoteStyleIndexWriter:
 
         timestamp = completed_at or _now_iso()
         normalized_account = str(account_id)
-        result_valid, analysis_valid = _result_file_status(result_path)
+        result_valid, analysis_valid = _result_file_status(
+            result_path, pack_path=pack_path
+        )
 
         rewritten: list[dict[str, Any]] = []
         updated_entry: dict[str, Any] | None = None

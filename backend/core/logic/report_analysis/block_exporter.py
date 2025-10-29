@@ -2984,6 +2984,7 @@ def enrich_block(blk: dict) -> dict:
         "Account Description",
         "Dispute Status",
         "Creditor Type",
+        "Original Creditor",
     ]
     BOTTOM_LABELS = [
         "Account Status",

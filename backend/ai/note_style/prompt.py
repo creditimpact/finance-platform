@@ -8,11 +8,16 @@ from typing import Any, Iterable, Mapping
 
 _BASE_SYSTEM_PROMPT = (
     "You analyse customer notes and respond with structured JSON.\n"
-    "Return exactly one JSON object using this schema:\n"
+    "Return only a single JSON object that matches the schema. No explanations, no markdown, no code fences.\n"
+    "Schema:\n"
     '{"tone": string, "context_hints": {"timeframe": {"month": string|null, "relative": '
     'string|null}, "topic": string, "entities": {"creditor": string|null, "amount": '
     'number|null}}, "emphasis": [string], "confidence": number, "risk_flags": [string]}.\n'
-    "Never include explanations or additional keys."
+    "Example:\n"
+    '{"tone": "neutral", "context_hints": {"timeframe": {"month": null, "relative": '
+    '"recent"}, "topic": "billing dispute", "entities": {"creditor": "ACME Bank", '
+    '"amount": 250.0}}, "emphasis": ["disputed charge"], "confidence": 0.8, '
+    '"risk_flags": []}'
 )
 
 _CONTEXT_HINT_PREFIX = "Context hints: "

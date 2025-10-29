@@ -158,7 +158,12 @@ class AIClient:
         wants_tool_mode = allow_tool_calls and normalized_mode == "tool"
 
         if is_note_style_request:
-            if wants_tool_mode:
+            existing_response_format = kwargs.get("response_format")
+            forces_json_object = (
+                isinstance(existing_response_format, Mapping)
+                and existing_response_format.get("type") == "json_object"
+            )
+            if wants_tool_mode and not forces_json_object:
                 kwargs.pop("response_format", None)
                 tools = _maybe_build_tools("tool")
                 if tools is not None:
@@ -347,9 +352,14 @@ class AIClient:
                 raise ValueError("json_object parsing produced no payload")
             raise AIClientProtocolError("No content or tool_calls in response")
 
+        content_text_value = None
+        if mode == "content" and not wants_json_object:
+            content_text_value = content_text if content_text else None
+
         metadata = {
             "mode": mode,
             "content_json": parsed_json if mode == "content" else None,
+            "content_text": content_text_value,
             "tool_json": parsed_json if mode == "tool" else None,
             "json": parsed_json,
             "raw": resp,

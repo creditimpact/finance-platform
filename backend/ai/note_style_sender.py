@@ -647,41 +647,14 @@ def _response_kwargs_for_attempt(
     response_mode: NoteStyleResponseMode | str | None,
     enable_tool_call_retry: bool,
 ) -> tuple[dict[str, Any], str]:
-    normalized_mode = _normalize_response_mode(response_mode)
-    request_mode = _determine_request_mode(
-        base_mode=normalized_mode,
-        attempt_index=attempt_index,
-        enable_tool_call_retry=enable_tool_call_retry,
-        has_response_format=True,
-    )
-    configured_mode = getattr(
-        note_cfg.NOTE_STYLE_RESPONSE_MODE, "value", note_cfg.NOTE_STYLE_RESPONSE_MODE
-    )
-    normalized_config_mode = str(configured_mode).strip().lower()
-    allow_flag = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
-    env_allow = bool(note_cfg.NOTE_STYLE_ALLOW_TOOLS)
-    allow_tool_calls = bool(allow_flag and env_allow)
-
-    if not allow_tool_calls:
-        if request_mode != "content":
-            log.info(
-                "NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode allow_tools=%s env_allow_tools=%s",
-                allow_flag,
-                env_allow,
-            )
-        request_mode = "content"
-    elif normalized_config_mode != "tool":
-        if request_mode != "content":
-            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode")
-        request_mode = "content"
+    _ = response_format
+    _ = attempt_index
+    _ = response_mode
+    _ = enable_tool_call_retry
 
     kwargs: dict[str, Any] = {"_note_style_request": True}
-    if request_mode == "content":
-        kwargs["response_format"] = {"type": "json_object"}
-    if request_mode == "tool":
-        kwargs["tools"] = [_build_tool_payload()]
-        kwargs["tool_choice"] = _build_tool_choice()
-    return (kwargs, request_mode)
+    kwargs["response_format"] = {"type": "json_object"}
+    return (kwargs, "content")
 
 
 def _relativize(path: Path, base: Path) -> str:
@@ -1329,7 +1302,7 @@ def _handle_invalid_response(
         raw_path.resolve().as_posix() if raw_path else "<not-written>",
         marker_path.resolve().as_posix(),
     )
-    _, raw_excerpt = _summarize_openai_response(response_payload)
+    raw_mode, raw_excerpt = _summarize_openai_response(response_payload)
     record_note_style_failure(
         sid,
         account_id,
@@ -1337,7 +1310,7 @@ def _handle_invalid_response(
         error="invalid_result",
         parser_reason=reason,
         raw_path=raw_path,
-        raw_openai_mode="content",
+        raw_openai_mode=(raw_mode or "content"),
         raw_openai_payload_excerpt=raw_excerpt,
     )
 
@@ -1523,9 +1496,24 @@ def _send_pack_payload(
             enable_tool_call_retry=enable_tool_call_retry,
         )
         response_kwargs.setdefault("max_tokens", _NOTE_STYLE_RESPONSE_MAX_TOKENS)
-        request_metadata = _resolve_request_metadata(
-            response_kwargs, mode=request_mode
+
+        temperature = 0
+        top_p = 1
+        max_tokens = response_kwargs.get(
+            "max_tokens", _NOTE_STYLE_RESPONSE_MAX_TOKENS
         )
+
+        call_kwargs = {
+            **response_kwargs,
+            "response_format": {"type": "json_object"},
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+        }
+        call_kwargs.pop("tools", None)
+        call_kwargs.pop("tool_choice", None)
+
+        request_metadata = _resolve_request_metadata(call_kwargs, mode=request_mode)
 
         attempt_messages = _messages_for_attempt(messages, attempt_index)
         _apply_mode_response_instruction(attempt_messages, request_mode)
@@ -1536,8 +1524,7 @@ def _send_pack_payload(
             response = client.chat_completion(
                 model=model or None,
                 messages=list(attempt_messages),
-                temperature=0,
-                **response_kwargs,
+                **call_kwargs,
             )
             latency = time.perf_counter() - start
             final_latency = latency
@@ -1679,7 +1666,7 @@ def _send_pack_payload(
                 sid,
                 account_id,
             )
-            _, raw_excerpt = _summarize_openai_response(response)
+            raw_mode, raw_excerpt = _summarize_openai_response(response)
             raw_path = _write_raw_response(
                 account_paths=account_paths,
                 response_payload=response,
@@ -1699,7 +1686,7 @@ def _send_pack_payload(
                 runs_root=runs_root_path,
                 error=str(exc),
                 raw_path=raw_path,
-                raw_openai_mode="content",
+                raw_openai_mode=(raw_mode or "content"),
                 raw_openai_payload_excerpt=raw_excerpt,
             )
             raise

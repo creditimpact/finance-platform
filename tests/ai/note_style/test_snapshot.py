@@ -78,3 +78,23 @@ def test_stage_view_in_progress_and_success_states(tmp_path: Path) -> None:
     assert success_view.ready_to_send == frozenset()
     assert success_view.is_terminal is True
 
+
+def test_stage_view_failed_when_all_failed(tmp_path: Path) -> None:
+    sid = "SID-FAILED"
+    accounts = ["idx-020", "idx-021"]
+
+    prime_stage(
+        tmp_path,
+        sid,
+        expected_accounts=accounts,
+        built_accounts=accounts,
+        failed_accounts=accounts,
+    )
+
+    failed_view = stage_view(tmp_path, sid)
+
+    assert failed_view.state == "failed"
+    assert failed_view.completed_total == 0
+    assert failed_view.failed_total == len(accounts)
+    assert failed_view.is_terminal is True
+

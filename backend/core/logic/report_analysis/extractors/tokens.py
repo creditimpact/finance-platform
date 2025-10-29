@@ -23,6 +23,7 @@ ACCOUNT_FIELD_MAP = {
     "account description": "account_description",
     "dispute status": "dispute_status",
     "creditor type": "creditor_type",
+    "original creditor": "original_creditor",
     "account status": "account_status",
     "payment status": "payment_status",
     "creditor remarks": "creditor_remarks",

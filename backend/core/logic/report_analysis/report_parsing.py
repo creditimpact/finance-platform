@@ -93,6 +93,7 @@ ACCOUNT_FIELD_SET: tuple[str, ...] = (
     "account_description",
     "dispute_status",
     "creditor_type",
+    "original_creditor",
     "account_status",
     "payment_status",
     "creditor_remarks",

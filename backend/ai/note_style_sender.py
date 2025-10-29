@@ -662,22 +662,15 @@ def _response_kwargs_for_attempt(
         and not note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS
     )
 
-    if forced_json_mode:
+    if forced_json_mode or request_mode != "json":
+        if request_mode != "json":
+            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing json mode")
         request_mode = "json"
-
-    if request_mode == "tool":
-        kwargs = {
-            "response_format": {"type": "json_object"},
-            "tools": [_build_tool_payload()],
-            "tool_choice": dict(_build_tool_choice()),
-        }
-        kwargs["_note_style_request"] = True
-        return (kwargs, request_mode)
 
     payload = response_format or {"type": "json_object"}
     kwargs = {"response_format": copy.deepcopy(payload)}
     kwargs["_note_style_request"] = True
-    return (kwargs, "json")
+    return (kwargs, request_mode)
 
 
 def _relativize(path: Path, base: Path) -> str:
@@ -1325,7 +1318,7 @@ def _handle_invalid_response(
         raw_path.resolve().as_posix() if raw_path else "<not-written>",
         marker_path.resolve().as_posix(),
     )
-    raw_mode, raw_excerpt = _summarize_openai_response(response_payload)
+    _, raw_excerpt = _summarize_openai_response(response_payload)
     record_note_style_failure(
         sid,
         account_id,
@@ -1333,7 +1326,7 @@ def _handle_invalid_response(
         error="invalid_result",
         parser_reason=reason,
         raw_path=raw_path,
-        raw_openai_mode=raw_mode,
+        raw_openai_mode="content",
         raw_openai_payload_excerpt=raw_excerpt,
     )
 
@@ -1675,7 +1668,7 @@ def _send_pack_payload(
                 sid,
                 account_id,
             )
-            raw_mode, raw_excerpt = _summarize_openai_response(response)
+            _, raw_excerpt = _summarize_openai_response(response)
             raw_path = _write_raw_response(
                 account_paths=account_paths,
                 response_payload=response,
@@ -1695,7 +1688,7 @@ def _send_pack_payload(
                 runs_root=runs_root_path,
                 error=str(exc),
                 raw_path=raw_path,
-                raw_openai_mode=raw_mode,
+                raw_openai_mode="content",
                 raw_openai_payload_excerpt=raw_excerpt,
             )
             raise

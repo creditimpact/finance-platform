@@ -22,7 +22,6 @@ from backend.ai.validation_index import (
     ValidationIndexEntry,
     ValidationPackIndexWriter,
 )
-from backend.analytics.analytics_tracker import emit_counter
 
 from backend.core.ai.paths import (
     validation_base_dir,
@@ -924,6 +923,8 @@ class ValidationPackWriter:
         ai_needed: bool,
     ) -> None:
         """Log and emit metrics describing the escalation rationale."""
+
+        from backend.analytics.analytics_tracker import emit_counter
 
         missing = bool(flags.get("missing", False))
         mismatch = bool(flags.get("mismatch", False))

@@ -54,7 +54,7 @@ def _write_manifest(run_dir: Path, account_id: str) -> Path:
 class _StubClient:
     def __init__(self, *, response: Mapping[str, Any] | None = None) -> None:
         self.calls: list[dict[str, object]] = []
-        self._response_payload = response or {
+        self._analysis_payload = response or {
             "tone": "Empathetic",
             "context_hints": {
                 "timeframe": {"month": "April", "relative": "Last month"},
@@ -82,23 +82,22 @@ class _StubClient:
                 "kwargs": kwargs,
             }
         )
-        arguments = json.dumps({"analysis": self._response_payload})
+        payload = {
+            "note": "Stub note",
+            "analysis": self._analysis_payload,
+        }
+        serialized = json.dumps(payload, ensure_ascii=False)
         return {
+            "mode": "content",
+            "content_json": payload,
+            "raw_content": serialized,
             "choices": [
                 {
                     "message": {
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "function": {
-                                    "name": "submit_note_style_analysis",
-                                    "arguments": arguments,
-                                }
-                            }
-                        ],
+                        "content": serialized,
                     }
                 }
-            ]
+            ],
         }
 
 
@@ -138,9 +137,8 @@ def test_note_style_sender_sends_built_pack(
     assert processed == [account_id]
     assert len(client.calls) == 1
     first_kwargs = client.calls[0]["kwargs"]
-    assert "tools" in first_kwargs
-    assert first_kwargs["tools"][0]["function"]["name"] == "submit_note_style_analysis"
-    assert first_kwargs["tool_choice"]["function"]["name"] == "submit_note_style_analysis"
+    assert "tools" not in first_kwargs
+    assert "tool_choice" not in first_kwargs
     assert first_kwargs.get("_note_style_request") is True
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
@@ -264,7 +262,7 @@ def test_note_style_sender_sends_built_pack(
     assert metrics_entry.get("model") == config.NOTE_STYLE_MODEL
 
     call_kwargs = client.calls[0]["kwargs"]
-    assert "tools" in call_kwargs
+    assert "tools" not in call_kwargs
 
 
 def test_note_style_sender_retries_on_invalid_result(
@@ -308,10 +306,18 @@ def test_note_style_sender_retries_on_invalid_result(
             "risk_flags": ["compliance_check"],
         }
     }
+    valid_payload_body = {"note": "Retry stub", **valid_analysis}
     valid_payload = {
+        "mode": "content",
+        "content_json": valid_payload_body,
+        "raw_content": json.dumps(valid_payload_body, ensure_ascii=False),
         "choices": [
-            {"message": {"content": json.dumps(valid_analysis, ensure_ascii=False)}}
-        ]
+            {
+                "message": {
+                    "content": json.dumps(valid_payload_body, ensure_ascii=False)
+                }
+            }
+        ],
     }
 
     class _RetryClient:
@@ -353,10 +359,10 @@ def test_note_style_sender_retries_on_invalid_result(
     assert len(client.calls) == 2
     first_kwargs = client.calls[0]["kwargs"]
     retry_kwargs = client.calls[1]["kwargs"]
-    assert "tools" in first_kwargs
+    assert "tools" not in first_kwargs
     assert first_kwargs.get("response_format") == {"type": "json_object"}
     assert first_kwargs.get("_note_style_request") is True
-    assert "tools" in retry_kwargs
+    assert "tools" not in retry_kwargs
     assert retry_kwargs.get("response_format") == {"type": "json_object"}
     assert retry_kwargs.get("_note_style_request") is True
 
@@ -899,13 +905,13 @@ def test_note_style_sender_normalizes_message_content(tmp_path: Path, monkeypatc
     assert isinstance(call_messages, list)
     system_content = call_messages[0]["content"]
     assert isinstance(system_content, str)
-    assert "Return ONLY one JSON object" in system_content
+    assert "exactly ONE JSON object" in system_content
     user_content = call_messages[1]["content"]
     assert isinstance(user_content, str)
     assert json.loads(user_content) == {"payload": {"topic": "billing"}}
 
     call_kwargs = client.calls[0]["kwargs"]
-    assert "tools" in call_kwargs
+    assert "tools" not in call_kwargs
     assert call_kwargs.get("response_format") == {"type": "json_object"}
     assert call_kwargs.get("_note_style_request") is True
 

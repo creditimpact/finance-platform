@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 
 from openai import OpenAI
 
@@ -106,6 +106,24 @@ class AIClient:
             **kwargs,
         )
 
+        usage = getattr(resp, "usage", None)
+        prompt_tokens: int | None = None
+        response_tokens: int | None = None
+        total_tokens: int | None = None
+        if usage is not None:
+            if isinstance(usage, Mapping):
+                prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
+                response_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+                total_tokens = usage.get("total_tokens")
+            else:
+                prompt_tokens = getattr(usage, "prompt_tokens", None) or getattr(
+                    usage, "input_tokens", None
+                )
+                response_tokens = getattr(usage, "completion_tokens", None) or getattr(
+                    usage, "output_tokens", None
+                )
+                total_tokens = getattr(usage, "total_tokens", None)
+
         content = resp.choices[0].message.content
         try:
             parsed = json.loads(content)
@@ -116,6 +134,15 @@ class AIClient:
             parsed = json.loads(fixed)
             content = fixed
             logger.warning("NOTE_STYLE_JSON_FIXED len=%d", len(content))
+
+        if any(value is not None for value in (prompt_tokens, response_tokens, total_tokens)):
+            logger.info(
+                "AI_CLIENT_CHAT_USAGE model=%s prompt_tokens=%s response_tokens=%s total_tokens=%s",
+                model,
+                prompt_tokens if prompt_tokens is not None else "?",
+                response_tokens if response_tokens is not None else "?",
+                total_tokens if total_tokens is not None else "?",
+            )
 
         return {"raw": content, "json": parsed, "openai": resp}
 

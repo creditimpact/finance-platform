@@ -200,6 +200,11 @@ _CORRECTIVE_SYSTEM_MESSAGE = (
     "matches the schema. No markdown."
 )
 
+# Generous headroom to avoid truncation of the strict JSON payload the model
+# returns. The schema tops out well below this value, but the additional buffer
+# prevents partial responses when packs include richer context.
+_NOTE_STYLE_RESPONSE_MAX_TOKENS = 1600
+
 _NOTE_STYLE_TOOL_FUNCTION_NAME = "submit_note_style_analysis"
 _NOTE_STYLE_TOOL_DESCRIPTION = (
     "Return the strict note_style analysis JSON object that satisfies the schema."
@@ -1078,6 +1083,7 @@ def _send_pack_payload(
             attempt_index,
             enable_tool_call_retry=enable_tool_call_retry,
         )
+        response_kwargs.setdefault("max_tokens", _NOTE_STYLE_RESPONSE_MAX_TOKENS)
 
         start = time.perf_counter()
         try:

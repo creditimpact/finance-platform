@@ -1118,12 +1118,108 @@ def _extract_error_payload(exc: Exception) -> dict[str, Any]:
     return error_payload
 
 
+_SENSITIVE_SNAPSHOT_KEYS = (
+    "api_key",
+    "apikey",
+    "api-key",
+    "authorization",
+    "auth",
+    "token",
+    "secret",
+)
+
+_RAW_OPENAI_EXCERPT_LIMIT = 4096
+
+
+def _should_redact_snapshot_key(key: str) -> bool:
+    lowered = key.strip().lower()
+    if not lowered:
+        return False
+    return any(pattern in lowered for pattern in _SENSITIVE_SNAPSHOT_KEYS)
+
+
+def _redact_sensitive_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _should_redact_snapshot_key(key_text):
+                redacted[key_text] = "<redacted>"
+            else:
+                redacted[key_text] = _redact_sensitive_payload(item)
+        return redacted
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_redact_sensitive_payload(item) for item in value]
+    return value
+
+
+def _summarize_openai_response(response_payload: Any) -> tuple[str | None, str | None]:
+    mode: str | None = None
+    if isinstance(response_payload, Mapping):
+        mode_candidate = response_payload.get("mode")
+        if isinstance(mode_candidate, str) and mode_candidate.strip():
+            mode = mode_candidate.strip()
+
+    if mode is None:
+        choices = _coerce_attr(response_payload, "choices")
+        if isinstance(choices, Sequence) and choices:
+            first_choice = choices[0]
+            message = _coerce_attr(first_choice, "message")
+            if message is not None:
+                content = _coerce_attr(message, "content")
+                if isinstance(content, str) and content.strip():
+                    mode = "content"
+                else:
+                    tool_calls = _coerce_attr(message, "tool_calls")
+                    if isinstance(tool_calls, Sequence) and tool_calls:
+                        mode = "tool"
+
+    if mode is None and isinstance(response_payload, Mapping):
+        if response_payload.get("tool_json") is not None or response_payload.get(
+            "raw_tool_arguments"
+        ) is not None:
+            mode = "tool"
+        elif response_payload.get("content_json") is not None or response_payload.get(
+            "raw_content"
+        ) is not None:
+            mode = "content"
+
+    snapshot_target: Any = response_payload
+    if isinstance(response_payload, Mapping):
+        for key in ("openai", "raw"):
+            if key in response_payload:
+                snapshot_target = response_payload[key]
+                break
+
+    safe_payload = _safe_json_payload(snapshot_target)
+    sanitized_payload = _redact_sensitive_payload(safe_payload)
+
+    excerpt: str | None = None
+    try:
+        serialized = json.dumps(
+            sanitized_payload, ensure_ascii=False, sort_keys=True, indent=None
+        )
+    except TypeError:
+        serialized = str(sanitized_payload)
+
+    serialized = serialized.strip()
+    if serialized:
+        if len(serialized) > _RAW_OPENAI_EXCERPT_LIMIT:
+            excerpt = serialized[: _RAW_OPENAI_EXCERPT_LIMIT]
+        else:
+            excerpt = serialized
+
+    return mode, excerpt
+
+
 def _write_failure_result(
     *,
     sid: str,
     account_paths: NoteStyleAccountPaths,
     paths: NoteStylePaths,
     error_payload: Mapping[str, Any],
+    raw_openai_mode: str | None = None,
+    raw_openai_payload_excerpt: str | None = None,
 ) -> Path:
     failure_path = account_paths.result_file
     failure_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1134,6 +1230,10 @@ def _write_failure_result(
         "error": dict(error_payload),
         "completed_at": _now_iso(),
     }
+    if isinstance(raw_openai_mode, str) and raw_openai_mode.strip():
+        payload["raw_openai_mode"] = raw_openai_mode.strip()
+    if isinstance(raw_openai_payload_excerpt, str) and raw_openai_payload_excerpt.strip():
+        payload["raw_openai_payload_excerpt"] = raw_openai_payload_excerpt.strip()
     with failure_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
         handle.write("\n")
@@ -1174,6 +1274,7 @@ def _handle_invalid_response(
         raw_path.resolve().as_posix() if raw_path else "<not-written>",
         marker_path.resolve().as_posix(),
     )
+    raw_mode, raw_excerpt = _summarize_openai_response(response_payload)
     record_note_style_failure(
         sid,
         account_id,
@@ -1181,6 +1282,8 @@ def _handle_invalid_response(
         error="invalid_result",
         parser_reason=reason,
         raw_path=raw_path,
+        raw_openai_mode=raw_mode,
+        raw_openai_payload_excerpt=raw_excerpt,
     )
 
 
@@ -1490,7 +1593,8 @@ def _send_pack_payload(
                 sid,
                 account_id,
             )
-            _write_raw_response(
+            raw_mode, raw_excerpt = _summarize_openai_response(response)
+            raw_path = _write_raw_response(
                 account_paths=account_paths,
                 response_payload=response,
                 preserve_existing=raw_response_written,
@@ -1508,6 +1612,9 @@ def _send_pack_payload(
                 account_id,
                 runs_root=runs_root_path,
                 error=str(exc),
+                raw_path=raw_path,
+                raw_openai_mode=raw_mode,
+                raw_openai_payload_excerpt=raw_excerpt,
             )
             raise
 

@@ -139,7 +139,7 @@ def test_note_style_sender_sends_built_pack(
     first_kwargs = client.calls[0]["kwargs"]
     assert "tools" not in first_kwargs
     assert "tool_choice" not in first_kwargs
-    assert first_kwargs.get("_note_style_request") is True
+    assert first_kwargs.get("response_format") == {"type": "json_object"}
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -360,11 +360,11 @@ def test_note_style_sender_retries_on_invalid_result(
     first_kwargs = client.calls[0]["kwargs"]
     retry_kwargs = client.calls[1]["kwargs"]
     assert "tools" not in first_kwargs
+    assert "tool_choice" not in first_kwargs
     assert first_kwargs.get("response_format") == {"type": "json_object"}
-    assert first_kwargs.get("_note_style_request") is True
     assert "tools" not in retry_kwargs
+    assert "tool_choice" not in retry_kwargs
     assert retry_kwargs.get("response_format") == {"type": "json_object"}
-    assert retry_kwargs.get("_note_style_request") is True
 
     corrective_message = client.calls[1]["messages"][1]
     assert corrective_message["role"] == "system"
@@ -912,8 +912,8 @@ def test_note_style_sender_normalizes_message_content(tmp_path: Path, monkeypatc
 
     call_kwargs = client.calls[0]["kwargs"]
     assert "tools" not in call_kwargs
+    assert "tool_choice" not in call_kwargs
     assert call_kwargs.get("response_format") == {"type": "json_object"}
-    assert call_kwargs.get("_note_style_request") is True
 
 
 def test_note_style_sender_ignores_debug_snapshot_files(

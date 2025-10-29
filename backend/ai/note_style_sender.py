@@ -652,7 +652,7 @@ def _response_kwargs_for_attempt(
     _ = response_mode
     _ = enable_tool_call_retry
 
-    kwargs: dict[str, Any] = {"_note_style_request": True}
+    kwargs: dict[str, Any] = {}
     kwargs["response_format"] = {"type": "json_object"}
     return (kwargs, "content")
 
@@ -1525,17 +1525,14 @@ def _send_pack_payload(
             "max_tokens", _NOTE_STYLE_RESPONSE_MAX_TOKENS
         )
 
-        call_kwargs = {
-            **response_kwargs,
+        response_kwargs = {
             "response_format": {"type": "json_object"},
             "temperature": temperature,
             "top_p": top_p,
             "max_tokens": max_tokens,
         }
-        call_kwargs.pop("tools", None)
-        call_kwargs.pop("tool_choice", None)
 
-        request_metadata = _resolve_request_metadata(call_kwargs, mode=request_mode)
+        request_metadata = _resolve_request_metadata(response_kwargs, mode=request_mode)
 
         attempt_messages = _messages_for_attempt(messages, attempt_index)
         _apply_mode_response_instruction(attempt_messages, request_mode)
@@ -1546,11 +1543,11 @@ def _send_pack_payload(
             response = client.chat_completion(
                 model=model or None,
                 messages=list(attempt_messages),
-                **call_kwargs,
+                **response_kwargs,
             )
             latency = time.perf_counter() - start
             final_latency = latency
-            response_format_payload = call_kwargs.get("response_format")
+            response_format_payload = response_kwargs.get("response_format")
             if (
                 isinstance(response_format_payload, Mapping)
                 and response_format_payload.get("type") == "json_object"

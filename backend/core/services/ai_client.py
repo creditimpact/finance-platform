@@ -145,7 +145,7 @@ class AIClient:
                     logger.exception(
                         "AI_CLIENT_JSON_PARSE_FAILED context=%s", context
                     )
-                    raise
+                    return None
 
                 fixed_len = len(json.dumps(fixed, ensure_ascii=False))
                 logger.warning(

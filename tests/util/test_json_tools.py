@@ -1,0 +1,14 @@
+from backend.util.json_tools import try_fix_to_json
+
+
+def test_try_fix_to_json_returns_none_for_none():
+    assert try_fix_to_json(None) is None
+
+
+def test_try_fix_to_json_extracts_fenced_block():
+    text = "Noise```json\n{\"ok\": true}\n```more"
+    assert try_fix_to_json(text) == {"ok": True}
+
+
+def test_try_fix_to_json_rejects_non_object():
+    assert try_fix_to_json("[1, 2, 3]") is None

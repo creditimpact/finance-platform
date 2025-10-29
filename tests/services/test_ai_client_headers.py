@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from backend.core.services.ai_client import AIClient, AIConfig
 
 
@@ -6,20 +8,23 @@ def test_extra_headers_sanitized():
 
     captured = {}
 
+    dummy_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="{\"foo\": \"bar\"}", tool_calls=None)
+            )
+        ],
+        usage=None,
+    )
+
     class DummyCompletions:
         def create(self, **kwargs):
             captured.update(kwargs)
-            return {"choices": []}
+            return dummy_response
 
-    class DummyChat:
-        def __init__(self):
-            self.completions = DummyCompletions()
-
-    class DummyOpenAI:
-        def __init__(self):
-            self.chat = DummyChat()
-
-    client._client = DummyOpenAI()
+    client._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=DummyCompletions())
+    )
 
     client.chat_completion(
         messages=[{"role": "user", "content": "hi"}],

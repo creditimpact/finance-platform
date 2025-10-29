@@ -11,25 +11,26 @@ response snapshot in `ai_packs/note_style/results_raw/` for later debugging.
 ## Response modes
 
 The request mode is controlled by the `NOTE_STYLE_RESPONSE_MODE` environment
-variable. Supported values are `"tool"` and `"json"`. Legacy `"auto"` and
-`"json_object"` values are still accepted and are normalized to `"json"`. The
-default mode is `"json"`.
+variable. Supported values are `"tool"` and `"content"`. Legacy `"json"`,
+`"json_object"`, and `"auto"` values are still accepted and are normalized to
+`"content"`. The default mode is `"content"`.
 
 * `tool` &mdash; Always attaches the `submit_note_style_analysis` tool definition
   and instructs the model to answer via a tool call. Tool mode is additionally
   gated by the `NOTE_STYLE_ALLOW_TOOL_CALLS` feature flag (disabled by
   default).
-* `json` &mdash; Sends a `response_format` payload (`{"type": "json_object"}` by
-  default) and expects the model to respond directly in `message.content`.
+* `content` &mdash; Sends a `response_format` payload (`{"type": "json_object"}` by
+  default) and expects the model to respond directly in `assistant.content`
+  without any tool calls.
 
-The sender only includes the `response_format` parameter in the OpenAI request
-when the effective mode is `json`. Tool mode exclusively relies on the
+The sender always includes the `response_format` parameter in the OpenAI
+request while operating in content mode. Tool mode exclusively relies on the
 function-call contract and never sets `response_format`.
 
-When `NOTE_STYLE_ALLOW_TOOL_CALLS` is `false` the pipeline forces JSON mode even
-if `NOTE_STYLE_RESPONSE_MODE` is set to `"tool"`. Operators can temporarily set
-`NOTE_STYLE_ALLOW_TOOL_CALLS=true` alongside `NOTE_STYLE_RESPONSE_MODE=tool` to
-opt back into the legacy tool workflow.
+When `NOTE_STYLE_ALLOW_TOOL_CALLS` is `false` the pipeline forces content mode
+even if `NOTE_STYLE_RESPONSE_MODE` is set to `"tool"`. Operators can temporarily
+set `NOTE_STYLE_ALLOW_TOOL_CALLS=true` alongside `NOTE_STYLE_RESPONSE_MODE=tool`
+to opt back into the legacy tool workflow.
 
 For existing runs that still have `*.result` artifacts, use
 `scripts/migrate_note_style_results_to_jsonl.py` to migrate them to

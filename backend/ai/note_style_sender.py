@@ -598,10 +598,14 @@ def _normalize_response_mode(
         normalized = value.strip().lower()
         if normalized == NoteStyleResponseMode.TOOL.value:
             return NoteStyleResponseMode.TOOL
-        if normalized in {NoteStyleResponseMode.JSON.value, "json_object"}:
-            return NoteStyleResponseMode.JSON
+        if normalized in {
+            NoteStyleResponseMode.CONTENT.value,
+            "json",
+            "json_object",
+        }:
+            return NoteStyleResponseMode.CONTENT
 
-    return NoteStyleResponseMode.JSON
+    return NoteStyleResponseMode.CONTENT
 
 
 def _tooling_configured() -> bool:
@@ -625,19 +629,19 @@ def _determine_request_mode(
     response_mode_value = getattr(base_mode, "value", str(base_mode)).lower()
     allow_tools = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
 
-    if response_mode_value == "json" and not allow_tools:
-        return "json"
+    if response_mode_value in {"content", "json"} and not allow_tools:
+        return "content"
 
     if response_mode_value == "tool" or allow_tools:
         if not allow_tools and response_mode_value == "tool":
-            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing json mode")
-            return "json"
+            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode")
+            return "content"
         if not _tooling_configured():  # pragma: no cover - defensive
-            log.debug("NOTE_STYLE_TOOL_MODE_WITHOUT_SCHEMA forcing json mode")
-            return "json"
+            log.debug("NOTE_STYLE_TOOL_MODE_WITHOUT_SCHEMA forcing content mode")
+            return "content"
         return "tool"
 
-    return "json"
+    return "content"
 
 
 def _response_kwargs_for_attempt(
@@ -657,19 +661,24 @@ def _response_kwargs_for_attempt(
     configured_mode = getattr(
         note_cfg.NOTE_STYLE_RESPONSE_MODE, "value", note_cfg.NOTE_STYLE_RESPONSE_MODE
     )
-    forced_json_mode = (
-        str(configured_mode).strip().lower() == "json"
-        and not note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS
-    )
+    normalized_config_mode = str(configured_mode).strip().lower()
+    allow_tool_calls = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
 
-    if forced_json_mode or request_mode != "json":
-        if request_mode != "json":
-            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing json mode")
-        request_mode = "json"
+    if not allow_tool_calls:
+        if request_mode != "content":
+            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode")
+        request_mode = "content"
+    elif normalized_config_mode != "tool":
+        if request_mode != "content":
+            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode")
+        request_mode = "content"
 
     payload = response_format or {"type": "json_object"}
     kwargs = {"response_format": copy.deepcopy(payload)}
     kwargs["_note_style_request"] = True
+    if request_mode == "tool":
+        kwargs["tools"] = [_build_tool_payload()]
+        kwargs["tool_choice"] = _build_tool_choice()
     return (kwargs, request_mode)
 
 

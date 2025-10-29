@@ -25,7 +25,7 @@ from backend.ai.note_style.schema import (
     NOTE_STYLE_TOOL_PARAMETERS_SCHEMA,
     build_note_style_tool,
 )
-from backend.ai.note_style.prompt import build_response_instruction
+from backend.ai.note_style.prompt import build_base_system_prompt, build_response_instruction
 from backend.config.note_style import NoteStyleResponseMode
 from backend.config import note_style as note_cfg
 from backend.core.ai.paths import (
@@ -411,15 +411,11 @@ _DISALLOWED_MESSAGE_KEY_SUBSTRINGS: tuple[str, ...] = (
 )
 
 
-_STRICT_SYSTEM_MESSAGE_CONTENT = (
-    "You are a formatter. Return ONLY one JSON object with keys: "
-    "note (string), tone (string), confidence (number 0..1). "
-    "No extra text, no code fences, no explanations."
-)
+_STRICT_SYSTEM_MESSAGE_CONTENT = build_base_system_prompt()
 
 _CORRECTIVE_SYSTEM_MESSAGE = (
-    "Your previous output was not valid JSON. Return only a JSON object that "
-    "matches the schema. No markdown."
+    "Your previous output was not valid JSON. Follow the system instructions "
+    "and reply with exactly one JSON object that matches the schema."
 )
 
 # Generous headroom to avoid truncation of the strict JSON payload the model
@@ -622,24 +618,18 @@ def _determine_request_mode(
     enable_tool_call_retry: bool,
     has_response_format: bool,
 ) -> str:
-    _ = attempt_index  # maintained for signature compatibility
     _ = enable_tool_call_retry
     _ = has_response_format
 
-    response_mode_value = getattr(base_mode, "value", str(base_mode)).lower()
+    response_mode_value = getattr(base_mode, "value", str(base_mode)).strip().lower()
     allow_tools = bool(note_cfg.NOTE_STYLE_ALLOW_TOOL_CALLS)
 
-    if response_mode_value in {"content", "json"} and not allow_tools:
-        return "content"
-
-    if response_mode_value == "tool" or allow_tools:
-        if not allow_tools and response_mode_value == "tool":
-            log.info("NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode")
-            return "content"
-        if not _tooling_configured():  # pragma: no cover - defensive
-            log.debug("NOTE_STYLE_TOOL_MODE_WITHOUT_SCHEMA forcing content mode")
-            return "content"
-        return "tool"
+    if attempt_index <= 0 and (response_mode_value == "tool" or allow_tools):
+        log.info(
+            "NOTE_STYLE_TOOL_MODE_DISABLED forcing content mode base_mode=%s allow_tools=%s",
+            response_mode_value or "",
+            allow_tools,
+        )
 
     return "content"
 

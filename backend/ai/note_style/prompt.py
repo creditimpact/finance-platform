@@ -20,6 +20,15 @@ _BASE_SYSTEM_PROMPT = (
     '"risk_flags": []}'
 )
 
+_TOOL_RESPONSE_INSTRUCTION = (
+    "Use the provided tool exactly once and return your full JSON only in tool.arguments. "
+    "Do not put text in assistant.content."
+)
+
+_JSON_RESPONSE_INSTRUCTION = (
+    "Respond with a single JSON object only. No explanations. Must be valid JSON."
+)
+
 _CONTEXT_HINT_PREFIX = "Context hints: "
 _MAX_HINTS = 6
 _MAX_HINT_LENGTH = 120
@@ -54,6 +63,12 @@ def build_base_system_prompt() -> str:
     """Return the shared base system prompt text."""
 
     return _BASE_SYSTEM_PROMPT
+
+
+def build_response_instruction(*, use_tools: bool) -> str:
+    """Return the canonical instruction for the active response mode."""
+
+    return _TOOL_RESPONSE_INSTRUCTION if use_tools else _JSON_RESPONSE_INSTRUCTION
 
 
 def build_context_hint_text(

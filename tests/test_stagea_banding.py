@@ -134,6 +134,10 @@ def split_module(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TRIAD_BAND_BY_X0", "1")
     monkeypatch.setenv("RAW_JOIN_TOKENS_WITH_SPACE", "1")
     monkeypatch.setenv("RAW_TRIAD_FROM_X", "1")
+    monkeypatch.setenv("STAGEA_LABEL_PREFIX_MATCH", "1")
+    monkeypatch.setenv("STAGEA_COLONLESS_TU_SPLIT", "1")
+    monkeypatch.setenv("STAGEA_COLONLESS_TU_BOUNDARY", "1")
+    monkeypatch.setenv("STAGEA_COLONLESS_TU_TEXT_FALLBACK", "1")
     mod = importlib.import_module("scripts.split_accounts_from_tsv")
     return importlib.reload(mod)
 
@@ -272,6 +276,74 @@ def test_cleaning_empty_vs_dashes_and_masks(split_module) -> None:
     assert triad_fields["experian"]["high_balance"] == "--"
     assert triad_fields["equifax"]["high_balance"] == "--"
     assert triad_fields["experian"]["credit_limit"] == ""
+
+
+def test_original_creditor_prefix_rescue_preserves_tu_value(split_module) -> None:
+    layout = _layout()
+    triad_fields: Dict[str, Dict[str, str]] = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+    }
+    triad_order = ["transunion", "experian", "equifax"]
+
+    colonless_row = [
+        _token(12, 80.0, 130.0, "Original"),
+        _token(12, 130.0, 190.0, "Creditor"),
+        _token(12, 165.0, 170.0, "01"),
+        _token(12, TU_X0 + 5.0, TU_X0 + 70.0, "PALISADES"),
+        _token(12, TU_X0 + 70.0, TU_X0 + 120.0, "FUNDING"),
+        _token(12, TU_X0 + 120.0, TU_X0 + 150.0, "CORP"),
+        _token(12, XP_X0 + 10.0, XP_X0 + 20.0, "--"),
+        _token(12, EQ_X0 + 10.0, EQ_X0 + 20.0, "--"),
+    ]
+
+    split_module.process_triad_labeled_line(
+        colonless_row,
+        layout,
+        split_module.LABEL_MAP,
+        None,
+        triad_fields,
+        triad_order,
+    )
+
+    assert triad_fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
+    assert triad_fields["experian"]["original_creditor"] == "--"
+    assert triad_fields["equifax"]["original_creditor"] == "--"
+
+
+def test_original_creditor_colonless_text_fallback(split_module) -> None:
+    layout = _layout()
+    triad_fields: Dict[str, Dict[str, str]] = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+    }
+    triad_order = ["transunion", "experian", "equifax"]
+
+    text_only_row = [
+        _token(13, 70.0, 120.0, "Original"),
+        _token(13, 120.0, 170.0, "Creditor"),
+        _token(13, 160.0, 165.0, "01"),
+        _token(13, 166.0, 168.0, "PALISADES"),
+        _token(13, 168.0, 170.0, "FUNDING"),
+        _token(13, 170.0, 171.5, "CORP"),
+        _token(13, 171.5, 171.7, "--"),
+        _token(13, 171.7, 171.9, "--"),
+    ]
+
+    split_module.process_triad_labeled_line(
+        text_only_row,
+        layout,
+        split_module.LABEL_MAP,
+        None,
+        triad_fields,
+        triad_order,
+    )
+
+    assert triad_fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
+    assert triad_fields["experian"]["original_creditor"] == "--"
+    assert triad_fields["equifax"]["original_creditor"] == "--"
 
 
 def test_triad_label_variant_orig_abbrev(split_module) -> None:

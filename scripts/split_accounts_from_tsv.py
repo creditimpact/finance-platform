@@ -34,7 +34,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from backend.config import (
     RAW_JOIN_TOKENS_WITH_SPACE,
     RAW_TRIAD_FROM_X,
+    STAGEA_COLONLESS_TU_BOUNDARY,
     STAGEA_COLONLESS_TU_SPLIT,
+    STAGEA_COLONLESS_TU_TEXT_FALLBACK,
     STAGEA_LABEL_PREFIX_MATCH,
 )
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
@@ -1208,6 +1210,47 @@ def process_triad_labeled_line(
         except ValueError:
             suffix_idx = 0
 
+    raw_visu_label = " ".join(
+        (str(t.get("text", "")) or "").strip() for t in label_span
+    ).strip()
+    prefix_match_applied = False
+    prefix_override: str | None = None
+    if STAGEA_LABEL_PREFIX_MATCH:
+        raw_canon_label = normalize_label_text(raw_visu_label)
+        prefix_match = re.match(
+            r"^(orig(?:inal)?\.?\s*creditor(?:\s*\d{1,2})?)\b",
+            raw_canon_label,
+            flags=re.IGNORECASE,
+        )
+        if prefix_match:
+            prefix_override = prefix_match.group(1).strip()
+            prefix_match_applied = True
+            if not suffix_was_captured and prefix_override:
+                matched_words = prefix_override.lower().split()
+                if matched_words:
+                    prefix_tokens: List[dict] = []
+                    words_seen = 0
+                    for tok in label_span:
+                        prefix_tokens.append(tok)
+                        token_norm = normalize_label_text(str(tok.get("text", "")))
+                        if token_norm and words_seen < len(matched_words):
+                            if token_norm.lower() == matched_words[words_seen]:
+                                words_seen += 1
+                                if words_seen == len(matched_words):
+                                    break
+                    if words_seen == len(matched_words) and len(prefix_tokens) < len(label_span):
+                        original_label_len = len(label_span)
+                        label_span = prefix_tokens
+                        try:
+                            suffix_idx = tokens.index(label_span[-1])
+                        except ValueError:
+                            suffix_idx = 0
+                        logger.info(
+                            "TRIAD_LABEL_PREFIX_RESCUE canon=%s trimmed=%d",
+                            prefix_override,
+                            original_label_len - len(prefix_tokens),
+                        )
+
     tail_tokens = tokens[suffix_idx + 1 :]
     row_eq_right_x0: float | None = None
     try:
@@ -1242,16 +1285,8 @@ def process_triad_labeled_line(
         (str(t.get("text", "")) or "").strip() for t in label_span
     ).strip()
     canon_label = normalize_label_text(visu_label)
-    prefix_match_applied = False
-    if STAGEA_LABEL_PREFIX_MATCH:
-        prefix_match = re.match(
-            r"^(orig(?:inal)?\.?\s*creditor(?:\s*\d{1,2})?)\b",
-            canon_label,
-            flags=re.IGNORECASE,
-        )
-        if prefix_match:
-            canon_label = prefix_match.group(1).strip()
-            prefix_match_applied = True
+    if prefix_override:
+        canon_label = prefix_override
     canonical = label_map.get(canon_label)
     logger.info(
         "TRIAD_LABEL_BUILT visu=%r canon=%r key=%r", visu_label, canon_label, canonical
@@ -1534,6 +1569,7 @@ def process_triad_labeled_line(
             if normalized in dash_tokens:
                 saw_dash_for[bureau] = True
     else:
+        colonless_dash_overrides: Dict[str, str] = {}
         for bureau in ("transunion", "experian", "equifax"):
             if explicit_dash_for[bureau]:
                 vals[bureau] = ["--"]
@@ -1558,7 +1594,7 @@ def process_triad_labeled_line(
                         continue
                 if xp_candidates:
                     xp_cutoff_x0 = min(xp_candidates)
-                for t in ordered:
+                for idx, t in enumerate(ordered):
                     try:
                         token_x0 = float(t.get("x0", 0.0))
                     except Exception:
@@ -1570,6 +1606,19 @@ def process_triad_labeled_line(
                     if stripped == ":":
                         continue
                     if stripped in dash_tokens:
+                        if STAGEA_COLONLESS_TU_BOUNDARY:
+                            dash_queue: List[str] = [stripped]
+                            for extra in ordered[idx + 1 :]:
+                                extra_text = str(extra.get("text", "")).strip()
+                                if extra_text in dash_tokens:
+                                    dash_queue.append(extra_text)
+                                else:
+                                    break
+                            if dash_queue:
+                                if dash_queue and "experian" not in colonless_dash_overrides:
+                                    colonless_dash_overrides["experian"] = dash_queue.pop(0)
+                                if dash_queue and "equifax" not in colonless_dash_overrides:
+                                    colonless_dash_overrides["equifax"] = dash_queue.pop(0)
                         break
                     texts.append(txt)
             else:
@@ -1580,6 +1629,59 @@ def process_triad_labeled_line(
                 vals[bureau].append(txt)
                 if txt.strip() in dash_tokens:
                     saw_dash_for[bureau] = True
+        if colonless_dash_overrides:
+            for target_bureau, dash_val in colonless_dash_overrides.items():
+                if dash_val and not vals[target_bureau]:
+                    vals[target_bureau] = [dash_val]
+                    if dash_val.strip() in dash_tokens:
+                        saw_dash_for[target_bureau] = True
+            logger.info(
+                "TRIAD_TU_BOUNDARY_RESCUE key=%s xp=%r eq=%r",
+                canonical,
+                colonless_dash_overrides.get("experian"),
+                colonless_dash_overrides.get("equifax"),
+            )
+        if (
+            canonical == "original_creditor"
+            and STAGEA_COLONLESS_TU_TEXT_FALLBACK
+            and not vals["transunion"]
+        ):
+            tail_text_parts = [
+                str(tok.get("text", "")).strip()
+                for tok in tail_tokens
+                if str(tok.get("text", "")).strip()
+            ]
+            colonless_tail_text = " ".join(tail_text_parts).strip()
+            if colonless_tail_text:
+                dash_pattern = r"(--|—|–)"
+                m = re.match(
+                    rf"(?P<tu>.+?)\s+{dash_pattern}\s+{dash_pattern}\s*$",
+                    colonless_tail_text,
+                )
+                if m:
+                    tu_candidate = m.group("tu").strip()
+                    xp_dash = m.group(2)
+                    eq_dash = m.group(3)
+                    if tu_candidate:
+                        vals["transunion"] = [tu_candidate]
+                    if xp_dash and not vals["experian"]:
+                        vals["experian"] = [xp_dash]
+                    if eq_dash and not vals["equifax"]:
+                        vals["equifax"] = [eq_dash]
+                    if tu_candidate.strip() in dash_tokens:
+                        saw_dash_for["transunion"] = True
+                    if xp_dash.strip() in dash_tokens:
+                        saw_dash_for["experian"] = True
+                    if eq_dash.strip() in dash_tokens:
+                        saw_dash_for["equifax"] = True
+                    logger.info(
+                        "TRIAD_COLONLESS_TU_TEXT_SPLIT key=%s text=%r tu=%r xp=%r eq=%r",
+                        canonical,
+                        colonless_tail_text,
+                        tu_candidate,
+                        xp_dash,
+                        eq_dash,
+                    )
         for j, (t, b) in enumerate(tail_assignments, start=suffix_idx + 1):
             _trace_token(
                 t.get("page"), t.get("line"), j, t, b, "labeled", canonical or ""

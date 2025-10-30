@@ -1,4 +1,5 @@
 import copy
+from typing import Callable, Mapping, Tuple
 
 import pytest
 
@@ -53,6 +54,38 @@ def make_points_cfg():
         cfg.tolerances = copy.deepcopy(cfg.tolerances)
         cfg.tolerances.update(tolerance_overrides)
         return cfg
+
+    return _factory
+
+
+@pytest.fixture()
+def make_points_accounts() -> Callable[
+    ..., Tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]
+]:
+    base_fields = {
+        "account_number": "1234567890",
+        "date_opened": "2021-03-15",
+        "account_type": "installment",
+        "account_status": "open",
+        "balance_owed": "100",
+        "last_payment": "2023-05-01",
+    }
+
+    def _factory(
+        *,
+        left_override: Mapping[str, object] | None = None,
+        right_override: Mapping[str, object] | None = None,
+    ) -> Tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
+        left_payload = dict(base_fields)
+        right_payload = dict(base_fields)
+        if left_override:
+            left_payload.update(left_override)
+        if right_override:
+            right_payload.update(right_override)
+        return (
+            _make_bureaus(transunion=left_payload),
+            _make_bureaus(experian=right_payload),
+        )
 
     return _factory
 
@@ -170,3 +203,60 @@ def test_history_fields_use_similarity(make_points_cfg, field: str) -> None:
     assert scored["field_contributions"][field] == pytest.approx(
         expected_similarity * cfg.weights[field]
     )
+
+
+def test_points_mode_threshold_progression(
+    make_points_cfg, make_points_accounts
+) -> None:
+    cfg = make_points_cfg()
+
+    low_match_left, low_match_right = make_points_accounts(
+        right_override={"balance_owed": "250"}
+    )
+
+    low_match_score = account_merge.score_pair_0_100(
+        low_match_left, low_match_right, cfg
+    )
+
+    assert "last_payment" not in cfg.fields
+    assert low_match_score["score_points"] == pytest.approx(3.0)
+    assert low_match_score["decision"] == "ai"
+    assert "points:ai" in low_match_score["triggers"]
+    assert "points:direct" not in low_match_score["triggers"]
+    assert low_match_score["field_contributions"]["account_number"] == pytest.approx(1.0)
+    assert low_match_score["field_contributions"]["date_opened"] == pytest.approx(1.0)
+    assert low_match_score["field_contributions"]["account_type"] == pytest.approx(0.5)
+    assert low_match_score["field_contributions"]["account_status"] == pytest.approx(0.5)
+    assert low_match_score["field_contributions"]["balance_owed"] == pytest.approx(0.0)
+    assert "last_payment" not in low_match_score["fields_evaluated"]
+    assert "last_payment" not in low_match_score["field_contributions"]
+
+    direct_left, direct_right = make_points_accounts()
+    direct_score = account_merge.score_pair_0_100(direct_left, direct_right, cfg)
+
+    assert direct_score["score_points"] == pytest.approx(6.0)
+    assert direct_score["decision"] == "auto"
+    assert "points:direct" in direct_score["triggers"]
+    assert "points:ai" not in direct_score["triggers"]
+    assert direct_score["field_contributions"]["balance_owed"] == pytest.approx(3.0)
+
+
+def test_points_mode_legacy_field_contributes_zero(
+    make_points_cfg, make_points_accounts
+) -> None:
+    cfg = make_points_cfg()
+    assert "last_payment" not in cfg.fields
+
+    with_last_left, with_last_right = make_points_accounts()
+    with_last = account_merge.score_pair_0_100(with_last_left, with_last_right, cfg)
+
+    without_last_left, without_last_right = make_points_accounts()
+    without_last_left["transunion"].pop("last_payment", None)
+    without_last_right["experian"].pop("last_payment", None)
+    without_last = account_merge.score_pair_0_100(
+        without_last_left, without_last_right, cfg
+    )
+
+    assert with_last["score_points"] == pytest.approx(without_last["score_points"])
+    assert "last_payment" not in with_last["field_contributions"]
+    assert "last_payment" not in with_last["fields_evaluated"]

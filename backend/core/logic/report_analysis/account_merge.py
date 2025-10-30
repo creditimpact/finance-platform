@@ -665,17 +665,26 @@ def _sanitize_overrides_mapping(candidate: Any) -> Dict[str, Any]:
 def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
     """Resolve the active field sequence, falling back to legacy defaults."""
 
-    if cfg is not None and getattr(cfg, "fields", None):
-        fields: Tuple[str, ...] = tuple(cfg.fields)
-    else:
+    if cfg is None:
         current_cfg = get_merge_cfg()
-        if getattr(current_cfg, "fields", None):
-            fields = tuple(current_cfg.fields)
-        else:
+    else:
+        current_cfg = cfg
+
+    fields_attr = getattr(current_cfg, "fields", None)
+    if fields_attr:
+        fields: Tuple[str, ...] = tuple(fields_attr)
+    else:
+        use_legacy_defaults = bool(
+            not getattr(current_cfg, "allowlist_enforce", False)
+            and not getattr(current_cfg, "points_mode", False)
+        )
+        if use_legacy_defaults:
             fields = _FIELD_SEQUENCE
-        # When ``cfg`` was not provided we continue with the cached instance so
-        # allowlist state remains in sync for filtering.
-        cfg = current_cfg
+        else:
+            fields = tuple(getattr(current_cfg, "allowlist_fields", ()) or ())
+    # When ``cfg`` was not provided we continue with the cached instance so
+    # allowlist state remains in sync for filtering.
+    cfg = current_cfg
 
     allowlist_enforced = bool(getattr(cfg, "MERGE_ALLOWLIST_ENFORCE", False))
     if allowlist_enforced:
@@ -713,14 +722,20 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     else:
         env_mapping = env
 
-    points = dict(_POINT_DEFAULTS)
+    points_mode_active = False
+    allowlist_enforce = False
+    legacy_defaults_allowed = False
+
+    points: Dict[str, int] = {}
     # Default weights act as neutral multipliers until custom overrides are enabled.
-    weights_map: Dict[str, float] = {field: 1.0 for field in points}
+    weights_map: Dict[str, float] = {}
     custom_weights_enabled = False
     merge_use_original_creditor = False
     merge_use_creditor_name = False
     merge_debug_enabled = False
     merge_log_every = 0
+    ai_points_threshold = 3.0
+    direct_points_threshold = 5.0
 
     thresholds = {
         key: _read_env_int(env_mapping, key, default)
@@ -769,14 +784,14 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         tolerances["COUNT_ZERO_PAYMENT_MATCH"]
     )
 
-    config_fields: Tuple[str, ...] = _FIELD_SEQUENCE
+    config_fields: Tuple[str, ...] = tuple()
     overrides_mapping: Dict[str, Any] = {}
-    allowlist_fields: Tuple[str, ...] = _FIELD_SEQUENCE
-    allowlist_enforce = False
+    allowlist_fields: Tuple[str, ...] = tuple()
 
     if env is None:
         # Load merge-specific configuration when running against real env vars.
         merge_env_cfg = get_merge_config()
+        points_mode_active = bool(getattr(merge_env_cfg, "points_mode", False))
         explicit_enabled, merge_enabled = _merge_env_state(merge_env_cfg)
         custom_weights_enabled = _coerce_env_bool(
             merge_env_cfg.get("use_custom_weights")
@@ -793,15 +808,42 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         merge_log_every = _coerce_env_int(
             merge_env_cfg.get("log_every"), 0
         )  # controlled by MERGE_LOG_EVERY
+        try:
+            ai_points_threshold = float(getattr(merge_env_cfg, "ai_points_threshold", 3.0) or 3.0)
+        except (TypeError, ValueError):
+            ai_points_threshold = 3.0
+        try:
+            direct_points_threshold = float(
+                getattr(merge_env_cfg, "direct_points_threshold", 5.0) or 5.0
+            )
+        except (TypeError, ValueError):
+            direct_points_threshold = 5.0
 
-        fields_override = _sanitize_config_field_list(
-            merge_env_cfg.get("fields_override") or merge_env_cfg.get("fields")
-        )
+        allowlist_enforce = bool(getattr(merge_env_cfg, "allowlist_enforce", False))
+        legacy_defaults_allowed = not allowlist_enforce and not points_mode_active
+
+        if legacy_defaults_allowed:
+            points = dict(_POINT_DEFAULTS)
+            weights_map = {field: 1.0 for field in points}
+            config_fields = _FIELD_SEQUENCE
+            allowlist_fields = _FIELD_SEQUENCE
+        else:
+            points = {}
+            weights_map = {}
+            config_fields = tuple()
+            allowlist_fields = tuple()
+
+        fields_override = _sanitize_config_field_list(merge_env_cfg.get("fields_override"))
+        configured_fields = _sanitize_config_field_list(merge_env_cfg.get("fields"))
 
         if explicit_enabled and merge_enabled:
             if fields_override:
                 # controlled by MERGE_FIELDS_OVERRIDE / MERGE_FIELDS_OVERRIDE_JSON
                 config_fields = fields_override
+            elif configured_fields:
+                config_fields = configured_fields
+            elif legacy_defaults_allowed:
+                config_fields = _FIELD_SEQUENCE
 
             weights_override = _sanitize_weight_mapping(
                 merge_env_cfg.get("weights")
@@ -826,25 +868,45 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             )  # controlled by MERGE_OVERRIDES_JSON
         else:
             # When MERGE_ENABLED is absent or disabled we retain legacy fields.
-            config_fields = _FIELD_SEQUENCE
+            if legacy_defaults_allowed:
+                config_fields = _FIELD_SEQUENCE
             overrides_mapping = {}
 
         if fields_override:
             # controlled by MERGE_FIELDS_OVERRIDE / MERGE_FIELDS_OVERRIDE_JSON
             allowlist_fields = fields_override
+        elif configured_fields:
+            allowlist_fields = configured_fields
 
         # Allowlist enforcement can be toggled independently of MERGE_ENABLED.
         if merge_enabled:
             # controlled by MERGE_ALLOWLIST_ENFORCE
-            allowlist_enforce = bool(merge_env_cfg.get("allowlist_enforce"))
+            allowlist_enforce = bool(getattr(merge_env_cfg, "allowlist_enforce", False))
         # Fall back to legacy fields when no override is provided.
-        if not allowlist_fields:
+        if not allowlist_fields and legacy_defaults_allowed:
             allowlist_fields = _FIELD_SEQUENCE
     else:
-        config_fields = _FIELD_SEQUENCE
+        points_mode_active = _read_env_flag(env_mapping, "MERGE_POINTS_MODE", False)
+        allowlist_enforce = _read_env_flag(env_mapping, "MERGE_ALLOWLIST_ENFORCE", False)
+        legacy_defaults_allowed = not allowlist_enforce and not points_mode_active
+
+        if legacy_defaults_allowed:
+            points = dict(_POINT_DEFAULTS)
+            weights_map = {field: 1.0 for field in points}
+            config_fields = _FIELD_SEQUENCE
+            allowlist_fields = _FIELD_SEQUENCE
+        else:
+            points = {}
+            weights_map = {}
+            config_fields = tuple()
+            allowlist_fields = tuple()
+
         overrides_mapping = {}
-        allowlist_fields = _FIELD_SEQUENCE
-        allowlist_enforce = False
+        allowlist_enforce = allowlist_enforce
+        ai_points_threshold = _read_env_float(env_mapping, "MERGE_AI_POINTS_THRESHOLD", 3.0)
+        direct_points_threshold = _read_env_float(
+            env_mapping, "MERGE_DIRECT_POINTS_THRESHOLD", 5.0
+        )
         merge_use_original_creditor = _read_env_flag(
             env_mapping,
             "MERGE_USE_ORIGINAL_CREDITOR",
@@ -860,11 +922,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             "MERGE_DEBUG",
             False,
         )
-        merge_log_every = _read_env_int(
-            env_mapping,
-            "MERGE_LOG_EVERY",
-            0,
-        )
+        merge_log_every = _read_env_int(env_mapping, "MERGE_LOG_EVERY", 0)
 
     allowlist_fields = tuple(allowlist_fields)
     allowlist_lookup: Set[str] = set(allowlist_fields)
@@ -905,7 +963,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         allowed_field_set = set(allowlist_fields)
         weights_map = {name: weight for name, weight in weights_map.items() if name in allowed_field_set}
 
-    return MergeCfg(
+    cfg_obj = MergeCfg(
         points=points,
         weights=weights_map,
         thresholds=thresholds,
@@ -921,6 +979,12 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         debug=merge_debug_enabled,
         log_every=merge_log_every,
     )
+
+    setattr(cfg_obj, "points_mode", bool(points_mode_active))
+    setattr(cfg_obj, "ai_points_threshold", float(ai_points_threshold))
+    setattr(cfg_obj, "direct_points_threshold", float(direct_points_threshold))
+
+    return cfg_obj
 
 
 # ---------------------------------------------------------------------------
@@ -1897,9 +1961,16 @@ def score_pair_0_100(
     parts: Dict[str, int] = {}
     aux: Dict[str, Dict[str, Any]] = {}
     field_matches: Dict[str, bool] = {}
-    date_matches: Dict[str, bool] = {
-        field: False for field in _DATE_FIELDS_ORDER if field in field_sequence
-    }
+    legacy_defaults_allowed = bool(
+        not getattr(cfg, "allowlist_enforce", False)
+        and not getattr(cfg, "points_mode", False)
+    )
+    if legacy_defaults_allowed:
+        date_matches: Dict[str, bool] = {
+            field: False for field in _DATE_FIELDS_ORDER if field in field_sequence
+        }
+    else:
+        date_matches = {}
     trigger_events: List[Dict[str, Any]] = []
 
     acct_match_raw, acct_aux_raw = match_field_best_of_9(
@@ -1963,9 +2034,9 @@ def score_pair_0_100(
         parts[field] = base_points if matched else 0
         if matched:
             total += weighted_points
-            if field in _MID_FIELD_SET:
+            if legacy_defaults_allowed and field in _MID_FIELD_SET:
                 mid_sum += weighted_points
-            if field in _IDENTITY_FIELD_SET:
+            if legacy_defaults_allowed and field in _IDENTITY_FIELD_SET:
                 identity_sum += weighted_points
 
         per_field_aux: Dict[str, Any] = dict(match_aux)

@@ -34,6 +34,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from backend.config import (
     RAW_JOIN_TOKENS_WITH_SPACE,
     RAW_TRIAD_FROM_X,
+    STAGEA_COLONLESS_TU_SPLIT,
     STAGEA_LABEL_PREFIX_MATCH,
 )
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
@@ -1535,8 +1536,40 @@ def process_triad_labeled_line(
             ordered = sorted(
                 band_tokens[bureau], key=lambda tt: float(tt.get("x0", 0.0))
             )
-            for t in ordered:
-                txt = str(t.get("text", ""))
+            texts: List[str] = []
+            if (
+                bureau == "transunion"
+                and STAGEA_COLONLESS_TU_SPLIT
+                and canonical == "original_creditor"
+            ):
+                xp_cutoff_x0: float | None = None
+                xp_candidates: List[float] = []
+                for xp_token in band_tokens["experian"]:
+                    try:
+                        xp_candidates.append(float(xp_token.get("x0", 0.0)))
+                    except Exception:
+                        continue
+                if xp_candidates:
+                    xp_cutoff_x0 = min(xp_candidates)
+                for t in ordered:
+                    try:
+                        token_x0 = float(t.get("x0", 0.0))
+                    except Exception:
+                        token_x0 = 0.0
+                    if xp_cutoff_x0 is not None and token_x0 >= xp_cutoff_x0:
+                        break
+                    txt = str(t.get("text", ""))
+                    stripped = txt.strip()
+                    if stripped == ":":
+                        continue
+                    if stripped in dash_tokens:
+                        break
+                    texts.append(txt)
+            else:
+                for t in ordered:
+                    txt = str(t.get("text", ""))
+                    texts.append(txt)
+            for txt in texts:
                 vals[bureau].append(txt)
                 if txt.strip() in dash_tokens:
                     saw_dash_for[bureau] = True

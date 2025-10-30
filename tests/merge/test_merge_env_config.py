@@ -124,3 +124,39 @@ def test_default_flags_match_legacy_behaviour() -> None:
     assert cfg.fields == _FIELD_SEQUENCE
     assert cfg.use_custom_weights is False
     assert cfg.MERGE_ALLOWLIST_ENFORCE is False
+
+
+def test_points_mode_enforces_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Points mode should honour the ENV-defined allowlist and weights only."""
+
+    override_fields = [
+        "balance_owed",
+        "account_number",
+        "history_7y",
+        "history_2y",
+        "account_status",
+        "account_type",
+        "date_opened",
+    ]
+    weights = {
+        "account_number": 1.0,
+        "date_opened": 1.0,
+        "balance_owed": 3.0,
+        "account_type": 0.5,
+        "account_status": 0.5,
+        "history_2y": 1.0,
+        "history_7y": 1.0,
+    }
+
+    monkeypatch.setenv("MERGE_ENABLED", "true")
+    monkeypatch.setenv("MERGE_POINTS_MODE", "true")
+    monkeypatch.setenv("MERGE_FIELDS_OVERRIDE_JSON", json.dumps(override_fields))
+    monkeypatch.setenv("MERGE_WEIGHTS_JSON", json.dumps(weights))
+
+    cfg = get_merge_cfg()
+
+    assert cfg.points_mode is True
+    assert cfg.fields == tuple(override_fields)
+    assert tuple(cfg.MERGE_FIELDS_OVERRIDE) == tuple(override_fields)
+    assert all(field in cfg.MERGE_WEIGHTS for field in override_fields)
+    assert cfg.MERGE_WEIGHTS == pytest.approx(weights)

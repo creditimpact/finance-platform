@@ -10,6 +10,7 @@ from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -65,6 +66,9 @@ __all__ = [
     "apply_summary_updates",
     "merge_summary_sections",
     "MergeDecision",
+    "normalize_history_field",
+    "history_similarity_score",
+    "match_history_field",
 ]
 
 
@@ -453,6 +457,12 @@ _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
     "LAST_PAYMENT_DAY_TOL": 5,
     "COUNT_ZERO_PAYMENT_MATCH": 0,
     "CA_DATE_MONTH_TOL": 6,
+    # New merge tolerance knobs default to legacy behaviour (strict comparisons).
+    "MERGE_TOL_DATE_DAYS": 0,
+    "MERGE_TOL_BALANCE_ABS": 0.0,
+    "MERGE_TOL_BALANCE_RATIO": 0.0,
+    "MERGE_ACCOUNTNUMBER_MATCH_MINLEN": 0,
+    "MERGE_HISTORY_SIMILARITY_THRESHOLD": 1.0,
 }
 
 
@@ -536,6 +546,41 @@ def _sanitize_weight_mapping(candidate: Any) -> Dict[str, float]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def _sanitize_tolerance_mapping(candidate: Any) -> Dict[str, Union[int, float]]:
+    """Coerce tolerance overrides from the env config into native numbers."""
+
+    if not isinstance(candidate, Mapping):
+        return {}
+
+    sanitized: Dict[str, Union[int, float]] = {}
+    for key, value in candidate.items():
+        if key is None:
+            continue
+        name = str(key).strip()
+        if not name:
+            continue
+
+        default = _TOLERANCE_DEFAULTS.get(name)
+        # Default to float parsing when we don't have a known baseline type.
+        if isinstance(default, float):
+            try:
+                sanitized[name] = float(value)
+            except (TypeError, ValueError):
+                continue
+        elif isinstance(default, int):
+            try:
+                sanitized[name] = int(value)
+            except (TypeError, ValueError):
+                continue
+        else:
+            try:
+                sanitized[name] = float(value)
+            except (TypeError, ValueError):
+                continue
+
+    return sanitized
 
 
 def _coerce_env_bool(value: Any) -> bool:
@@ -690,6 +735,12 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             if thresholds_override:
                 thresholds.update(thresholds_override)
 
+            tolerance_override = _sanitize_tolerance_mapping(
+                merge_env_cfg.get("tolerances")
+            )
+            if tolerance_override:
+                tolerances.update(tolerance_override)
+
             overrides_mapping = _sanitize_overrides_mapping(
                 merge_env_cfg.get("overrides")
             )
@@ -840,7 +891,20 @@ def acctnum_match_level(
     a_digits = _digits_only(a_value)
     b_digits = _digits_only(b_value)
 
-    level, detail = acctnum_level(a_value, b_value)
+    level, detail_raw = acctnum.acctnum_match_level(a_value, b_value)
+    detail = dict(detail_raw)
+
+    min_length = _account_number_min_length()
+    if (
+        level == "exact_or_known_match"
+        and min_length > 0
+        and (len(a_digits) < min_length or len(b_digits) < min_length)
+    ):
+        # Preserve the debug payload while recording why the match was rejected.
+        level = "none"
+        detail = dict(detail)
+        detail["why"] = "min_length"
+        detail["min_length"] = str(min_length)
 
     debug: Dict[str, Dict[str, str]] = {
         "a": {
@@ -947,6 +1011,8 @@ def _normalize_field_value(field: str, value: Any) -> Optional[Any]:
         return to_date(value)
     if field in _TYPE_FIELDS:
         return normalize_type(value)
+    if field in {"history_2y", "history_7y"}:
+        return normalize_history_field(value)
     return value
 
 
@@ -1022,6 +1088,11 @@ def _match_account_number_best_pair(
     bureau_positions = {name: idx for idx, name in enumerate(bureaus)}
 
     hard_enabled = bool(cfg.triggers.get("MERGE_AI_ON_HARD_ACCTNUM", True))
+    min_length = _resolve_tolerance_int(
+        cfg,
+        "MERGE_ACCOUNTNUMBER_MATCH_MINLEN",
+        0,
+    )
 
     normalized_a = {name: _normalize_account_display(A.get(name)) for name in bureaus}
     normalized_b = {name: _normalize_account_display(B.get(name)) for name in bureaus}
@@ -1042,9 +1113,18 @@ def _match_account_number_best_pair(
             if not right_norm.has_digits:
                 continue
 
-            level = _sanitize_acct_level(acctnum.match_level(left_norm, right_norm))
+            level_value, level_debug = acctnum_match_level(
+                left_norm.raw,
+                right_norm.raw,
+            )
+            level = _sanitize_acct_level(level_value)
             level_rank = _ACCOUNT_LEVEL_ORDER.get(level, 0)
             matched = hard_enabled and level == "exact_or_known_match"
+
+            min_length_met = (
+                left_norm.visible_digits >= min_length
+                and right_norm.visible_digits >= min_length
+            )
 
             result_aux: Dict[str, Any] = {
                 "best_pair": (left, right),
@@ -1056,10 +1136,20 @@ def _match_account_number_best_pair(
                 "acctnum_digits_len_a": len(left_norm.digits),
                 "acctnum_digits_len_b": len(right_norm.digits),
                 "raw_values": {"a": left_norm.raw, "b": right_norm.raw},
+                # Surface whether the configured minimum length gate allowed the comparison.
+                "min_length_met": min_length_met,
+                "acctnum_debug": level_debug,
             }
 
             if first_aux is None:
                 first_aux = dict(result_aux)
+
+            if not min_length_met:
+                # Respect the configured minimum by skipping matches that do not satisfy it.
+                if level_rank > best_any_rank:
+                    best_any_rank = level_rank
+                    best_any_aux = dict(result_aux)
+                continue
 
             if level_rank > best_any_rank:
                 best_any_rank = level_rank
@@ -1169,6 +1259,44 @@ def _both_amounts_positive(pair: Any) -> bool:
         return False
 
 
+def _resolve_tolerance_float(cfg: MergeCfg, key: str, default: float) -> float:
+    """Return a float tolerance value guarded against bad inputs."""
+
+    raw = cfg.tolerances.get(key, default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _resolve_tolerance_int(cfg: MergeCfg, key: str, default: int) -> int:
+    """Return an integer tolerance value guarded against bad inputs."""
+
+    raw = cfg.tolerances.get(key, default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _account_number_min_length(cfg: Optional[MergeCfg] = None) -> int:
+    """Return the configured minimum visible-digit length for account matches."""
+
+    if cfg is not None:
+        return _resolve_tolerance_int(cfg, "MERGE_ACCOUNTNUMBER_MATCH_MINLEN", 0)
+
+    # Fall back to the global merge configuration when no explicit cfg is passed.
+    try:
+        active_cfg = get_merge_cfg()
+    except Exception:
+        return 0
+
+    try:
+        return _resolve_tolerance_int(active_cfg, "MERGE_ACCOUNTNUMBER_MATCH_MINLEN", 0)
+    except Exception:
+        return 0
+
+
 def _match_field_values(
     field: str,
     norm_a: Any,
@@ -1182,7 +1310,23 @@ def _match_field_values(
     aux: Dict[str, Any] = {}
 
     if field == "balance_owed":
-        matched = match_balance_owed(norm_a, norm_b)
+        tol_abs = _resolve_tolerance_float(
+            cfg,
+            "MERGE_TOL_BALANCE_ABS",
+            0.0,
+        )
+        tol_ratio = _resolve_tolerance_float(
+            cfg,
+            "MERGE_TOL_BALANCE_RATIO",
+            0.0,
+        )
+        matched = match_balance_owed(
+            norm_a,
+            norm_b,
+            tol_abs=tol_abs,
+            tol_ratio=tol_ratio,
+        )
+        aux["tolerance"] = {"abs": tol_abs, "ratio": tol_ratio}
         if matched and (_is_zero_amount(norm_a) or _is_zero_amount(norm_b)):
             return False, aux
         return matched, aux
@@ -1216,7 +1360,31 @@ def _match_field_values(
         return matched, aux
 
     if field in _DATE_FIELDS_DET:
+        if field == "date_opened":
+            tol_days = _resolve_tolerance_int(
+                cfg,
+                "MERGE_TOL_DATE_DAYS",
+                0,
+            )
+            matched = date_within(norm_a, norm_b, tol_days)
+            aux["tolerance_days"] = tol_days
+            return matched, aux
         return date_equal(norm_a, norm_b), aux
+
+    if field in {"history_2y", "history_7y"}:
+        threshold = _resolve_tolerance_float(
+            cfg,
+            "MERGE_HISTORY_SIMILARITY_THRESHOLD",
+            1.0,
+        )
+        matched, similarity = match_history_field(
+            norm_a,
+            norm_b,
+            threshold=threshold,
+        )
+        aux["similarity"] = similarity
+        aux["threshold"] = threshold
+        return matched, aux
 
     if field in _TYPE_FIELDS:
         matched = norm_a == norm_b and norm_a is not None and norm_b is not None
@@ -1347,6 +1515,17 @@ def _detect_amount_conflicts(
     tol_abs = float(cfg.tolerances.get("AMOUNT_TOL_ABS", 0.0))
     tol_ratio = float(cfg.tolerances.get("AMOUNT_TOL_RATIO", 0.0))
 
+    balance_tol_abs = _resolve_tolerance_float(
+        cfg,
+        "MERGE_TOL_BALANCE_ABS",
+        tol_abs,
+    )
+    balance_tol_ratio = _resolve_tolerance_float(
+        cfg,
+        "MERGE_TOL_BALANCE_RATIO",
+        tol_ratio,
+    )
+
     for field in _AMOUNT_CONFLICT_FIELDS:
         values_a = _collect_normalized_field_values(A, field)
         values_b = _collect_normalized_field_values(B, field)
@@ -1357,7 +1536,12 @@ def _detect_amount_conflicts(
         if field == "balance_owed":
             for left in values_a:
                 for right in values_b:
-                    if match_balance_owed(left, right):
+                    if match_balance_owed(
+                        left,
+                        right,
+                        tol_abs=balance_tol_abs,
+                        tol_ratio=balance_tol_ratio,
+                    ):
                         conflict = False
                         break
                 if not conflict:
@@ -3564,10 +3748,18 @@ def normalize_balance_owed(value: Any) -> Optional[float]:
     return to_amount(value)
 
 
-def match_balance_owed(a: Optional[float], b: Optional[float]) -> bool:
+def match_balance_owed(
+    a: Optional[float],
+    b: Optional[float],
+    *,
+    tol_abs: float = 0.0,
+    tol_ratio: float = 0.0,
+) -> bool:
+    """Return True when balances match within configured tolerances."""
+
     if a is None or b is None:
         return False
-    return a == b
+    return amounts_match(a, b, tol_abs, tol_ratio)
 
 
 def normalize_amount_field(value: Any) -> Optional[float]:
@@ -3597,6 +3789,44 @@ def match_payment_amount(
     if not count_zero_payment_match and a == 0 and b == 0:
         return False
     return amounts_match(a, b, tol_abs, tol_ratio)
+
+
+def normalize_history_field(value: Any) -> Optional[str]:
+    """Return a normalized history blob for similarity comparisons."""
+
+    if is_missing(value):
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    collapsed = re.sub(r"\s+", " ", text)
+    return collapsed.lower()
+
+
+def history_similarity_score(a: Optional[str], b: Optional[str]) -> float:
+    """Return ``SequenceMatcher`` similarity for normalized history pairs."""
+
+    if a is None or b is None:
+        return 0.0
+
+    # ``SequenceMatcher`` is tolerant to whitespace differences which mirrors the
+    # historic fuzzy comparison behaviour for payment histories.
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def match_history_field(
+    a: Optional[str],
+    b: Optional[str],
+    *,
+    threshold: float,
+) -> Tuple[bool, float]:
+    """Return whether histories match and the computed similarity score."""
+
+    threshold = max(float(threshold), 0.0)
+    similarity = history_similarity_score(a, b)
+    return similarity >= threshold, similarity
 
 
 def digits_only(value: Any) -> Optional[str]:

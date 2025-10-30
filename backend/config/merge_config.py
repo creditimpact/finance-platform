@@ -35,6 +35,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # be toggled on without requiring explicit overrides.
     "fields_override": list(DEFAULT_FIELDS),
     "allowlist_enforce": False,
+    # Debug logging remains opt-in so production noise does not increase.
+    "debug": False,
+    # ``log_every`` controls the sampling cadence for debug logs when enabled.
+    "log_every": 0,
     # Custom weights are opt-in to preserve legacy scoring when disabled.
     "use_custom_weights": False,
     # Optional merge fields stay disabled until toggled via MERGE_USE_* flags.

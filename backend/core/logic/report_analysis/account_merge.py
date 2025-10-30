@@ -363,6 +363,8 @@ class MergeCfg:
     use_custom_weights: bool = False
     use_original_creditor: bool = False
     use_creditor_name: bool = False
+    debug: bool = False  # Runtime toggle controlling verbose merge logging.
+    log_every: int = 0  # Optional cadence controlling how often debug logs fire.
 
     @property
     def threshold(self) -> int:
@@ -432,6 +434,22 @@ class MergeCfg:
         """Expose optional-field toggle mirroring the MERGE_* env flag."""
 
         return bool(self.use_creditor_name)
+
+    @property
+    def MERGE_DEBUG(self) -> bool:
+        """Return whether debug logging for merge scoring is enabled."""
+
+        return bool(self.debug)
+
+    @property
+    def MERGE_LOG_EVERY(self) -> int:
+        """Return the configured debug logging cadence as a positive integer."""
+
+        try:
+            value = int(self.log_every)
+        except (TypeError, ValueError):
+            return 0
+        return value if value >= 0 else 0
 
 
 _POINT_DEFAULTS: Dict[str, int] = {
@@ -618,6 +636,23 @@ def _coerce_env_bool(value: Any) -> bool:
     return False
 
 
+def _coerce_env_int(value: Any, default: int = 0) -> int:
+    """Return an integer parsed from env-style values with graceful fallback."""
+
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return default
+    return default
+
+
 def _sanitize_overrides_mapping(candidate: Any) -> Dict[str, Any]:
     """Return a shallow copy of overrides when a mapping is provided."""
 
@@ -704,6 +739,8 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     custom_weights_enabled = False
     merge_use_original_creditor = False
     merge_use_creditor_name = False
+    merge_debug_enabled = False
+    merge_log_every = 0
 
     thresholds = {
         key: _read_env_int(env_mapping, key, default)
@@ -770,6 +807,8 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         merge_use_creditor_name = _coerce_env_bool(
             merge_env_cfg.get("use_creditor_name")
         )
+        merge_debug_enabled = _coerce_env_bool(merge_env_cfg.get("debug"))
+        merge_log_every = _coerce_env_int(merge_env_cfg.get("log_every"), 0)
 
         fields_override = _sanitize_config_field_list(
             merge_env_cfg.get("fields_override") or merge_env_cfg.get("fields")
@@ -827,6 +866,16 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             "MERGE_USE_CREDITOR_NAME",
             False,
         )
+        merge_debug_enabled = _read_env_flag(
+            env_mapping,
+            "MERGE_DEBUG",
+            False,
+        )
+        merge_log_every = _read_env_int(
+            env_mapping,
+            "MERGE_LOG_EVERY",
+            0,
+        )
 
     if merge_use_original_creditor and "original_creditor" not in points:
         # Optional field participates with zero points until weights are defined.
@@ -865,6 +914,8 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         use_custom_weights=custom_weights_enabled,
         use_original_creditor=merge_use_original_creditor,
         use_creditor_name=merge_use_creditor_name,
+        debug=merge_debug_enabled,
+        log_every=merge_log_every,
     )
 
 
@@ -1655,6 +1706,8 @@ def score_pair_0_100(
     A_bureaus: Mapping[str, Mapping[str, Any]],
     B_bureaus: Mapping[str, Mapping[str, Any]],
     cfg: MergeCfg,
+    *,
+    debug_pair: Optional[bool] = None,
 ) -> Dict[str, Any]:
     if not isinstance(A_bureaus, Mapping):
         A_data: Mapping[str, Mapping[str, Any]] = {}
@@ -1678,6 +1731,12 @@ def score_pair_0_100(
     trigger_events: List[Dict[str, Any]] = []
     # Snapshot the resolved weights so each field reuses the same multiplier.
     weights_map = cfg.MERGE_WEIGHTS
+
+    # Determine whether verbose field-by-field logging should occur for this pair.
+    if debug_pair is None:
+        debug_enabled = bool(cfg.MERGE_DEBUG)
+    else:
+        debug_enabled = bool(debug_pair)
 
     acct_match_raw, acct_aux_raw = match_field_best_of_9(
         "account_number", A_data, B_data, cfg
@@ -1703,10 +1762,21 @@ def score_pair_0_100(
 
     field_matches["account_number"] = acct_matched
     parts["account_number"] = acct_points if acct_matched else 0
+    weighted_acct_points = float(acct_points) * weight_account if acct_matched else 0.0
     if acct_matched:
-        weighted_acct_points = float(acct_points) * weight_account
         identity_sum += weighted_acct_points
         total += weighted_acct_points
+
+    if debug_enabled:
+        # Emit detailed account-number comparison metrics only when debugging is on.
+        logger.info(
+            "[MERGE] Comparing account_number: matched=%s level=%s score=%.2f weight=%.2f base=%s",
+            acct_matched,
+            acct_level,
+            weighted_acct_points,
+            weight_account,
+            acct_points,
+        )
 
     acct_aux.update(
         {
@@ -1724,10 +1794,10 @@ def score_pair_0_100(
             continue
         matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
         base_points = int(cfg.points.get(field, 0))
+        weight_factor = float(weights_map.get(field, 1.0))
+        weighted_points = float(base_points) * weight_factor if matched else 0.0
         parts[field] = base_points if matched else 0
         if matched:
-            weight_factor = float(weights_map.get(field, 1.0))
-            weighted_points = float(base_points) * weight_factor
             total += weighted_points
             if field in _MID_FIELD_SET:
                 mid_sum += weighted_points
@@ -1741,6 +1811,17 @@ def score_pair_0_100(
 
         if field in date_matches:
             date_matches[field] = matched
+
+        if debug_enabled:
+            # Include field comparison metrics with per-field scores for debugging.
+            logger.info(
+                "[MERGE] Comparing %s: matched=%s score=%.2f weight=%.2f base=%s",
+                field,
+                matched,
+                weighted_points,
+                weight_factor,
+                base_points,
+            )
 
     dates_all = bool(date_matches) and all(date_matches.values())
 
@@ -1864,6 +1945,25 @@ def score_pair_0_100(
         "decision": decision,
         "trigger_events": trigger_events,
     }
+
+    if debug_enabled:
+        passed = bool(decision == "auto")
+        logger.info(
+            "[MERGE] Final decision: passed=%s total=%.2f threshold=%s decision=%s conflicts=%s",
+            passed,
+            float(total),
+            int(auto_threshold),
+            decision,
+            list(conflicts),
+        )
+        logger.info(
+            "[MERGE] Trigger summary: triggers=%s strong=%s mid=%s total_gate=%s dates_all=%s",
+            list(triggers),
+            strong_triggered,
+            mid_triggered,
+            total_triggered,
+            dates_all,
+        )
 
     return result
 
@@ -2021,6 +2121,24 @@ def score_all_pairs_0_100(
         right = indices[right_pos]
 
         pair_counter += 1
+        should_debug_pair = False
+        if cfg.MERGE_DEBUG:
+            log_every = cfg.MERGE_LOG_EVERY
+            # ``log_every`` <= 1 means log every pair when debugging is enabled.
+            if log_every <= 1:
+                should_debug_pair = True
+            elif log_every > 1 and pair_counter % log_every == 0:
+                should_debug_pair = True
+            if should_debug_pair:
+                logger.info(
+                    "[MERGE] Debug logging for pair sid=%s i=%s j=%s pair_index=%s log_every=%s",
+                    sid,
+                    left,
+                    right,
+                    pair_counter,
+                    log_every,
+                )
+
         step_log = {
             "sid": sid,
             "i": left,
@@ -2036,6 +2154,7 @@ def score_all_pairs_0_100(
             left_bureaus,
             right_bureaus,
             cfg,
+            debug_pair=should_debug_pair,
         )
 
         total_score = int(result.get("total", 0) or 0)

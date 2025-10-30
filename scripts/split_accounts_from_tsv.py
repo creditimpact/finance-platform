@@ -31,7 +31,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
+from backend.config import (
+    RAW_JOIN_TOKENS_WITH_SPACE,
+    RAW_TRIAD_FROM_X,
+    STAGEA_LABEL_PREFIX_MATCH,
+)
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
 from backend.core.logic.report_analysis.normalize_fields import (
     clean_value,
@@ -1236,6 +1240,14 @@ def process_triad_labeled_line(
         (str(t.get("text", "")) or "").strip() for t in label_span
     ).strip()
     canon_label = normalize_label_text(visu_label)
+    if STAGEA_LABEL_PREFIX_MATCH:
+        prefix_match = re.match(
+            r"^(orig(?:inal)?\.?\s*creditor(?:\s*\d{1,2})?)\b",
+            canon_label,
+            flags=re.IGNORECASE,
+        )
+        if prefix_match:
+            canon_label = prefix_match.group(1).strip()
     canonical = label_map.get(canon_label)
     logger.info(
         "TRIAD_LABEL_BUILT visu=%r canon=%r key=%r", visu_label, canon_label, canonical

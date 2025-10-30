@@ -1140,7 +1140,18 @@ _AMOUNT_CONFLICT_FIELDS = {
     "high_balance",
     "credit_limit",
 }
-_TYPE_FIELDS = {"creditor_type", "account_type"}
+_TYPE_FIELDS = {"creditor_type", "account_type", "account_status"}
+
+_POINTS_MODE_FIELD_ALLOWLIST: Tuple[str, ...] = (
+    "account_number",
+    "date_opened",
+    "balance_owed",
+    "account_type",
+    "account_status",
+    "history_2y",
+    "history_7y",
+)
+_POINTS_MODE_FIELD_SET: Set[str] = set(_POINTS_MODE_FIELD_ALLOWLIST)
 
 
 def _normalize_field_value(field: str, value: Any) -> Optional[Any]:
@@ -1323,14 +1334,20 @@ def _match_account_number_best_pair(
 
     if best_match_aux is not None:
         best_match_aux["matched"] = True
+        best_match_aux["matched_bool"] = True
+        best_match_aux["match_score"] = 1.0
         return True, best_match_aux
 
     if best_any_aux is not None:
         best_any_aux["matched"] = False
+        best_any_aux["matched_bool"] = False
+        best_any_aux["match_score"] = 0.0
         return False, best_any_aux
 
     if first_aux is not None:
         first_aux["matched"] = False
+        first_aux["matched_bool"] = False
+        first_aux["match_score"] = 0.0
         return False, first_aux
 
     return False, {}
@@ -1449,10 +1466,14 @@ def _match_field_values(
     raw_a: Any,
     raw_b: Any,
     cfg: MergeCfg,
-) -> Tuple[bool, Dict[str, Any]]:
+) -> Tuple[float, Dict[str, Any]]:
     """Apply the appropriate predicate for a normalized pair of values."""
 
     aux: Dict[str, Any] = {}
+
+    def _finalize(match: bool, score: float) -> Tuple[float, Dict[str, Any]]:
+        aux["matched_bool"] = bool(match)
+        return max(0.0, min(1.0, float(score))), aux
 
     if field == "balance_owed":
         tol_abs = _resolve_tolerance_float(
@@ -1473,8 +1494,8 @@ def _match_field_values(
         )
         aux["tolerance"] = {"abs": tol_abs, "ratio": tol_ratio}
         if matched and (_is_zero_amount(norm_a) or _is_zero_amount(norm_b)):
-            return False, aux
-        return matched, aux
+            return _finalize(False, 0.0)
+        return _finalize(matched, 1.0 if matched else 0.0)
 
     if field == "payment_amount":
         tol_abs = float(cfg.tolerances.get("AMOUNT_TOL_ABS", 0.0))
@@ -1487,7 +1508,7 @@ def _match_field_values(
             tol_ratio=tol_ratio,
             count_zero_payment_match=count_zero,
         )
-        return matched, aux
+        return _finalize(matched, 1.0 if matched else 0.0)
 
     if field in _AMOUNT_FIELDS:
         tol_abs = float(cfg.tolerances.get("AMOUNT_TOL_ABS", 0.0))
@@ -1496,13 +1517,13 @@ def _match_field_values(
         if field in _ZERO_AMOUNT_FIELDS and (
             _is_zero_amount(norm_a) or _is_zero_amount(norm_b)
         ):
-            return False, aux
-        return matched, aux
+            return _finalize(False, 0.0)
+        return _finalize(matched, 1.0 if matched else 0.0)
 
     if field == "last_payment":
         day_tol = int(cfg.tolerances.get("LAST_PAYMENT_DAY_TOL", 0))
         matched = date_within(norm_a, norm_b, day_tol)
-        return matched, aux
+        return _finalize(matched, 1.0 if matched else 0.0)
 
     if field in _DATE_FIELDS_DET:
         if field == "date_opened":
@@ -1513,8 +1534,9 @@ def _match_field_values(
             )
             matched = date_within(norm_a, norm_b, tol_days)
             aux["tolerance_days"] = tol_days
-            return matched, aux
-        return date_equal(norm_a, norm_b), aux
+            return _finalize(matched, 1.0 if matched else 0.0)
+        matched = date_equal(norm_a, norm_b)
+        return _finalize(matched, 1.0 if matched else 0.0)
 
     if field in {"history_2y", "history_7y"}:
         threshold = _resolve_tolerance_float(
@@ -1527,13 +1549,14 @@ def _match_field_values(
             norm_b,
             threshold=threshold,
         )
+        similarity = max(0.0, min(1.0, float(similarity)))
         aux["similarity"] = similarity
         aux["threshold"] = threshold
-        return matched, aux
+        return _finalize(matched, similarity)
 
     if field in _TYPE_FIELDS:
         matched = norm_a == norm_b and norm_a is not None and norm_b is not None
-        return matched, aux
+        return _finalize(matched, 1.0 if matched else 0.0)
 
     raise KeyError(f"Unsupported merge field: {field}")
 
@@ -1589,14 +1612,16 @@ def match_field_best_of_9(
             if norm_right is None:
                 continue
 
-            matched, aux = _match_field_values(
+            match_score, aux = _match_field_values(
                 field_key, norm_left, norm_right, raw_left, raw_right, cfg
             )
+            matched = bool(aux.get("matched_bool", match_score >= 1.0))
 
             result_aux = {
                 "best_pair": (left, right),
                 "normalized_values": _serialize_normalized_pair(norm_left, norm_right),
             }
+            result_aux["match_score"] = match_score
             result_aux.update(aux)
 
             if first_candidate_aux is None:
@@ -1706,6 +1731,80 @@ def _detect_amount_conflicts(
     return conflicts
 
 
+def _score_pair_points_mode(
+    A_data: Mapping[str, Mapping[str, Any]],
+    B_data: Mapping[str, Mapping[str, Any]],
+    cfg: MergeCfg,
+    *,
+    field_sequence: Sequence[str],
+    weights_map: Mapping[str, float],
+    debug_enabled: bool,
+) -> Dict[str, Any]:
+    """Compute the allow-listed weighted score for points mode."""
+
+    evaluated_fields = [field for field in field_sequence if field in _POINTS_MODE_FIELD_SET]
+    field_matches: Dict[str, float] = {}
+    field_contributions: Dict[str, float] = {}
+    field_weights: Dict[str, float] = {}
+    field_breakdown: Dict[str, Dict[str, Any]] = {}
+    field_aux: Dict[str, Dict[str, Any]] = {}
+    total_points = 0.0
+
+    for field in evaluated_fields:
+        matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
+        aux = dict(match_aux) if isinstance(match_aux, Mapping) else {}
+        raw_score = aux.get("match_score")
+        if raw_score is None:
+            raw_score = 1.0 if matched else 0.0
+        match_score = max(0.0, min(1.0, float(raw_score)))
+        weight = float(weights_map.get(field, 0.0))
+        contribution = match_score * weight
+
+        aux.setdefault("matched", bool(aux.get("matched", matched)))
+        aux.setdefault("matched_bool", bool(aux.get("matched_bool", matched)))
+        aux["match_score"] = match_score
+        aux["weight"] = weight
+        aux["contribution"] = contribution
+
+        field_matches[field] = match_score
+        field_contributions[field] = contribution
+        field_weights[field] = weight
+        field_aux[field] = aux
+        field_breakdown[field] = {
+            "match": match_score,
+            "weight": weight,
+            "contribution": contribution,
+            "matched": bool(aux.get("matched_bool", matched)),
+        }
+
+        total_points += contribution
+
+        if debug_enabled:
+            logger.info(
+                "[MERGE] Points-mode comparing %s: match=%.3f weight=%.3f contribution=%.3f",
+                field,
+                match_score,
+                weight,
+                contribution,
+            )
+
+    ignored_fields = [field for field in field_sequence if field not in _POINTS_MODE_FIELD_SET]
+
+    return {
+        "score_points": float(total_points),
+        "score_legacy": None,
+        "points_mode": True,
+        "fields_evaluated": tuple(evaluated_fields),
+        "field_matches": field_matches,
+        "field_contributions": field_contributions,
+        "field_weights": {field: field_weights.get(field, 0.0) for field in evaluated_fields},
+        "field_breakdown": field_breakdown,
+        "field_aux": field_aux,
+        "allowlist_fields": _POINTS_MODE_FIELD_ALLOWLIST,
+        "ignored_fields": tuple(ignored_fields),
+    }
+
+
 def score_pair_0_100(
     A_bureaus: Mapping[str, Mapping[str, Any]],
     B_bureaus: Mapping[str, Mapping[str, Any]],
@@ -1722,17 +1821,7 @@ def score_pair_0_100(
     else:
         B_data = B_bureaus
 
-    total = 0.0
-    mid_sum = 0.0
-    identity_sum = 0.0
-    parts: Dict[str, int] = {}
-    aux: Dict[str, Dict[str, Any]] = {}
-    field_matches: Dict[str, bool] = {}
     field_sequence = _field_sequence_from_cfg(cfg)
-    date_matches: Dict[str, bool] = {
-        field: False for field in _DATE_FIELDS_ORDER if field in field_sequence
-    }
-    trigger_events: List[Dict[str, Any]] = []
     # Snapshot the resolved weights so each field reuses the same multiplier.
     weights_map = cfg.MERGE_WEIGHTS
 
@@ -1741,6 +1830,27 @@ def score_pair_0_100(
         debug_enabled = bool(cfg.MERGE_DEBUG)
     else:
         debug_enabled = bool(debug_pair)
+
+    if getattr(cfg, "points_mode", False):
+        return _score_pair_points_mode(
+            A_data,
+            B_data,
+            cfg,
+            field_sequence=field_sequence,
+            weights_map=weights_map,
+            debug_enabled=debug_enabled,
+        )
+
+    total = 0.0
+    mid_sum = 0.0
+    identity_sum = 0.0
+    parts: Dict[str, int] = {}
+    aux: Dict[str, Dict[str, Any]] = {}
+    field_matches: Dict[str, bool] = {}
+    date_matches: Dict[str, bool] = {
+        field: False for field in _DATE_FIELDS_ORDER if field in field_sequence
+    }
+    trigger_events: List[Dict[str, Any]] = []
 
     acct_match_raw, acct_aux_raw = match_field_best_of_9(
         "account_number", A_data, B_data, cfg
@@ -1901,7 +2011,13 @@ def score_pair_0_100(
         )
 
     ai_threshold = int(cfg.thresholds.get("AI_THRESHOLD", 0))
-    if total >= ai_threshold and ai_threshold > 0:
+    effective_total_threshold = ai_threshold
+    if mid_threshold > 0 and (
+        effective_total_threshold <= 0 or mid_threshold < effective_total_threshold
+    ):
+        effective_total_threshold = mid_threshold
+
+    if total >= effective_total_threshold and effective_total_threshold > 0:
         triggers.append("total")
         total_triggered = True
         trigger_events.append(
@@ -1909,7 +2025,9 @@ def score_pair_0_100(
                 "kind": "total",
                 "details": {
                     "total": int(total),
-                    "threshold": int(ai_threshold),
+                    "threshold": int(effective_total_threshold),
+                    "configured_ai_threshold": int(ai_threshold),
+                    "mid_threshold": int(mid_threshold),
                 },
             }
         )

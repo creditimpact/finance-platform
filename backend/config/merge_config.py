@@ -1,9 +1,10 @@
 """Helpers for loading merge configuration from environment variables.
 
-This module centralizes all parsing logic for MERGE_* environment variables so
-that merge and deduplication behaviour can be controlled without code changes.
-It ensures values such as booleans, numbers, and JSON payloads are converted to
-native Python types and provides sensible defaults when variables are missing.
+This module centralizes all parsing logic for ``MERGE_*`` environment variables
+so that merge and deduplication behaviour can be controlled without code
+changes. It ensures values such as booleans, numbers, and JSON payloads are
+converted to native Python types and provides sensible defaults when variables
+are missing.
 """
 
 from __future__ import annotations
@@ -99,7 +100,7 @@ def _parse_env_value(env_key: str, raw_value: str) -> Any:
 
 
 def _build_merge_config() -> Dict[str, Any]:
-    """Construct the merge configuration from environment variables."""
+    """Construct the merge configuration from the dedicated ``MERGE_*`` block."""
 
     config: Dict[str, Any] = dict(DEFAULT_CONFIG)
     present_keys: Set[str] = set()

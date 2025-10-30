@@ -37,6 +37,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "allowlist_enforce": False,
     # Custom weights are opt-in to preserve legacy scoring when disabled.
     "use_custom_weights": False,
+    # Optional merge fields stay disabled until toggled via MERGE_USE_* flags.
+    "use_original_creditor": False,
+    "use_creditor_name": False,
     "weights": {},
     "thresholds": {},
     "overrides": {},

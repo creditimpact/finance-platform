@@ -677,7 +677,15 @@ def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
         # allowlist state remains in sync for filtering.
         cfg = current_cfg
 
-    # Allow optional fields to be appended without mutating the cached tuple.
+    allowlist_enforced = bool(getattr(cfg, "MERGE_ALLOWLIST_ENFORCE", False))
+    if allowlist_enforced:
+        # Allowlist enforcement locks the active sequence to the configured list
+        # without appending legacy extras or optional toggles.
+        logger.debug("Merge active fields: %s", list(fields))
+        return fields
+
+    # Allow optional fields to be appended without mutating the cached tuple when
+    # the allowlist is not being enforced.
     field_list: List[str] = list(fields)
 
     def include_field(name: str) -> None:
@@ -693,35 +701,7 @@ def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
         # Future toggle makes ``creditor_name`` available when explicitly enabled.
         include_field("creditor_name")
 
-    fields = tuple(field_list)
-
-    allowlist_enforced = bool(getattr(cfg, "MERGE_ALLOWLIST_ENFORCE", False))
-    if not allowlist_enforced:
-        return fields
-
-    allowed_fields = tuple(getattr(cfg, "MERGE_FIELDS_OVERRIDE", ()))
-    if allowed_fields:
-        allowed_list = list(allowed_fields)
-
-        def include_allowlist(name: str) -> None:
-            """Ensure optional fields are retained when allowlist filtering runs."""
-
-            if name not in allowed_list:
-                allowed_list.append(name)
-
-        if getattr(cfg, "MERGE_USE_ORIGINAL_CREDITOR", False):
-            # Keep optional field visible when the allowlist is active.
-            include_allowlist("original_creditor")
-        if getattr(cfg, "MERGE_USE_CREDITOR_NAME", False):
-            include_allowlist("creditor_name")
-
-        filtered = tuple(field for field in fields if field in allowed_list)
-    else:
-        filtered = fields
-
-    # Debug logging clarifies which fields participate when the allowlist is on.
-    logger.debug("Merge active fields: %s", list(filtered))
-    return filtered
+    return tuple(field_list)
 
 
 def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
@@ -886,11 +866,22 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             0,
         )
 
-    if merge_use_original_creditor and "original_creditor" not in points:
+    allowlist_fields = tuple(allowlist_fields)
+    allowlist_lookup: Set[str] = set(allowlist_fields)
+    allow_optional_original_creditor = bool(
+        merge_use_original_creditor
+        and (not allowlist_enforce or "original_creditor" in allowlist_lookup)
+    )
+    allow_optional_creditor_name = bool(
+        merge_use_creditor_name
+        and (not allowlist_enforce or "creditor_name" in allowlist_lookup)
+    )
+
+    if allow_optional_original_creditor and "original_creditor" not in points:
         # Optional field participates with zero points until weights are defined.
         points["original_creditor"] = 0
         weights_map.setdefault("original_creditor", 1.0)
-    if merge_use_creditor_name and "creditor_name" not in points:
+    if allow_optional_creditor_name and "creditor_name" not in points:
         # Optional field participates with zero points until weights are defined.
         points["creditor_name"] = 0
         weights_map.setdefault("creditor_name", 1.0)
@@ -899,16 +890,20 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         """Return ``sequence`` plus any optional fields toggled on via config."""
 
         items = list(sequence)
-        if merge_use_original_creditor and "original_creditor" not in items:
+        if allow_optional_original_creditor and "original_creditor" not in items:
             # Future toggle makes ``original_creditor`` opt-in without code churn.
             items.append("original_creditor")
-        if merge_use_creditor_name and "creditor_name" not in items:
+        if allow_optional_creditor_name and "creditor_name" not in items:
             # Future toggle makes ``creditor_name`` opt-in without code churn.
             items.append("creditor_name")
         return tuple(items)
 
     config_fields = _with_optional_fields(config_fields)
     allowlist_fields = _with_optional_fields(allowlist_fields)
+
+    if allowlist_enforce:
+        allowed_field_set = set(allowlist_fields)
+        weights_map = {name: weight for name, weight in weights_map.items() if name in allowed_field_set}
 
     return MergeCfg(
         points=points,

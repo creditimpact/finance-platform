@@ -219,7 +219,8 @@ def _trace_token(
 def _triad_band_log(message: str, *args) -> None:
     """Emit detailed band diagnostics when trace/debugging is enabled."""
 
-    if TRACE_ON or STAGEA_DEBUG or logger.isEnabledFor(logging.DEBUG):
+    stagea_debug_enabled = STAGEA_DEBUG or os.environ.get("STAGEA_DEBUG") == "1"
+    if TRACE_ON or stagea_debug_enabled or logger.isEnabledFor(logging.DEBUG):
         logger.info(message, *args)
 
 
@@ -1241,6 +1242,7 @@ def process_triad_labeled_line(
         (str(t.get("text", "")) or "").strip() for t in label_span
     ).strip()
     canon_label = normalize_label_text(visu_label)
+    prefix_match_applied = False
     if STAGEA_LABEL_PREFIX_MATCH:
         prefix_match = re.match(
             r"^(orig(?:inal)?\.?\s*creditor(?:\s*\d{1,2})?)\b",
@@ -1249,6 +1251,7 @@ def process_triad_labeled_line(
         )
         if prefix_match:
             canon_label = prefix_match.group(1).strip()
+            prefix_match_applied = True
     canonical = label_map.get(canon_label)
     logger.info(
         "TRIAD_LABEL_BUILT visu=%r canon=%r key=%r", visu_label, canon_label, canonical
@@ -1445,7 +1448,11 @@ def process_triad_labeled_line(
         if not _is_label_token_text(str(t.get("text", "")))
     ]
 
-    if canonical is None and canon_label != "Account #":
+    if (
+        canonical is None
+        and canon_label != "Account #"
+        and not (STAGEA_LABEL_PREFIX_MATCH and prefix_match_applied)
+    ):
         logger.info("TRIAD_GUARD_SKIP reason=unknown_label label=%r", canon_label)
         # Trace label tokens with empty key since it's unknown
         for j, lt in enumerate(label_span):

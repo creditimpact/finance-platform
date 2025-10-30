@@ -116,6 +116,24 @@ manifest exists. `backend.validation.send` reads only the manifest, prepares the
 result directories if necessary, and writes the model responses next to the
 referenced result paths.
 
+## Merge / Dedup ENV Reference
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `MERGE_ENABLED` | `false` | Enables the dedicated merge block. When omitted the legacy merge stack remains in place. |
+| `MERGE_FIELDS_OVERRIDE_JSON` | `account_number`, `date_opened`, `balance_owed`, `account_type`, `account_status`, `history_2y`, `history_7y` | Controls the allowlisted merge fields. Accepts JSON or comma separated values via `MERGE_FIELDS_OVERRIDE`. |
+| `MERGE_ALLOWLIST_ENFORCE` | `false` | Forces the scorer to ignore fields not in the allowlist. |
+| `MERGE_USE_CUSTOM_WEIGHTS` | `false` | Toggles `MERGE_WEIGHTS_JSON` to override per-field scoring weights. |
+| `MERGE_WEIGHTS_JSON` | `{}` | Optional weight overrides applied when custom weights are enabled. |
+| `MERGE_THRESHOLDS_JSON` | `{}` | Optional overrides for `MERGE_SCORE_THRESHOLD` and related cutoffs. |
+| `MERGE_TOLERANCES_JSON` | `{}` | Optional overrides for balance/date tolerances used when comparing fields. |
+| `MERGE_OVERRIDES_JSON` | `{}` | Supplies explicit rule overrides for bespoke scenarios. |
+| `MERGE_DEBUG` | `false` | Enables verbose merge scoring logs. Combine with `MERGE_LOG_EVERY` to throttle sampling. |
+| `MERGE_LOG_EVERY` | `0` | Optional cadence controlling debug sampling frequency. |
+
+The configuration loader normalizes booleans, numbers, and JSON payloads so the
+runtime merge configuration can be tuned entirely via environment variables.
+
 ## Account number validation (deterministic comparator)
 
 The validation pipeline now routes `account_number_display` comparisons through

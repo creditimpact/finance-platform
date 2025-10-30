@@ -517,7 +517,7 @@ def _merge_env_state(config: Mapping[str, Any]) -> tuple[bool, bool]:
 
 
 def _sanitize_config_field_list(candidate: Any) -> Tuple[str, ...]:
-    """Return a normalized sequence of fields from the merge env config."""
+    """Return merge field overrides sourced from ``MERGE_FIELDS_OVERRIDE``."""
 
     if not isinstance(candidate, (list, tuple, set)):
         return ()
@@ -800,15 +800,19 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         explicit_enabled, merge_enabled = _merge_env_state(merge_env_cfg)
         custom_weights_enabled = _coerce_env_bool(
             merge_env_cfg.get("use_custom_weights")
-        )
+        )  # controlled by MERGE_USE_CUSTOM_WEIGHTS
         merge_use_original_creditor = _coerce_env_bool(
             merge_env_cfg.get("use_original_creditor")
-        )
+        )  # controlled by MERGE_USE_ORIGINAL_CREDITOR
         merge_use_creditor_name = _coerce_env_bool(
             merge_env_cfg.get("use_creditor_name")
-        )
-        merge_debug_enabled = _coerce_env_bool(merge_env_cfg.get("debug"))
-        merge_log_every = _coerce_env_int(merge_env_cfg.get("log_every"), 0)
+        )  # controlled by MERGE_USE_CREDITOR_NAME
+        merge_debug_enabled = _coerce_env_bool(
+            merge_env_cfg.get("debug")
+        )  # controlled by MERGE_DEBUG
+        merge_log_every = _coerce_env_int(
+            merge_env_cfg.get("log_every"), 0
+        )  # controlled by MERGE_LOG_EVERY
 
         fields_override = _sanitize_config_field_list(
             merge_env_cfg.get("fields_override") or merge_env_cfg.get("fields")
@@ -816,37 +820,42 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
 
         if explicit_enabled and merge_enabled:
             if fields_override:
+                # controlled by MERGE_FIELDS_OVERRIDE / MERGE_FIELDS_OVERRIDE_JSON
                 config_fields = fields_override
 
-            weights_override = _sanitize_weight_mapping(merge_env_cfg.get("weights"))
+            weights_override = _sanitize_weight_mapping(
+                merge_env_cfg.get("weights")
+            )  # controlled by MERGE_WEIGHTS_JSON
             if custom_weights_enabled and weights_override:
                 weights_map.update(weights_override)
 
             thresholds_override = _sanitize_numeric_mapping(
                 merge_env_cfg.get("thresholds"), upper_keys=True
-            )
+            )  # controlled by MERGE_THRESHOLDS_JSON
             if thresholds_override:
                 thresholds.update(thresholds_override)
 
             tolerance_override = _sanitize_tolerance_mapping(
                 merge_env_cfg.get("tolerances")
-            )
+            )  # controlled by MERGE_TOLERANCES_JSON
             if tolerance_override:
                 tolerances.update(tolerance_override)
 
             overrides_mapping = _sanitize_overrides_mapping(
                 merge_env_cfg.get("overrides")
-            )
+            )  # controlled by MERGE_OVERRIDES_JSON
         else:
             # When MERGE_ENABLED is absent or disabled we retain legacy fields.
             config_fields = _FIELD_SEQUENCE
             overrides_mapping = {}
 
         if fields_override:
+            # controlled by MERGE_FIELDS_OVERRIDE / MERGE_FIELDS_OVERRIDE_JSON
             allowlist_fields = fields_override
 
         # Allowlist enforcement can be toggled independently of MERGE_ENABLED.
         if merge_enabled:
+            # controlled by MERGE_ALLOWLIST_ENFORCE
             allowlist_enforce = bool(merge_env_cfg.get("allowlist_enforce"))
         # Fall back to legacy fields when no override is provided.
         if not allowlist_fields:

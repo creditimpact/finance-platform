@@ -361,6 +361,8 @@ class MergeCfg:
         default_factory=tuple
     )  # Explicit list of fields honoured when the allowlist is active.
     use_custom_weights: bool = False
+    use_original_creditor: bool = False
+    use_creditor_name: bool = False
 
     @property
     def threshold(self) -> int:
@@ -418,6 +420,18 @@ class MergeCfg:
 
         # Final defensive guard keeps the contract stable even on bad inputs.
         return 0
+
+    @property
+    def MERGE_USE_ORIGINAL_CREDITOR(self) -> bool:
+        """Expose optional-field toggle mirroring the MERGE_* env flag."""
+
+        return bool(self.use_original_creditor)
+
+    @property
+    def MERGE_USE_CREDITOR_NAME(self) -> bool:
+        """Expose optional-field toggle mirroring the MERGE_* env flag."""
+
+        return bool(self.use_creditor_name)
 
 
 _POINT_DEFAULTS: Dict[str, int] = {
@@ -628,13 +642,45 @@ def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
         # allowlist state remains in sync for filtering.
         cfg = current_cfg
 
+    # Allow optional fields to be appended without mutating the cached tuple.
+    field_list: List[str] = list(fields)
+
+    def include_field(name: str) -> None:
+        """Append ``name`` to the active sequence when not already present."""
+
+        if name not in field_list:
+            field_list.append(name)
+
+    if cfg is not None and getattr(cfg, "MERGE_USE_ORIGINAL_CREDITOR", False):
+        # Future toggle makes ``original_creditor`` available when explicitly enabled.
+        include_field("original_creditor")
+    if cfg is not None and getattr(cfg, "MERGE_USE_CREDITOR_NAME", False):
+        # Future toggle makes ``creditor_name`` available when explicitly enabled.
+        include_field("creditor_name")
+
+    fields = tuple(field_list)
+
     allowlist_enforced = bool(getattr(cfg, "MERGE_ALLOWLIST_ENFORCE", False))
     if not allowlist_enforced:
         return fields
 
     allowed_fields = tuple(getattr(cfg, "MERGE_FIELDS_OVERRIDE", ()))
     if allowed_fields:
-        filtered = tuple(field for field in fields if field in allowed_fields)
+        allowed_list = list(allowed_fields)
+
+        def include_allowlist(name: str) -> None:
+            """Ensure optional fields are retained when allowlist filtering runs."""
+
+            if name not in allowed_list:
+                allowed_list.append(name)
+
+        if getattr(cfg, "MERGE_USE_ORIGINAL_CREDITOR", False):
+            # Keep optional field visible when the allowlist is active.
+            include_allowlist("original_creditor")
+        if getattr(cfg, "MERGE_USE_CREDITOR_NAME", False):
+            include_allowlist("creditor_name")
+
+        filtered = tuple(field for field in fields if field in allowed_list)
     else:
         filtered = fields
 
@@ -656,6 +702,8 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     # Default weights act as neutral multipliers until custom overrides are enabled.
     weights_map: Dict[str, float] = {field: 1.0 for field in points}
     custom_weights_enabled = False
+    merge_use_original_creditor = False
+    merge_use_creditor_name = False
 
     thresholds = {
         key: _read_env_int(env_mapping, key, default)
@@ -716,6 +764,12 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         custom_weights_enabled = _coerce_env_bool(
             merge_env_cfg.get("use_custom_weights")
         )
+        merge_use_original_creditor = _coerce_env_bool(
+            merge_env_cfg.get("use_original_creditor")
+        )
+        merge_use_creditor_name = _coerce_env_bool(
+            merge_env_cfg.get("use_creditor_name")
+        )
 
         fields_override = _sanitize_config_field_list(
             merge_env_cfg.get("fields_override") or merge_env_cfg.get("fields")
@@ -763,6 +817,40 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         overrides_mapping = {}
         allowlist_fields = _FIELD_SEQUENCE
         allowlist_enforce = False
+        merge_use_original_creditor = _read_env_flag(
+            env_mapping,
+            "MERGE_USE_ORIGINAL_CREDITOR",
+            False,
+        )
+        merge_use_creditor_name = _read_env_flag(
+            env_mapping,
+            "MERGE_USE_CREDITOR_NAME",
+            False,
+        )
+
+    if merge_use_original_creditor and "original_creditor" not in points:
+        # Optional field participates with zero points until weights are defined.
+        points["original_creditor"] = 0
+        weights_map.setdefault("original_creditor", 1.0)
+    if merge_use_creditor_name and "creditor_name" not in points:
+        # Optional field participates with zero points until weights are defined.
+        points["creditor_name"] = 0
+        weights_map.setdefault("creditor_name", 1.0)
+
+    def _with_optional_fields(sequence: Sequence[str]) -> Tuple[str, ...]:
+        """Return ``sequence`` plus any optional fields toggled on via config."""
+
+        items = list(sequence)
+        if merge_use_original_creditor and "original_creditor" not in items:
+            # Future toggle makes ``original_creditor`` opt-in without code churn.
+            items.append("original_creditor")
+        if merge_use_creditor_name and "creditor_name" not in items:
+            # Future toggle makes ``creditor_name`` opt-in without code churn.
+            items.append("creditor_name")
+        return tuple(items)
+
+    config_fields = _with_optional_fields(config_fields)
+    allowlist_fields = _with_optional_fields(allowlist_fields)
 
     return MergeCfg(
         points=points,
@@ -775,6 +863,8 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         allowlist_enforce=allowlist_enforce,
         allowlist_fields=allowlist_fields,
         use_custom_weights=custom_weights_enabled,
+        use_original_creditor=merge_use_original_creditor,
+        use_creditor_name=merge_use_creditor_name,
     )
 
 

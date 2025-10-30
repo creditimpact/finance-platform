@@ -947,6 +947,19 @@ def _split_vals(text: str, parts: int) -> list[str]:
     if not text:
         return [""] * parts
 
+    stripped = text.rstrip()
+    if (
+        parts == 3
+        and config.STAGEA_COLONLESS_TU_SPLIT
+        and ":" not in text
+        and stripped.endswith("-- --")
+    ):
+        marker = "-- --"
+        cutoff = stripped.rfind(marker)
+        head = stripped[:cutoff].strip()
+        if head:
+            return [head] + [""] * (parts - 1)
+
     vals = re.split(r"\s{2,}", text.strip())
     if len(vals) != parts:
         tokens = text.strip().split()

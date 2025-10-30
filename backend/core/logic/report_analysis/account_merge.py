@@ -736,6 +736,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     merge_log_every = 0
     ai_points_threshold = 3.0
     direct_points_threshold = 5.0
+    points_diagnostics_limit = _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
 
     thresholds = {
         key: _read_env_int(env_mapping, key, default)
@@ -818,6 +819,17 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             )
         except (TypeError, ValueError):
             direct_points_threshold = 5.0
+        try:
+            points_diagnostics_limit = int(
+                getattr(
+                    merge_env_cfg,
+                    "points_diagnostics_limit",
+                    _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK,
+                )
+                or _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
+            )
+        except (TypeError, ValueError):
+            points_diagnostics_limit = _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
 
         allowlist_enforce = bool(getattr(merge_env_cfg, "allowlist_enforce", False))
         legacy_defaults_allowed = not allowlist_enforce and not points_mode_active
@@ -923,6 +935,11 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             False,
         )
         merge_log_every = _read_env_int(env_mapping, "MERGE_LOG_EVERY", 0)
+        points_diagnostics_limit = _read_env_int(
+            env_mapping,
+            "MERGE_POINTS_DIAGNOSTICS_LIMIT",
+            _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK,
+        )
 
     allowlist_fields = tuple(allowlist_fields)
     allowlist_lookup: Set[str] = set(allowlist_fields)
@@ -983,6 +1000,11 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     setattr(cfg_obj, "points_mode", bool(points_mode_active))
     setattr(cfg_obj, "ai_points_threshold", float(ai_points_threshold))
     setattr(cfg_obj, "direct_points_threshold", float(direct_points_threshold))
+    setattr(
+        cfg_obj,
+        "points_diagnostics_limit",
+        int(max(points_diagnostics_limit or 0, 0)),
+    )
 
     return cfg_obj
 
@@ -1216,6 +1238,9 @@ _POINTS_MODE_FIELD_ALLOWLIST: Tuple[str, ...] = (
     "history_7y",
 )
 _POINTS_MODE_FIELD_SET: Set[str] = set(_POINTS_MODE_FIELD_ALLOWLIST)
+
+_POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK = 3
+_POINTS_MODE_DIAGNOSTICS_EMITTED = 0
 
 
 def _normalize_field_value(field: str, value: Any) -> Optional[Any]:
@@ -1813,6 +1838,23 @@ def _score_pair_points_mode(
     field_breakdown: Dict[str, Dict[str, Any]] = {}
     field_aux: Dict[str, Dict[str, Any]] = {}
     total_points = 0.0
+    diagnostics_entries: List[Tuple[str, float, float, float, float]] = []
+
+    diagnostics_limit_raw = getattr(cfg, "points_diagnostics_limit", None)
+    try:
+        diagnostics_limit = int(diagnostics_limit_raw)
+    except (TypeError, ValueError):
+        diagnostics_limit = _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
+    if diagnostics_limit is None:
+        diagnostics_limit = _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
+    diagnostics_limit = max(int(diagnostics_limit), 0)
+
+    emit_diagnostics = False
+    diagnostics_pair_index = 0
+    global _POINTS_MODE_DIAGNOSTICS_EMITTED
+    if diagnostics_limit > 0 and _POINTS_MODE_DIAGNOSTICS_EMITTED < diagnostics_limit:
+        emit_diagnostics = True
+        diagnostics_pair_index = _POINTS_MODE_DIAGNOSTICS_EMITTED + 1
 
     for field in evaluated_fields:
         matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
@@ -1841,7 +1883,20 @@ def _score_pair_points_mode(
             "matched": bool(aux.get("matched_bool", matched)),
         }
 
-        total_points += contribution
+        current_total = total_points + contribution
+
+        if emit_diagnostics:
+            diagnostics_entries.append(
+                (
+                    field,
+                    match_score,
+                    weight,
+                    contribution,
+                    current_total,
+                )
+            )
+
+        total_points = current_total
 
         if debug_enabled:
             logger.info(
@@ -1893,6 +1948,25 @@ def _score_pair_points_mode(
                 },
             }
         )
+
+    if emit_diagnostics:
+        logger.info(
+            "[MERGE] Points-mode diagnostics pair=%s total_points=%.3f ai_threshold=%.3f direct_threshold=%.3f",
+            diagnostics_pair_index,
+            float(total_points),
+            float(ai_threshold),
+            float(direct_threshold),
+        )
+        for field_name, match_score, weight, contribution, running_total in diagnostics_entries:
+            logger.info(
+                "[MERGE] Points-mode field=%s match=%.3f weight=%.3f field_points=%.3f sum_points=%.3f",
+                field_name,
+                match_score,
+                weight,
+                contribution,
+                running_total,
+            )
+        _POINTS_MODE_DIAGNOSTICS_EMITTED += 1
 
     return {
         "total": float(total_points),

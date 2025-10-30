@@ -369,12 +369,20 @@ CASESTORE_PARSER_LOG_PARITY = env_bool("CASESTORE_PARSER_LOG_PARITY", True)
 ENABLE_CASESTORE_STAGEA = env_bool("ENABLE_CASESTORE_STAGEA", True)
 STAGEA_LABEL_PREFIX_MATCH = env_bool("STAGEA_LABEL_PREFIX_MATCH", True)
 STAGEA_COLONLESS_TU_SPLIT = env_bool("STAGEA_COLONLESS_TU_SPLIT", True)
+STAGEA_COLONLESS_TU_BOUNDARY = env_bool("STAGEA_COLONLESS_TU_BOUNDARY", True)
+STAGEA_COLONLESS_TU_TEXT_FALLBACK = env_bool("STAGEA_COLONLESS_TU_TEXT_FALLBACK", True)
 STAGEA_ORIGCRED_POST_EXTRACT = env_bool("STAGEA_ORIGCRED_POST_EXTRACT", False)
 
 logger.info(
-    "StageA flags: prefix_match=%s colonless_tu_split=%s origcred_post_extract=%s",
+    (
+        "StageA flags: prefix_match=%s colonless_tu_split=%s "
+        "colonless_tu_boundary=%s colonless_tu_text_fallback=%s "
+        "origcred_post_extract=%s"
+    ),
     STAGEA_LABEL_PREFIX_MATCH,
     STAGEA_COLONLESS_TU_SPLIT,
+    STAGEA_COLONLESS_TU_BOUNDARY,
+    STAGEA_COLONLESS_TU_TEXT_FALLBACK,
     STAGEA_ORIGCRED_POST_EXTRACT,
 )
 

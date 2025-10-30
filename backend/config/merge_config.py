@@ -11,24 +11,30 @@ from __future__ import annotations
 import json
 import os
 from functools import lru_cache
-from typing import Any, Dict, Set
+from typing import Any, Dict, List, Set
 
 # Base prefix for all merge related environment variables.
 MERGE_PREFIX = "MERGE_"
 
 # Default configuration keeps backward compatible behaviour when flags are not
 # provided via environment variables.
+DEFAULT_FIELDS: List[str] = [
+    "account_number",
+    "date_opened",
+    "balance_owed",
+    "account_type",
+    "account_status",
+    "history_2y",
+    "history_7y",
+]
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "enabled": False,
-    "fields": [
-        "account_number",
-        "date_opened",
-        "balance_owed",
-        "account_type",
-        "account_status",
-        "history_2y",
-        "history_7y",
-    ],
+    "fields": list(DEFAULT_FIELDS),
+    # Allowlist defaults mirror the historic field sequence so enforcement can
+    # be toggled on without requiring explicit overrides.
+    "fields_override": list(DEFAULT_FIELDS),
+    "allowlist_enforce": False,
     "weights": {},
     "thresholds": {},
     "overrides": {},

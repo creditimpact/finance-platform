@@ -351,6 +351,10 @@ class MergeCfg:
     tolerances: Mapping[str, Union[int, float]]
     fields: Sequence[str] = field(default_factory=tuple)
     overrides: Mapping[str, Any] = field(default_factory=dict)
+    allowlist_enforce: bool = False  # Runtime flag to enable the field allowlist.
+    allowlist_fields: Sequence[str] = field(
+        default_factory=tuple
+    )  # Explicit list of fields honoured when the allowlist is active.
 
     @property
     def threshold(self) -> int:
@@ -367,6 +371,18 @@ class MergeCfg:
         """Alias for the AI threshold used by AI gating helpers."""
 
         return self.threshold
+
+    @property
+    def MERGE_ALLOWLIST_ENFORCE(self) -> bool:
+        """Expose allowlist enforcement flag for compatibility with env keys."""
+
+        return bool(self.allowlist_enforce)
+
+    @property
+    def MERGE_FIELDS_OVERRIDE(self) -> Tuple[str, ...]:
+        """Expose the active field allowlist mirroring the ENV naming."""
+
+        return tuple(self.allowlist_fields)
 
 
 _POINT_DEFAULTS: Dict[str, int] = {
@@ -482,13 +498,30 @@ def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
     """Resolve the active field sequence, falling back to legacy defaults."""
 
     if cfg is not None and getattr(cfg, "fields", None):
-        return tuple(cfg.fields)
+        fields: Tuple[str, ...] = tuple(cfg.fields)
+    else:
+        current_cfg = get_merge_cfg()
+        if getattr(current_cfg, "fields", None):
+            fields = tuple(current_cfg.fields)
+        else:
+            fields = _FIELD_SEQUENCE
+        # When ``cfg`` was not provided we continue with the cached instance so
+        # allowlist state remains in sync for filtering.
+        cfg = current_cfg
 
-    current_cfg = get_merge_cfg()
-    if getattr(current_cfg, "fields", None):
-        return tuple(current_cfg.fields)
+    allowlist_enforced = bool(getattr(cfg, "MERGE_ALLOWLIST_ENFORCE", False))
+    if not allowlist_enforced:
+        return fields
 
-    return _FIELD_SEQUENCE
+    allowed_fields = tuple(getattr(cfg, "MERGE_FIELDS_OVERRIDE", ()))
+    if allowed_fields:
+        filtered = tuple(field for field in fields if field in allowed_fields)
+    else:
+        filtered = fields
+
+    # Debug logging clarifies which fields participate when the allowlist is on.
+    logger.debug("Merge active fields: %s", list(filtered))
+    return filtered
 
 
 def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
@@ -551,14 +584,19 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
 
     config_fields: Tuple[str, ...] = _FIELD_SEQUENCE
     overrides_mapping: Dict[str, Any] = {}
+    allowlist_fields: Tuple[str, ...] = _FIELD_SEQUENCE
+    allowlist_enforce = False
 
     if env is None:
         # Load merge-specific configuration when running against real env vars.
         merge_env_cfg = get_merge_config()
         explicit_enabled, merge_enabled = _merge_env_state(merge_env_cfg)
 
+        fields_override = _sanitize_config_field_list(
+            merge_env_cfg.get("fields_override") or merge_env_cfg.get("fields")
+        )
+
         if explicit_enabled and merge_enabled:
-            fields_override = _sanitize_config_field_list(merge_env_cfg.get("fields"))
             if fields_override:
                 config_fields = fields_override
 
@@ -579,9 +617,21 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             # When MERGE_ENABLED is absent or disabled we retain legacy fields.
             config_fields = _FIELD_SEQUENCE
             overrides_mapping = {}
+
+        if fields_override:
+            allowlist_fields = fields_override
+
+        # Allowlist enforcement can be toggled independently of MERGE_ENABLED.
+        if merge_enabled:
+            allowlist_enforce = bool(merge_env_cfg.get("allowlist_enforce"))
+        # Fall back to legacy fields when no override is provided.
+        if not allowlist_fields:
+            allowlist_fields = _FIELD_SEQUENCE
     else:
         config_fields = _FIELD_SEQUENCE
         overrides_mapping = {}
+        allowlist_fields = _FIELD_SEQUENCE
+        allowlist_enforce = False
 
     return MergeCfg(
         points=points,
@@ -590,6 +640,8 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         tolerances=tolerances,
         fields=config_fields,
         overrides=overrides_mapping,
+        allowlist_enforce=allowlist_enforce,
+        allowlist_fields=allowlist_fields,
     )
 
 

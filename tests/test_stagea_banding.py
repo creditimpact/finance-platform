@@ -1,4 +1,5 @@
 import importlib
+import logging
 from pathlib import Path
 from typing import Dict, List
 
@@ -138,6 +139,24 @@ def split_module(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STAGEA_COLONLESS_TU_SPLIT", "1")
     monkeypatch.setenv("STAGEA_COLONLESS_TU_BOUNDARY", "1")
     monkeypatch.setenv("STAGEA_COLONLESS_TU_TEXT_FALLBACK", "1")
+    mod = importlib.import_module("scripts.split_accounts_from_tsv")
+    return importlib.reload(mod)
+
+
+@pytest.fixture
+def split_module_origcred_rescue(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TRIAD_BAND_BY_X0", "1")
+    monkeypatch.setenv("RAW_JOIN_TOKENS_WITH_SPACE", "1")
+    monkeypatch.setenv("RAW_TRIAD_FROM_X", "1")
+    monkeypatch.setenv("STAGEA_LABEL_PREFIX_MATCH", "0")
+    monkeypatch.setenv("STAGEA_COLONLESS_TU_SPLIT", "1")
+    monkeypatch.setenv("STAGEA_COLONLESS_TU_BOUNDARY", "1")
+    monkeypatch.setenv("STAGEA_COLONLESS_TU_TEXT_FALLBACK", "1")
+    monkeypatch.setenv("STAGEA_ORIGCRED_PREFIX_RESCUE", "1")
+    monkeypatch.setenv("STAGEA_ORIGCRED_TU_BOUNDARY", "1")
+    monkeypatch.setenv("STAGEA_ORIGCRED_COLONLESS_SPLIT", "1")
+    config_mod = importlib.import_module("backend.config")
+    importlib.reload(config_mod)
     mod = importlib.import_module("scripts.split_accounts_from_tsv")
     return importlib.reload(mod)
 
@@ -594,3 +613,56 @@ def test_account_type_tracing(split_module, monkeypatch: pytest.MonkeyPatch, cap
     # XP/EQ are dashes
     assert "-> XP text='--'" in text
     assert "-> EQ text='--'" in text
+
+
+def test_origcred_colonless_rescue(
+    split_module_origcred_rescue, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    layout = _layout()
+    triad_fields: Dict[str, Dict[str, str]] = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+    }
+    triad_order = ["transunion", "experian", "equifax"]
+    tokens = [
+        _token(10, 80.0, 110.0, "Original"),
+        _token(10, 110.0, 150.0, "Creditor"),
+        _token(10, 150.0, 170.0, "01"),
+        _token(10, TU_X0 - 2.0, TU_X0 - 1.5, "PALISADES"),
+        _token(10, TU_X0 + 5.0, TU_X0 + 35.0, "FUNDING"),
+        _token(10, TU_X0 + 36.0, TU_X0 + 65.0, "CORP"),
+        _token(10, TU_X0 + 70.0, TU_X0 + 80.0, "--"),
+        _token(10, TU_X0 + 82.0, TU_X0 + 92.0, "--"),
+    ]
+
+    assert split_module_origcred_rescue.STAGEA_ORIGCRED_PREFIX_RESCUE
+    assert split_module_origcred_rescue.STAGEA_ORIGCRED_TU_BOUNDARY
+    assert split_module_origcred_rescue.STAGEA_ORIGCRED_COLONLESS_SPLIT
+
+    row = split_module_origcred_rescue.process_triad_labeled_line(
+        tokens,
+        layout,
+        split_module_origcred_rescue.LABEL_MAP,
+        None,
+        triad_fields,
+        triad_order,
+    )
+    assert row is not None
+
+    tu_value = triad_fields["transunion"]["original_creditor"]
+    xp_value = triad_fields["experian"]["original_creditor"]
+    eq_value = triad_fields["equifax"]["original_creditor"]
+
+    assert tu_value == "PALISADES FUNDING CORP"
+    assert xp_value == "--"
+    assert eq_value == "--"
+
+    debug_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.DEBUG
+    ]
+    assert any("ORIGCRED_PREFIX_RESCUE_APPLIED" in msg for msg in debug_messages)
+    assert any("ORIGCRED_TU_TRUNCATE" in msg for msg in debug_messages)

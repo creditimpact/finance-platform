@@ -9,12 +9,15 @@ from backend.core.logic.report_analysis.account_merge import (
     date_within,
     digits_only,
     get_merge_cfg,
+    history_similarity_score,
+    match_history_field,
     match_amount_field,
     match_balance_owed,
     match_field_best_of_9,
     match_payment_amount,
     normalize_amount_field,
     normalize_balance_owed,
+    normalize_history_field,
     normalize_type,
     to_amount,
     to_date,
@@ -49,6 +52,22 @@ def test_balance_owed_requires_exact_match():
 
     assert match_balance_owed(bal_a, bal_b)
     assert not match_balance_owed(bal_a, bal_c)
+
+
+def test_balance_owed_respects_configured_tolerance():
+    cfg = get_merge_cfg({
+        "MERGE_TOL_BALANCE_ABS": "5",
+        "MERGE_TOL_BALANCE_RATIO": "0",
+    })
+
+    account_a = {"transunion": {"balance_owed": "100"}}
+    account_b = {"experian": {"balance_owed": "103.50"}}
+
+    matched, aux = match_field_best_of_9("balance_owed", account_a, account_b, cfg)
+
+    assert matched is True
+    assert aux["normalized_values"] == (100.0, 103.5)
+    assert aux["tolerance"] == {"abs": 5.0, "ratio": 0.0}
 
 
 def test_payment_amount_zero_rule_respected():
@@ -111,6 +130,46 @@ def test_date_comparisons_work():
     assert not date_equal(day_a, day_b)
     assert date_within(day_a, day_b, 3)
     assert not date_within(day_a, day_b, 2)
+
+
+def test_date_opened_tolerance_enforced():
+    cfg = get_merge_cfg({"MERGE_TOL_DATE_DAYS": "2"})
+    account_a = {"transunion": {"date_opened": "2023-05-07"}}
+    account_b = {"experian": {"date_opened": "2023-05-09"}}
+
+    matched, aux = match_field_best_of_9("date_opened", account_a, account_b, cfg)
+
+    assert matched is True
+    assert aux["tolerance_days"] == 2
+
+
+def test_account_number_min_length_gate():
+    cfg = get_merge_cfg({"MERGE_ACCOUNTNUMBER_MATCH_MINLEN": "6"})
+    account_a = {"transunion": {"account_number_display": "**1234"}}
+    account_b = {"experian": {"account_number_display": "001234"}}
+
+    matched, aux = match_field_best_of_9("account_number", account_a, account_b, cfg)
+
+    assert matched is False
+    assert aux["min_length_met"] is False
+
+
+def test_history_similarity_threshold():
+    cfg = get_merge_cfg({"MERGE_HISTORY_SIMILARITY_THRESHOLD": "0.8"})
+    account_a = {"transunion": {"history_2y": "OK OK OK"}}
+    account_b = {"experian": {"history_2y": "ok ok ok"}}
+
+    matched, aux = match_field_best_of_9("history_2y", account_a, account_b, cfg)
+
+    assert matched is True
+    assert aux["threshold"] == 0.8
+    assert aux["similarity"] == pytest.approx(1.0)
+
+    low_similarity = history_similarity_score(
+        normalize_history_field("AAA BBB"),
+        normalize_history_field("AAA CCC"),
+    )
+    assert low_similarity < 1.0
 
 
 def test_normalize_type_aliases_credit_card_and_bank():

@@ -92,3 +92,8 @@ archive/examples/**
 .env
 frontend/.env
 *.env.local
+
+.env
+*.env.local
+frontend/.env
+

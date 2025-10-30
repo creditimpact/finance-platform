@@ -5,6 +5,7 @@ def _clear_env(monkeypatch):
     keys = [
         "AI_THRESHOLD",
         "AUTO_MERGE_THRESHOLD",
+        "MERGE_SCORE_THRESHOLD",
         "MERGE_AI_ON_BALOWED_EXACT",
         "MERGE_AI_ON_HARD_ACCTNUM",
         "MERGE_AI_ON_MID_K",
@@ -26,6 +27,7 @@ def test_get_merge_cfg_defaults(monkeypatch):
     assert sum(cfg.points.values()) == 100
     assert cfg.thresholds["AI_THRESHOLD"] == 27
     assert cfg.thresholds["AUTO_MERGE_THRESHOLD"] == 70
+    assert cfg.thresholds["MERGE_SCORE_THRESHOLD"] == 70
     assert cfg.triggers["MERGE_AI_ON_BALOWED_EXACT"] is True
     assert cfg.triggers["MERGE_AI_ON_HARD_ACCTNUM"] is True
     assert cfg.triggers["MERGE_AI_ON_MID_K"] == 26
@@ -40,6 +42,7 @@ def test_get_merge_cfg_env_overrides():
     overrides = {
         "AI_THRESHOLD": "33",
         "AUTO_MERGE_THRESHOLD": "80",
+        "MERGE_SCORE_THRESHOLD": "90",
         "MERGE_AI_ON_BALOWED_EXACT": "0",
         "MERGE_AI_ON_HARD_ACCTNUM": "0",
         "MERGE_AI_ON_MID_K": "30",
@@ -54,6 +57,7 @@ def test_get_merge_cfg_env_overrides():
 
     assert cfg.thresholds["AI_THRESHOLD"] == 33
     assert cfg.thresholds["AUTO_MERGE_THRESHOLD"] == 80
+    assert cfg.thresholds["MERGE_SCORE_THRESHOLD"] == 90
     assert cfg.triggers["MERGE_AI_ON_BALOWED_EXACT"] is False
     assert cfg.triggers["MERGE_AI_ON_HARD_ACCTNUM"] is False
     assert cfg.triggers["MERGE_AI_ON_MID_K"] == 30

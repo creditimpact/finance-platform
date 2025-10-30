@@ -1547,6 +1547,26 @@ def process_triad_labeled_line(
             colonless_tail_text,
         )
 
+    label_bleed_rescued = False
+    if (
+        canonical == "original_creditor"
+        and colonless_tail_match
+        and STAGEA_ORIGCRED_PREFIX_RESCUE
+    ):
+        rescued_tokens: List[dict] = []
+        for tok, band_name in tail_assignments:
+            if band_name in {"xp", "eq"}:
+                break
+            if band_name in {None, "label"}:
+                if tok not in band_tokens["transunion"]:
+                    band_tokens["transunion"].append(tok)
+                    rescued_tokens.append(tok)
+        if rescued_tokens:
+            label_bleed_rescued = True
+            logger.info(
+                "TRIAD_ORIGCRED_LABEL_BLEED_RESCUE count=%d", len(rescued_tokens)
+            )
+
     if (
         canonical is None
         and canon_label != "Account #"
@@ -1805,6 +1825,16 @@ def process_triad_labeled_line(
                 saw_dash_for["experian"] = True
             if eq_after.strip() in dash_tokens:
                 saw_dash_for["equifax"] = True
+        if label_bleed_rescued:
+            for bureau in ("experian", "equifax"):
+                if not vals[bureau]:
+                    continue
+                normalized_parts = [
+                    str(part).strip() for part in vals[bureau] if str(part).strip()
+                ]
+                if normalized_parts and all(part in dash_tokens for part in normalized_parts):
+                    vals[bureau] = []
+                    saw_dash_for[bureau] = False
         for j, (t, b) in enumerate(tail_assignments, start=suffix_idx + 1):
             _trace_token(
                 t.get("page"), t.get("line"), j, t, b, "labeled", canonical or ""
@@ -2743,6 +2773,7 @@ def split_accounts(
                     "eq": [],
                 }
                 label_token = None
+                rescued_label_without_suffix = False
                 moved_from_label_on_continuation = False
                 pre_split_target: dict | None = None
                 if layout:
@@ -2842,8 +2873,60 @@ def split_accounts(
                     if TRIAD_BAND_BY_X0 and label_token is None and pre_label_txt:
                         visu_label = pre_label_txt
                         canon_label = normalize_label_text(visu_label)
+                        prefix_override: str | None = None
+                        prefix_token_count: int | None = None
+                        if (
+                            STAGEA_ORIGCRED_PREFIX_RESCUE
+                            and canon_label
+                            and canon_label.lower().startswith("original creditor")
+                        ):
+                            prefix_match = re.match(
+                                r"^(orig(?:inal)?\.?\s*creditor(?:\s*\d{1,2})?)\b",
+                                canon_label,
+                                flags=re.IGNORECASE,
+                            )
+                            if prefix_match:
+                                prefix_override = normalize_label_text(prefix_match.group(1))
+                                if prefix_override:
+                                    target_words = prefix_override.split()
+                                    words_seen = 0
+                                    for tok_idx, tok in enumerate(pre_label_tokens):
+                                        token_norm = normalize_label_text(
+                                            str(tok.get("text", ""))
+                                        )
+                                        if not token_norm:
+                                            continue
+                                        for part in token_norm.split():
+                                            if (
+                                                words_seen < len(target_words)
+                                                and part.lower()
+                                                == target_words[words_seen].lower()
+                                            ):
+                                                words_seen += 1
+                                                if words_seen == len(target_words):
+                                                    prefix_token_count = tok_idx + 1
+                                                    break
+                                        if words_seen == len(target_words):
+                                            break
+                                    canon_label = prefix_override
                         canonical = LABEL_MAP.get(canon_label)
-                        if canonical is not None:
+                        if (
+                            canonical == "original_creditor"
+                            and STAGEA_ORIGCRED_PREFIX_RESCUE
+                            and (band_tokens["tu"] or band_tokens["xp"] or band_tokens["eq"])
+                        ):
+                            if (
+                                prefix_token_count
+                                and 0 < prefix_token_count <= len(pre_label_tokens)
+                            ):
+                                label_token = pre_label_tokens[prefix_token_count - 1]
+                            else:
+                                label_token = pre_label_tokens[-1]
+                            rescued_label_without_suffix = True
+                            logger.info(
+                                "TRIAD_LABEL_PREFIX_RESCUE_APPLY canon=%s", canon_label
+                            )
+                        elif canonical is not None:
                             for j, lt in enumerate(pre_label_tokens):
                                 _trace_token(
                                     line["page"],
@@ -3245,8 +3328,9 @@ def split_accounts(
                         triad_rows.append(row_state)
                         open_row = row_state
                         continue
-                if label_token and _is_label_token_text(
-                    str(label_token.get("text", ""))
+                if label_token and (
+                    _is_label_token_text(str(label_token.get("text", "")))
+                    or rescued_label_without_suffix
                 ):
                     override_cols: List[str] | None = None
                     override_text: str | None = None

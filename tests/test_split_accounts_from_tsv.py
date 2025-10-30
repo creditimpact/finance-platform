@@ -1,13 +1,38 @@
 import json
 import logging
+import importlib
 import os
 import runpy
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+import backend.config as config
 from backend.pipeline.runs import RUNS_ROOT_ENV
+
+
+@contextmanager
+def _override_stagea_flags(**flags: str) -> None:
+    """Temporarily override Stage-A environment flags and reload config."""
+
+    previous = {key: os.environ.get(key) for key in flags}
+    try:
+        for key, value in flags.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        importlib.reload(config)
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        importlib.reload(config)
 
 
 def _write_tsv(path: Path) -> None:
@@ -30,6 +55,38 @@ def _write_tsv(path: Path) -> None:
         "1\t3\t30\t31\t60\t100\t5000\n",
         "1\t3\t30\t31\t160\t200\t6000\n",
         "1\t3\t30\t31\t260\t300\t7000\n",
+    ]
+    path.write_text(header + "".join(rows), encoding="utf-8")
+
+
+def _write_original_creditor_no_colon_row(path: Path) -> None:
+    _write_original_creditor_row(
+        path,
+        "Original Creditor 01",
+        "PALISADES FUNDING CORP",
+        "--",
+        "--",
+    )
+
+
+def _write_original_creditor_label_bleed_row(path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        "1\t1\t10\t11\t60\t100\tTransUnion\n",
+        "1\t1\t10\t11\t160\t200\tExperian\n",
+        "1\t1\t10\t11\t260\t300\tEquifax\n",
+        "1\t2\t20\t21\t0\t40\tAccount #\n",
+        "1\t2\t20\t21\t60\t100\t123456789\n",
+        "1\t2\t20\t21\t160\t200\t123456789\n",
+        "1\t2\t20\t21\t260\t300\t123456789\n",
+        "1\t3\t30\t31\t0\t25\tOriginal\n",
+        "1\t3\t30\t31\t25\t45\tCreditor\n",
+        "1\t3\t30\t31\t45\t55\t01\n",
+        "1\t3\t30\t31\t0\t40\tPALISADES\n",
+        "1\t3\t30\t31\t60\t120\tFUNDING\n",
+        "1\t3\t30\t31\t120\t180\tCORP\n",
+        "1\t3\t30\t31\t160\t200\t--\n",
+        "1\t3\t30\t31\t260\t300\t--\n",
     ]
     path.write_text(header + "".join(rows), encoding="utf-8")
 
@@ -108,8 +165,8 @@ def test_triad_original_creditor_tu_only(tmp_path: Path, caplog: pytest.LogCaptu
     fields = data["accounts"][0]["triad_fields"]
 
     assert fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
-    assert fields["experian"]["original_creditor"] == ""
-    assert fields["equifax"]["original_creditor"] == ""
+    assert fields["experian"]["original_creditor"] == "--"
+    assert fields["equifax"]["original_creditor"] == "--"
 
 
 def test_triad_original_creditor_all_bureaus(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -128,6 +185,81 @@ def test_triad_original_creditor_all_bureaus(tmp_path: Path, caplog: pytest.LogC
     assert fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
     assert fields["experian"]["original_creditor"] == "ATLANTIC CAPITAL"
     assert fields["equifax"]["original_creditor"] == "PACIFIC HOLDINGS"
+
+
+def test_triad_original_creditor_no_colon_geometry(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    tsv_path = tmp_path / "_orig_creditor_no_colon.tsv"
+    _write_original_creditor_no_colon_row(tsv_path)
+
+    flags = {
+        "STAGEA_ORIGCRED_PREFIX_RESCUE": "1",
+        "STAGEA_ORIGCRED_TU_BOUNDARY": "1",
+        "STAGEA_COLONLESS_TU_BOUNDARY": "1",
+        "STAGEA_COLONLESS_TU_TEXT_FALLBACK": "1",
+        "STAGEA_ORIGCRED_COLONLESS_SPLIT": "1",
+        "STAGEA_COLONLESS_TU_SPLIT": "1",
+        "TRIAD_BAND_BY_X0": "1",
+    }
+    with _override_stagea_flags(**flags):
+        data, _accounts_dir, _sid = _run_split(tsv_path, caplog)
+
+    fields = data["accounts"][0]["triad_fields"]
+
+    assert fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
+    assert fields["experian"]["original_creditor"] == "--"
+    assert fields["equifax"]["original_creditor"] == "--"
+
+
+def test_triad_original_creditor_label_bleed_rescued(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    tsv_path = tmp_path / "_orig_creditor_bleed.tsv"
+    _write_original_creditor_label_bleed_row(tsv_path)
+
+    flags = {
+        "STAGEA_ORIGCRED_PREFIX_RESCUE": "1",
+        "STAGEA_ORIGCRED_TU_BOUNDARY": "1",
+        "STAGEA_COLONLESS_TU_BOUNDARY": "1",
+        "STAGEA_COLONLESS_TU_TEXT_FALLBACK": "1",
+        "STAGEA_ORIGCRED_COLONLESS_SPLIT": "1",
+        "STAGEA_COLONLESS_TU_SPLIT": "1",
+        "TRIAD_BAND_BY_X0": "1",
+    }
+    with _override_stagea_flags(**flags):
+        data, _accounts_dir, _sid = _run_split(tsv_path, caplog)
+
+    fields = data["accounts"][0]["triad_fields"]
+
+    assert fields["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
+    assert fields["experian"]["original_creditor"] == ""
+    assert fields["equifax"]["original_creditor"] == ""
+
+
+def test_triad_original_creditor_label_bleed_flag_off(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    tsv_path = tmp_path / "_orig_creditor_bleed_flag_off.tsv"
+    _write_original_creditor_label_bleed_row(tsv_path)
+
+    flags = {
+        "STAGEA_ORIGCRED_PREFIX_RESCUE": "0",
+        "STAGEA_ORIGCRED_TU_BOUNDARY": "0",
+        "STAGEA_COLONLESS_TU_BOUNDARY": "0",
+        "STAGEA_COLONLESS_TU_TEXT_FALLBACK": "0",
+        "STAGEA_ORIGCRED_COLONLESS_SPLIT": "0",
+        "STAGEA_COLONLESS_TU_SPLIT": "0",
+        "TRIAD_BAND_BY_X0": "1",
+    }
+    with _override_stagea_flags(**flags):
+        data, _accounts_dir, _sid = _run_split(tsv_path, caplog)
+
+    fields = data["accounts"][0]["triad_fields"]
+
+    assert fields["transunion"]["original_creditor"] == ""
+    assert fields["experian"]["original_creditor"] == ""
+    assert fields["equifax"]["original_creditor"] == ""
 
 
 def test_triad_original_creditor_absent_key(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

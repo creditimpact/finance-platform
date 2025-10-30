@@ -346,6 +346,7 @@ class MergeCfg:
     """Centralized configuration for deterministic account merging."""
 
     points: Mapping[str, int]
+    weights: Mapping[str, float]
     thresholds: Mapping[str, int]
     triggers: Mapping[str, Union[int, str, bool]]
     tolerances: Mapping[str, Union[int, float]]
@@ -355,6 +356,7 @@ class MergeCfg:
     allowlist_fields: Sequence[str] = field(
         default_factory=tuple
     )  # Explicit list of fields honoured when the allowlist is active.
+    use_custom_weights: bool = False
 
     @property
     def threshold(self) -> int:
@@ -383,6 +385,12 @@ class MergeCfg:
         """Expose the active field allowlist mirroring the ENV naming."""
 
         return tuple(self.allowlist_fields)
+
+    @property
+    def MERGE_WEIGHTS(self) -> Mapping[str, float]:
+        """Expose the active per-field weights for runtime scoring."""
+
+        return self.weights
 
 
 _POINT_DEFAULTS: Dict[str, int] = {
@@ -485,6 +493,47 @@ def _sanitize_numeric_mapping(candidate: Any, *, upper_keys: bool = False) -> Di
     return result
 
 
+def _sanitize_weight_mapping(candidate: Any) -> Dict[str, float]:
+    """Return ``Dict[str, float]`` for custom merge weight overrides."""
+
+    if not isinstance(candidate, Mapping):
+        return {}
+
+    result: Dict[str, float] = {}
+    for key, value in candidate.items():
+        if key is None:
+            continue
+        name = str(key).strip()
+        if not name:
+            continue
+        try:
+            result[name] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _coerce_env_bool(value: Any) -> bool:
+    """Return ``True`` when the provided env-style value is truthy."""
+
+    # Explicit booleans remain untouched so existing call sites keep behaviour.
+    if isinstance(value, bool):
+        return value
+    # Integers are interpreted using non-zero semantics to support ``0``/``1`` flags.
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, float):
+        return value != 0.0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    # Fallback matches the legacy default (disabled) when the flag is absent.
+    return False
+
+
 def _sanitize_overrides_mapping(candidate: Any) -> Dict[str, Any]:
     """Return a shallow copy of overrides when a mapping is provided."""
 
@@ -534,6 +583,9 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         env_mapping = env
 
     points = dict(_POINT_DEFAULTS)
+    # Default weights act as neutral multipliers until custom overrides are enabled.
+    weights_map: Dict[str, float] = {field: 1.0 for field in points}
+    custom_weights_enabled = False
 
     thresholds = {
         key: _read_env_int(env_mapping, key, default)
@@ -591,6 +643,9 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         # Load merge-specific configuration when running against real env vars.
         merge_env_cfg = get_merge_config()
         explicit_enabled, merge_enabled = _merge_env_state(merge_env_cfg)
+        custom_weights_enabled = _coerce_env_bool(
+            merge_env_cfg.get("use_custom_weights")
+        )
 
         fields_override = _sanitize_config_field_list(
             merge_env_cfg.get("fields_override") or merge_env_cfg.get("fields")
@@ -600,9 +655,9 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             if fields_override:
                 config_fields = fields_override
 
-            weights_override = _sanitize_numeric_mapping(merge_env_cfg.get("weights"))
-            if weights_override:
-                points.update(weights_override)
+            weights_override = _sanitize_weight_mapping(merge_env_cfg.get("weights"))
+            if custom_weights_enabled and weights_override:
+                weights_map.update(weights_override)
 
             thresholds_override = _sanitize_numeric_mapping(
                 merge_env_cfg.get("thresholds"), upper_keys=True
@@ -635,6 +690,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
 
     return MergeCfg(
         points=points,
+        weights=weights_map,
         thresholds=thresholds,
         triggers=triggers,
         tolerances=tolerances,
@@ -642,6 +698,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         overrides=overrides_mapping,
         allowlist_enforce=allowlist_enforce,
         allowlist_fields=allowlist_fields,
+        use_custom_weights=custom_weights_enabled,
     )
 
 
@@ -1309,9 +1366,9 @@ def score_pair_0_100(
     else:
         B_data = B_bureaus
 
-    total = 0
-    mid_sum = 0
-    identity_sum = 0
+    total = 0.0
+    mid_sum = 0.0
+    identity_sum = 0.0
     parts: Dict[str, int] = {}
     aux: Dict[str, Dict[str, Any]] = {}
     field_matches: Dict[str, bool] = {}
@@ -1320,6 +1377,8 @@ def score_pair_0_100(
         field: False for field in _DATE_FIELDS_ORDER if field in field_sequence
     }
     trigger_events: List[Dict[str, Any]] = []
+    # Snapshot the resolved weights so each field reuses the same multiplier.
+    weights_map = cfg.MERGE_WEIGHTS
 
     acct_match_raw, acct_aux_raw = match_field_best_of_9(
         "account_number", A_data, B_data, cfg
@@ -1340,12 +1399,15 @@ def score_pair_0_100(
 
     acct_level, acct_debug = acctnum_match_level(a_account_str, b_account_str)
     acct_points = int(_ACCOUNT_NUMBER_WEIGHTS.get(acct_level, 0) or 0)
+    weight_account = float(weights_map.get("account_number", 1.0))
     acct_matched = acct_level == "exact_or_known_match"
 
     field_matches["account_number"] = acct_matched
-    parts["account_number"] = acct_points
-    identity_sum += acct_points
-    total += acct_points
+    parts["account_number"] = acct_points if acct_matched else 0
+    if acct_matched:
+        weighted_acct_points = float(acct_points) * weight_account
+        identity_sum += weighted_acct_points
+        total += weighted_acct_points
 
     acct_aux.update(
         {
@@ -1363,15 +1425,15 @@ def score_pair_0_100(
             continue
         matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
         base_points = int(cfg.points.get(field, 0))
-        awarded_points = 0
+        parts[field] = base_points if matched else 0
         if matched:
-            awarded_points = base_points
-            total += awarded_points
+            weight_factor = float(weights_map.get(field, 1.0))
+            weighted_points = float(base_points) * weight_factor
+            total += weighted_points
             if field in _MID_FIELD_SET:
-                mid_sum += awarded_points
+                mid_sum += weighted_points
             if field in _IDENTITY_FIELD_SET:
-                identity_sum += awarded_points
-        parts[field] = awarded_points
+                identity_sum += weighted_points
 
         per_field_aux: Dict[str, Any] = dict(match_aux)
         per_field_aux["matched"] = matched
@@ -1414,14 +1476,14 @@ def score_pair_0_100(
         triggers.append("strong:account_number")
         strong_triggered = True
         trigger_events.append(
-            {
-                "kind": "strong",
-                "details": {
-                    "field": "account_number",
-                    "level": acct_level,
-                },
-            }
-        )
+                    {
+                        "kind": "strong",
+                        "details": {
+                            "field": "account_number",
+                            "level": acct_level,
+                        },
+                    }
+                )
 
     mid_threshold = int(cfg.triggers.get("MERGE_AI_ON_MID_K", 0))
     if mid_sum >= mid_threshold and mid_threshold > 0:
@@ -1490,11 +1552,11 @@ def score_pair_0_100(
             decision = "ai"
 
     result = {
-        "total": int(total),
+        "total": float(total),
         "parts": parts,
-        "mid_sum": int(mid_sum),
-        "identity_sum": int(identity_sum),
-        "identity_score": int(identity_sum),
+        "mid_sum": float(mid_sum),
+        "identity_sum": float(identity_sum),
+        "identity_score": float(identity_sum),
         "dates_all": dates_all,
         "aux": aux,
         "triggers": triggers,

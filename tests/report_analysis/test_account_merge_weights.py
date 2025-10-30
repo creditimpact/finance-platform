@@ -1,5 +1,8 @@
 """Tests guarding merge scoring weights from unintended changes."""
 
+import pytest
+
+from backend.config.merge_config import reset_merge_config_cache
 from backend.core.logic.report_analysis.account_merge import (
     get_merge_cfg,
     score_pair_0_100,
@@ -39,3 +42,38 @@ def test_score_pair_does_not_mutate_points() -> None:
     score_pair_0_100({}, {}, cfg)
 
     assert cfg.points == before == _EXPECTED_POINTS
+
+
+def test_custom_weights_respected(monkeypatch) -> None:
+    """When enabled via ENV the custom weights replace the defaults."""
+
+    monkeypatch.setenv("MERGE_ENABLED", "1")
+    monkeypatch.setenv("MERGE_USE_CUSTOM_WEIGHTS", "1")
+    monkeypatch.setenv("MERGE_WEIGHTS_JSON", "{\"balance_owed\": 0.75}")
+    reset_merge_config_cache()
+
+    cfg = get_merge_cfg()
+
+    assert cfg.use_custom_weights is True
+    assert cfg.points == _EXPECTED_POINTS
+    assert cfg.MERGE_WEIGHTS["balance_owed"] == pytest.approx(0.75)
+    assert cfg.MERGE_WEIGHTS["account_type"] == pytest.approx(1.0)
+
+    reset_merge_config_cache()
+
+
+def test_custom_weights_disabled(monkeypatch) -> None:
+    """Flagged off custom weights must fall back to the static snapshot."""
+
+    monkeypatch.setenv("MERGE_ENABLED", "1")
+    monkeypatch.setenv("MERGE_USE_CUSTOM_WEIGHTS", "0")
+    monkeypatch.setenv("MERGE_WEIGHTS_JSON", "{\"balance_owed\": 99}")
+    reset_merge_config_cache()
+
+    cfg = get_merge_cfg()
+
+    assert cfg.use_custom_weights is False
+    assert cfg.points == _EXPECTED_POINTS
+    assert cfg.MERGE_WEIGHTS["balance_owed"] == pytest.approx(1.0)
+
+    reset_merge_config_cache()

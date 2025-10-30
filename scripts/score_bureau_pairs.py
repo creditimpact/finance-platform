@@ -12,7 +12,10 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from backend.core.logic.report_analysis.account_merge import score_all_pairs_0_100
+from backend.core.logic.report_analysis.account_merge import (
+    get_merge_cfg,
+    score_all_pairs_0_100,
+)
 from backend.core.merge.acctnum import normalize_level
 
 
@@ -32,7 +35,7 @@ class ScoreComputationResult:
     merge_tags: Dict[int, Dict[str, Any]]
     rows: List[Dict[str, Any]]
 
-FIELD_SEQUENCE: Tuple[str, ...] = (
+_DEFAULT_FIELD_SEQUENCE: Tuple[str, ...] = (
     "balance_owed",
     "account_number",
     "last_payment",
@@ -48,6 +51,16 @@ FIELD_SEQUENCE: Tuple[str, ...] = (
     "date_opened",
     "closed_date",
 )
+
+
+def _field_sequence() -> Tuple[str, ...]:
+    """Resolve the active field ordering using the merge configuration."""
+
+    cfg = get_merge_cfg()
+    fields = getattr(cfg, "fields", None)
+    if fields:
+        return tuple(fields)
+    return _DEFAULT_FIELD_SEQUENCE
 
 
 def _discover_account_indices(accounts_dir: Path) -> List[int]:
@@ -69,7 +82,7 @@ def _discover_account_indices(accounts_dir: Path) -> List[int]:
 
 def _format_top_parts(parts: Mapping[str, int], limit: int = 5) -> str:
     sortable = []
-    for field in FIELD_SEQUENCE:
+    for field in _field_sequence():
         try:
             points = int(parts.get(field, 0) or 0)
         except (TypeError, ValueError):
@@ -86,7 +99,7 @@ def _format_top_parts(parts: Mapping[str, int], limit: int = 5) -> str:
 
 def _format_matched_pairs(mapping: Mapping[str, Sequence[str]]) -> str:
     parts: List[str] = []
-    for field in FIELD_SEQUENCE:
+    for field in _field_sequence():
         pair = mapping.get(field)
         if not pair:
             continue
@@ -98,7 +111,7 @@ def _format_matched_pairs(mapping: Mapping[str, Sequence[str]]) -> str:
 
 def _sanitize_parts(parts: Optional[Mapping[str, Any]]) -> Dict[str, int]:
     sanitized: Dict[str, int] = {}
-    for field in FIELD_SEQUENCE:
+    for field in _field_sequence():
         value = 0
         if isinstance(parts, Mapping):
             try:
@@ -132,7 +145,7 @@ def _extract_aux_payload(aux: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 acct_digits_len_b = acct_digits_len_b
 
-        for field in FIELD_SEQUENCE:
+        for field in _field_sequence():
             field_aux = aux.get(field)
             if not isinstance(field_aux, Mapping):
                 continue

@@ -4,6 +4,7 @@ from backend.core.logic.report_analysis import account_merge
 def _make_cfg(*, threshold: int = 999, triggers=None) -> account_merge.MergeCfg:
     return account_merge.MergeCfg(
         points={},
+        weights={},
         thresholds={"AI_THRESHOLD": threshold},
         triggers=triggers or {},
         tolerances={},

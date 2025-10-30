@@ -35,6 +35,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # be toggled on without requiring explicit overrides.
     "fields_override": list(DEFAULT_FIELDS),
     "allowlist_enforce": False,
+    # Custom weights are opt-in to preserve legacy scoring when disabled.
+    "use_custom_weights": False,
     "weights": {},
     "thresholds": {},
     "overrides": {},

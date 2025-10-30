@@ -1,4 +1,6 @@
 import importlib
+import json
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +10,7 @@ from backend.core.logic.report_analysis import problem_detection as pd
 from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
 from backend.core.logic.report_analysis.problem_case_builder import (
     _build_bureaus_payload_from_stagea,
+    build_problem_cases,
 )
 
 
@@ -126,3 +129,46 @@ def test_stagea_bureaus_payload_includes_original_creditor():
     assert bureaus_payload["transunion"]["original_creditor"] == "PALISADES"
     assert bureaus_payload["experian"]["original_creditor"] == ""
     assert bureaus_payload["equifax"]["original_creditor"] == "EQ VALUE"
+
+
+def test_stagea_build_problem_cases_writes_original_creditor(tmp_path):
+    sid = "sess1"
+    accounts_dir = tmp_path / "traces" / "blocks" / sid / "accounts_table"
+    accounts_dir.mkdir(parents=True, exist_ok=True)
+
+    triad_fields = {
+        "transunion": ensure_all_keys({"original_creditor": "PALISADES FUNDING CORP"}),
+        "experian": ensure_all_keys({"original_creditor": ""}),
+        "equifax": ensure_all_keys({"original_creditor": ""}),
+    }
+    two_year = {"transunion": "YYNN", "experian": "", "equifax": ""}
+    seven_year = {
+        "transunion": {"late30": 1, "late60": 0, "late90": 0, "late120": 0},
+        "experian": {},
+        "equifax": {},
+    }
+    account_data = {
+        "account_index": 1,
+        "triad_fields": triad_fields,
+        "two_year_payment_history": two_year,
+        "seven_year_history": seven_year,
+        "triad": {"order": ["transunion", "experian", "equifax"]},
+        "lines": [],
+    }
+    accounts_path = accounts_dir / "accounts_from_full.json"
+    accounts_path.write_text(
+        json.dumps({"accounts": [account_data]}), encoding="utf-8"
+    )
+
+    candidates = [{"account_index": 1, "account_id": "acc1"}]
+    build_problem_cases(sid, candidates, root=tmp_path)
+
+    bureaus_path = tmp_path / "runs" / sid / "cases" / "accounts" / "1" / "bureaus.json"
+    payload = json.loads(bureaus_path.read_text(encoding="utf-8"))
+
+    assert payload["transunion"]["original_creditor"] == "PALISADES FUNDING CORP"
+    assert payload["experian"]["original_creditor"] == ""
+    assert payload["equifax"]["original_creditor"] == ""
+    assert payload["order"] == ["transunion", "experian", "equifax"]
+    assert payload["two_year_payment_history"] == two_year
+    assert payload["seven_year_history"] == seven_year

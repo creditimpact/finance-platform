@@ -1,9 +1,10 @@
 from pathlib import Path
 
+import importlib
 import pytest
 
 from backend.pipeline.runs import RUNS_ROOT_ENV
-from tests.test_split_accounts_from_tsv import _run_split
+from tests.test_split_accounts_from_tsv import _override_stagea_flags, _run_split
 
 
 @pytest.fixture(autouse=True)
@@ -240,3 +241,13 @@ def test_stagea_space_delimited_account_fields(
                 assert triad_fields[bureau][key] not in {"", None}
 
     assert "TRIAD_TAIL_SPACE_SPLIT" in caplog.text
+
+
+def test_space_splitter_colonless_tu_only() -> None:
+    with _override_stagea_flags(STAGEA_COLONLESS_TU_SPLIT="1"):
+        from backend.core.logic.report_analysis import block_exporter
+
+        module = importlib.reload(block_exporter)
+        result = module._split_vals("PALISADES FUNDING CORP -- --", 3)
+
+    assert result == ["PALISADES FUNDING CORP", "", ""]

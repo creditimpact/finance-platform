@@ -13,6 +13,7 @@ import logging
 import os
 import re
 from collections import OrderedDict
+from collections.abc import MutableMapping
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
@@ -24,6 +25,7 @@ from backend.core.logic.report_analysis.problem_extractor import (
     build_rule_fields_from_triad,
     load_stagea_accounts_from_manifest,
 )
+from backend.config import STAGEA_ORIGCRED_POST_EXTRACT
 
 from backend.core.logic.report_analysis.account_merge import (
     choose_best_partner,
@@ -135,6 +137,73 @@ def _sanitize_bureaus(data: Mapping[str, Any] | None) -> Dict[str, Any]:
     for bureau, payload in (data or {}).items():
         cleaned[bureau] = _sanitize_bureau_fields(payload)
     return cleaned
+
+
+_ORIGCRED_DASH_TOKENS = {"--", "—", "–"}
+_RAW_ORIGCRED_PATTERN = re.compile(
+    r"original\s+creditor(?:\s+\d+)?(?:\s*[:：]\s*|\s+)(?P<value>.+?)\s+(?:--|—|–)\s+(?:--|—|–)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _iter_raw_line_texts(raw_lines: Iterable[Any]) -> Iterable[str]:
+    for entry in raw_lines or []:
+        text: Any | None = None
+        if isinstance(entry, Mapping):
+            text = entry.get("text")
+        elif isinstance(entry, (str, bytes)):
+            text = entry
+        elif entry is not None:
+            text = str(entry)
+        if text is None:
+            continue
+        try:
+            text_str = str(text)
+        except Exception:
+            continue
+        if text_str.strip():
+            yield text_str
+
+
+def try_scan_raw_triads_for_original_creditor(raw_lines: Iterable[Any]) -> str | None:
+    """Best-effort extraction of TU original creditor from raw triad rows."""
+
+    for raw_text in _iter_raw_line_texts(raw_lines):
+        normalized = " ".join(raw_text.replace("：", ":").split())
+        match = _RAW_ORIGCRED_PATTERN.search(normalized)
+        if not match:
+            continue
+        candidate = match.group("value").strip()
+        if candidate and candidate not in _ORIGCRED_DASH_TOKENS:
+            return candidate
+    return None
+
+
+def _maybe_backfill_original_creditor(
+    triad_fields: Any, raw_lines: Iterable[Any]
+) -> None:
+    if not STAGEA_ORIGCRED_POST_EXTRACT:
+        return
+    if not isinstance(triad_fields, MutableMapping):
+        return
+    tu_fields = triad_fields.get("transunion")
+    if not isinstance(tu_fields, MutableMapping):
+        return
+
+    existing = tu_fields.get("original_creditor")
+    existing_str = ""
+    if existing is not None:
+        existing_str = str(existing).strip()
+
+    if existing_str and existing_str not in _ORIGCRED_DASH_TOKENS:
+        return
+
+    fallback = try_scan_raw_triads_for_original_creditor(raw_lines)
+    if not fallback:
+        return
+
+    tu_fields["original_creditor"] = fallback
+    logger.info("TRIAD_ORIGCRED_POST_EXTRACT_FILLED value=%r", fallback)
 
 
 def _normalize_str_list(values: Any) -> List[str]:
@@ -397,6 +466,8 @@ def _build_problem_cases_lean(
 
         raw_lines = list(account.get("lines") or [])
         _write_json(account_dir / pointers["raw"], raw_lines)
+
+        _maybe_backfill_original_creditor(account.get("triad_fields"), raw_lines)
 
         bureaus_payload = _build_bureaus_payload_from_stagea(account)
         _write_json(account_dir / pointers["bureaus"], bureaus_payload)

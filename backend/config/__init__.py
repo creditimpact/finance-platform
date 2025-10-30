@@ -367,6 +367,16 @@ CASESTORE_PARSER_LOG_PARITY = env_bool("CASESTORE_PARSER_LOG_PARITY", True)
 
 # Stage A Case Store migration flags
 ENABLE_CASESTORE_STAGEA = env_bool("ENABLE_CASESTORE_STAGEA", True)
+STAGEA_LABEL_PREFIX_MATCH = env_bool("STAGEA_LABEL_PREFIX_MATCH", True)
+STAGEA_COLONLESS_TU_SPLIT = env_bool("STAGEA_COLONLESS_TU_SPLIT", True)
+STAGEA_ORIGCRED_POST_EXTRACT = env_bool("STAGEA_ORIGCRED_POST_EXTRACT", False)
+
+logger.info(
+    "StageA flags: prefix_match=%s colonless_tu_split=%s origcred_post_extract=%s",
+    STAGEA_LABEL_PREFIX_MATCH,
+    STAGEA_COLONLESS_TU_SPLIT,
+    STAGEA_ORIGCRED_POST_EXTRACT,
+)
 
 # Stage A detection mode
 PROBLEM_DETECTION_ONLY = env_bool("PROBLEM_DETECTION_ONLY", True)

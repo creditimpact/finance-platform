@@ -1790,7 +1790,48 @@ def _score_pair_points_mode(
 
     ignored_fields = [field for field in field_sequence if field not in _POINTS_MODE_FIELD_SET]
 
+    def _coerce_threshold(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    ai_threshold = _coerce_threshold(getattr(cfg, "ai_points_threshold", 3.0), 3.0)
+    direct_threshold = _coerce_threshold(getattr(cfg, "direct_points_threshold", 5.0), 5.0)
+    conflicts = list(_detect_amount_conflicts(A_data, B_data, cfg))
+    has_conflict = bool(conflicts)
+
+    triggers: List[str] = []
+    trigger_events: List[Dict[str, Any]] = []
+    decision = "different"
+
+    if total_points >= direct_threshold > 0 and not has_conflict:
+        decision = "auto"
+        triggers.append("points:direct")
+        trigger_events.append(
+            {
+                "kind": "points_direct",
+                "details": {
+                    "score_points": float(total_points),
+                    "threshold": float(direct_threshold),
+                },
+            }
+        )
+    elif total_points >= ai_threshold > 0:
+        decision = "ai"
+        triggers.append("points:ai")
+        trigger_events.append(
+            {
+                "kind": "points_ai",
+                "details": {
+                    "score_points": float(total_points),
+                    "threshold": float(ai_threshold),
+                },
+            }
+        )
+
     return {
+        "total": float(total_points),
         "score_points": float(total_points),
         "score_legacy": None,
         "points_mode": True,
@@ -1802,6 +1843,15 @@ def _score_pair_points_mode(
         "field_aux": field_aux,
         "allowlist_fields": _POINTS_MODE_FIELD_ALLOWLIST,
         "ignored_fields": tuple(ignored_fields),
+        "parts": {field: field_contributions.get(field, 0.0) for field in evaluated_fields},
+        "conflicts": conflicts,
+        "triggers": triggers,
+        "decision": decision,
+        "trigger_events": trigger_events,
+        "dates_all": False,
+        "mid_sum": 0.0,
+        "identity_sum": 0.0,
+        "identity_score": 0.0,
     }
 
 
@@ -2279,7 +2329,24 @@ def score_all_pairs_0_100(
             debug_pair=should_debug_pair,
         )
 
-        total_score = int(result.get("total", 0) or 0)
+        points_mode_active = bool(getattr(cfg, "points_mode", False))
+        try:
+            score_points = float(result.get("score_points", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            score_points = 0.0
+        if points_mode_active:
+            total_score_value = score_points
+        else:
+            try:
+                total_score_value = float(result.get("total", 0) or 0.0)
+            except (TypeError, ValueError):
+                total_score_value = 0.0
+
+        try:
+            total_score_int = int(total_score_value)
+        except (TypeError, ValueError):
+            total_score_int = 0
+
         sanitized_parts = _sanitize_parts(result.get("parts"), cfg)
         aux_payload = _build_aux_payload(result.get("aux", {}), cfg=cfg)
 
@@ -2371,7 +2438,7 @@ def score_all_pairs_0_100(
             "sid": sid,
             "i": left,
             "j": right,
-            "total": total_score,
+            "total": total_score_value,
             "parts": sanitized_parts,
             "acctnum_level": acct_level,
             "matched_pairs": aux_payload.get("by_field_pairs", {}),
@@ -2380,7 +2447,10 @@ def score_all_pairs_0_100(
         score_log["decision"] = str(result.get("decision", "different"))
         logger.info("MERGE_V2_SCORE %s", json.dumps(score_log, sort_keys=True))
 
-        score_message = f"SCORE {left}-{right} = {total_score}"
+        if points_mode_active:
+            score_message = f"SCORE {left}-{right} = {total_score_value:.3f}"
+        else:
+            score_message = f"SCORE {left}-{right} = {total_score_int}"
         logger.info(score_message)
         _candidate_logger.info(score_message)
 
@@ -2405,7 +2475,7 @@ def score_all_pairs_0_100(
             "i": left,
             "j": right,
             "decision": str(result.get("decision", "different")),
-            "total": total_score,
+            "total": total_score_value,
             "triggers": list(result.get("triggers", [])),
             "conflicts": list(result.get("conflicts", [])),
         }
@@ -2417,7 +2487,14 @@ def score_all_pairs_0_100(
 
         level_value = _sanitize_acct_level(level_value)
 
-        allowed = total_score >= ai_threshold
+        if points_mode_active:
+            try:
+                ai_points_threshold = float(getattr(cfg, "ai_points_threshold", 3.0) or 0.0)
+            except (TypeError, ValueError):
+                ai_points_threshold = 0.0
+            allowed = total_score_value >= ai_points_threshold
+        else:
+            allowed = total_score_int >= ai_threshold
 
         if level_value in _STRONG_MATCH_LEVELS:
             matches_strong += 1
@@ -2434,7 +2511,7 @@ def score_all_pairs_0_100(
                 "right": int(right),
                 "account": f"{left}-{right}",
                 "level": level_value,
-                "score": total_score,
+                "score": total_score_value,
                 "digit_conflicts": digit_conflict,
                 "alnum_conflicts": alnum_conflict,
                 "allowed": allowed,
@@ -2460,7 +2537,7 @@ def score_all_pairs_0_100(
             highlights.update(
                 {
                     "acctnum_level": level_value,
-                    "total": total_score,
+                    "total": total_score_value,
                     "dates_all": dates_all_equal,
                 }
             )

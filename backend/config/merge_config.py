@@ -35,6 +35,17 @@ DEFAULT_FIELDS: List[str] = [
 logger = logging.getLogger(__name__)
 
 
+POINTS_MODE_DEFAULT_WEIGHTS: Dict[str, float] = {
+    "account_number": 1.0,
+    "date_opened": 1.0,
+    "balance_owed": 3.0,
+    "account_type": 0.5,
+    "account_status": 0.5,
+    "history_2y": 1.0,
+    "history_7y": 1.0,
+}
+
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "enabled": False,
     "fields": list(DEFAULT_FIELDS),
@@ -310,15 +321,30 @@ def _resolve_fields(
 def _resolve_tolerances(config: Dict[str, Any]) -> Dict[str, Any]:
     """Collect tolerance-related values from the raw environment configuration."""
 
+    source = config.get("tolerances")
+    if not isinstance(source, Mapping):
+        source = {}
+
+    def _lookup(key: str, fallback_key: str) -> Any:
+        if key in source:
+            return source.get(key)
+        return config.get(fallback_key)
+
     return {
-        "date_days": _coerce_int(config.get("tol_date_days")),
-        "balance_abs": _coerce_float(config.get("tol_balance_abs")),
-        "balance_ratio": _coerce_float(config.get("tol_balance_ratio")),
-        "accountnumber_match_minlen": _coerce_int(
-            config.get("accountnumber_match_minlen")
+        "MERGE_TOL_DATE_DAYS": _coerce_int(
+            _lookup("MERGE_TOL_DATE_DAYS", "tol_date_days")
         ),
-        "history_similarity_threshold": _coerce_float(
-            config.get("history_similarity_threshold")
+        "MERGE_TOL_BALANCE_ABS": _coerce_float(
+            _lookup("MERGE_TOL_BALANCE_ABS", "tol_balance_abs")
+        ),
+        "MERGE_TOL_BALANCE_RATIO": _coerce_float(
+            _lookup("MERGE_TOL_BALANCE_RATIO", "tol_balance_ratio")
+        ),
+        "MERGE_ACCOUNTNUMBER_MATCH_MINLEN": _coerce_int(
+            _lookup("MERGE_ACCOUNTNUMBER_MATCH_MINLEN", "accountnumber_match_minlen")
+        ),
+        "MERGE_HISTORY_SIMILARITY_THRESHOLD": _coerce_float(
+            _lookup("MERGE_HISTORY_SIMILARITY_THRESHOLD", "history_similarity_threshold")
         ),
     }
 
@@ -370,21 +396,34 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
 
     fields_override = _normalize_fields(raw_config.get("fields_override"))
     configured_fields = _normalize_fields(raw_config.get("fields"))
+    effective_allowlist_enforce = allowlist_enforce or points_mode
+
     fields = _resolve_fields(
-        allowlist_enforce=allowlist_enforce,
+        allowlist_enforce=effective_allowlist_enforce,
         override=fields_override,
         configured_fields=configured_fields,
     )
 
     use_custom_weights = _coerce_bool(raw_config.get("use_custom_weights"))
-    weights_source = raw_config.get("weights") if use_custom_weights else {}
+    weights_source: Any = {}
+    if points_mode:
+        weights_source = raw_config.get("weights")
+        if not isinstance(weights_source, Mapping) or not weights_source:
+            weights_source = dict(POINTS_MODE_DEFAULT_WEIGHTS)
+    elif use_custom_weights:
+        weights_source = raw_config.get("weights")
     weights = _normalize_weights(
-        weights_source, allowlist_enforce=allowlist_enforce, fields=fields
+        weights_source,
+        allowlist_enforce=effective_allowlist_enforce,
+        fields=fields,
     )
 
     tolerances = _resolve_tolerances(raw_config)
 
     processed_raw = dict(raw_config)
+    processed_raw["use_custom_weights"] = bool(
+        raw_config.get("use_custom_weights")
+    ) or bool(points_mode)
     processed_raw["fields_override"] = fields_override
 
     global _MERGE_CONFIG_LOGGED

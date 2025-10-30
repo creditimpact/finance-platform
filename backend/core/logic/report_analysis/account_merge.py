@@ -39,7 +39,7 @@ from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.runflow import runflow_event, steps_pair_topn
 from backend.core.runflow_spans import end_span, span_step, start_span
-from backend.config.merge_config import get_merge_config
+from backend.config.merge_config import DEFAULT_FIELDS, get_merge_config
 # NOTE: do not import validation_builder at module import-time.
 # We'll lazy-import inside the function to avoid circular imports.
 from backend.core.logic.validation_requirements import (
@@ -1228,19 +1228,34 @@ _AMOUNT_CONFLICT_FIELDS = {
 }
 _TYPE_FIELDS = {"creditor_type", "account_type", "account_status"}
 
-_POINTS_MODE_FIELD_ALLOWLIST: Tuple[str, ...] = (
-    "account_number",
-    "date_opened",
-    "balance_owed",
-    "account_type",
-    "account_status",
-    "history_2y",
-    "history_7y",
-)
-_POINTS_MODE_FIELD_SET: Set[str] = set(_POINTS_MODE_FIELD_ALLOWLIST)
+_POINTS_MODE_FIELD_ALLOWLIST: Tuple[str, ...] = tuple(DEFAULT_FIELDS)
 
 _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK = 3
 _POINTS_MODE_DIAGNOSTICS_EMITTED = 0
+
+
+def _resolve_points_mode_allowlist(cfg: MergeCfg) -> Tuple[str, ...]:
+    """Return the active allowlist for points mode constrained to supported fields."""
+
+    configured = tuple(getattr(cfg, "MERGE_FIELDS_OVERRIDE", ()) or ())
+    if not configured:
+        fields_attr = getattr(cfg, "fields", ()) or ()
+        configured = tuple(fields_attr)
+    if not configured:
+        configured = _POINTS_MODE_FIELD_ALLOWLIST
+
+    allowed: List[str] = []
+    seen: Set[str] = set()
+    allowed_defaults = set(_POINTS_MODE_FIELD_ALLOWLIST)
+    for field in configured:
+        field_name = str(field)
+        if field_name in allowed_defaults and field_name not in seen:
+            allowed.append(field_name)
+            seen.add(field_name)
+
+    if not allowed:
+        return _POINTS_MODE_FIELD_ALLOWLIST
+    return tuple(allowed)
 
 
 def _normalize_field_value(field: str, value: Any) -> Optional[Any]:
@@ -1831,7 +1846,9 @@ def _score_pair_points_mode(
 ) -> Dict[str, Any]:
     """Compute the allow-listed weighted score for points mode."""
 
-    evaluated_fields = [field for field in field_sequence if field in _POINTS_MODE_FIELD_SET]
+    allowlist_fields = _resolve_points_mode_allowlist(cfg)
+    allowlist_set = set(allowlist_fields)
+    evaluated_fields = [field for field in field_sequence if field in allowlist_set]
     field_matches: Dict[str, float] = {}
     field_contributions: Dict[str, float] = {}
     field_weights: Dict[str, float] = {}
@@ -1907,7 +1924,7 @@ def _score_pair_points_mode(
                 contribution,
             )
 
-    ignored_fields = [field for field in field_sequence if field not in _POINTS_MODE_FIELD_SET]
+    ignored_fields = [field for field in field_sequence if field not in allowlist_set]
 
     def _coerce_threshold(value: Any, default: float) -> float:
         try:
@@ -1979,7 +1996,7 @@ def _score_pair_points_mode(
         "field_weights": {field: field_weights.get(field, 0.0) for field in evaluated_fields},
         "field_breakdown": field_breakdown,
         "field_aux": field_aux,
-        "allowlist_fields": _POINTS_MODE_FIELD_ALLOWLIST,
+        "allowlist_fields": allowlist_fields,
         "ignored_fields": tuple(ignored_fields),
         "parts": {field: field_contributions.get(field, 0.0) for field in evaluated_fields},
         "conflicts": conflicts,

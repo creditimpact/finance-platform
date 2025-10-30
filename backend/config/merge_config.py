@@ -59,6 +59,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "points_mode": False,
     "ai_points_threshold": 3.0,
     "direct_points_threshold": 5.0,
+    # Emit per-pair diagnostics for the first N comparisons when points mode
+    # is active so behaviour can be audited without enabling verbose logging.
+    "points_diagnostics_limit": 3,
 }
 
 ALLOWLIST_FIELDS: List[str] = list(DEFAULT_FIELDS)
@@ -80,6 +83,7 @@ class MergeConfig(Mapping[str, Any]):
         fields: List[str],
         weights: Dict[str, float],
         tolerances: Dict[str, Any],
+        points_diagnostics_limit: int,
     ) -> None:
         self._raw: Dict[str, Any] = dict(raw)
         self.points_mode = points_mode
@@ -89,6 +93,7 @@ class MergeConfig(Mapping[str, Any]):
         self.fields = list(fields)
         self.weights = dict(weights)
         self.tolerances = dict(tolerances)
+        self.points_diagnostics_limit = int(max(points_diagnostics_limit, 0))
 
         # Surface structured values through the mapping interface for backward
         # compatibility with existing dictionary-based access patterns.
@@ -101,6 +106,7 @@ class MergeConfig(Mapping[str, Any]):
                 "fields": list(self.fields),
                 "weights": dict(self.weights),
                 "tolerances": dict(self.tolerances),
+                "points_diagnostics_limit": self.points_diagnostics_limit,
             }
         )
 
@@ -354,6 +360,13 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
     direct_points_threshold = (
         _coerce_float(raw_config.get("direct_points_threshold"), 5.0) or 5.0
     )
+    diagnostics_limit = _coerce_int(
+        raw_config.get("points_diagnostics_limit"),
+        int(DEFAULT_CONFIG["points_diagnostics_limit"]),
+    )
+    if diagnostics_limit is None:
+        diagnostics_limit = int(DEFAULT_CONFIG["points_diagnostics_limit"])
+    diagnostics_limit = max(int(diagnostics_limit), 0)
 
     fields_override = _normalize_fields(raw_config.get("fields_override"))
     configured_fields = _normalize_fields(raw_config.get("fields"))
@@ -376,7 +389,19 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
 
     global _MERGE_CONFIG_LOGGED
     if not _MERGE_CONFIG_LOGGED:
-        message = f"Merge config resolved fields={fields} weights={weights}"
+        message = (
+            "[MERGE] Config points_mode=%s ai_threshold=%.2f direct_threshold=%.2f "
+            "fields=%s weights=%s tolerances=%s diagnostics_limit=%s"
+            % (
+                points_mode,
+                float(ai_points_threshold),
+                float(direct_points_threshold),
+                fields,
+                weights,
+                tolerances,
+                diagnostics_limit,
+            )
+        )
         logger.info(message)
         print(message)
         _MERGE_CONFIG_LOGGED = True
@@ -390,6 +415,7 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
         fields=fields,
         weights=weights,
         tolerances=tolerances,
+        points_diagnostics_limit=diagnostics_limit,
     )
 
 

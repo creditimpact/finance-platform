@@ -8,7 +8,7 @@ import os
 import re
 from collections import defaultdict
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
@@ -38,6 +38,7 @@ from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.runflow import runflow_event, steps_pair_topn
 from backend.core.runflow_spans import end_span, span_step, start_span
+from backend.config.merge_config import get_merge_config
 # NOTE: do not import validation_builder at module import-time.
 # We'll lazy-import inside the function to avoid circular imports.
 from backend.core.logic.validation_requirements import (
@@ -348,6 +349,8 @@ class MergeCfg:
     thresholds: Mapping[str, int]
     triggers: Mapping[str, Union[int, str, bool]]
     tolerances: Mapping[str, Union[int, float]]
+    fields: Sequence[str] = field(default_factory=tuple)
+    overrides: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def threshold(self) -> int:
@@ -402,6 +405,91 @@ _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
     "COUNT_ZERO_PAYMENT_MATCH": 0,
     "CA_DATE_MONTH_TOL": 6,
 }
+
+
+def _merge_env_state(config: Mapping[str, Any]) -> tuple[bool, bool]:
+    """Return ``(explicit_enabled, merge_enabled)`` for the new env config."""
+
+    present_raw = config.get("_present_keys")
+    if isinstance(present_raw, (set, frozenset, list, tuple)):
+        present = {str(item).lower() for item in present_raw if item is not None}
+    else:
+        present = set()
+
+    explicit_enabled = "enabled" in present
+    if explicit_enabled:
+        # The feature is explicitly controlled via MERGE_ENABLED; coerce truthiness.
+        return True, bool(config.get("enabled"))
+
+    # When MERGE_ENABLED is absent we preserve legacy behaviour (feature on).
+    return False, True
+
+
+def _sanitize_config_field_list(candidate: Any) -> Tuple[str, ...]:
+    """Return a normalized sequence of fields from the merge env config."""
+
+    if not isinstance(candidate, (list, tuple, set)):
+        return ()
+
+    sanitized: list[str] = []
+    seen: Set[str] = set()
+    for entry in candidate:
+        if entry is None:
+            continue
+        name = str(entry).strip()
+        if not name:
+            continue
+        lower = name.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        sanitized.append(name)
+    return tuple(sanitized)
+
+
+def _sanitize_numeric_mapping(candidate: Any, *, upper_keys: bool = False) -> Dict[str, int]:
+    """Coerce numeric mapping payloads into ``Dict[str, int]`` values."""
+
+    if not isinstance(candidate, Mapping):
+        return {}
+
+    result: Dict[str, int] = {}
+    for key, value in candidate.items():
+        if key is None:
+            continue
+        name = str(key).strip()
+        if not name:
+            continue
+        if upper_keys:
+            name = name.upper()
+        try:
+            result[name] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _sanitize_overrides_mapping(candidate: Any) -> Dict[str, Any]:
+    """Return a shallow copy of overrides when a mapping is provided."""
+
+    if not isinstance(candidate, Mapping):
+        return {}
+
+    return {str(key): value for key, value in candidate.items() if key is not None}
+
+
+def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
+    """Resolve the active field sequence, falling back to legacy defaults."""
+
+    if cfg is not None and getattr(cfg, "fields", None):
+        return tuple(cfg.fields)
+
+    current_cfg = get_merge_cfg()
+    if getattr(current_cfg, "fields", None):
+        return tuple(current_cfg.fields)
+
+    return _FIELD_SEQUENCE
+
 
 def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     """Return merge configuration using environment overrides when provided."""
@@ -461,11 +549,47 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         tolerances["COUNT_ZERO_PAYMENT_MATCH"]
     )
 
+    config_fields: Tuple[str, ...] = _FIELD_SEQUENCE
+    overrides_mapping: Dict[str, Any] = {}
+
+    if env is None:
+        # Load merge-specific configuration when running against real env vars.
+        merge_env_cfg = get_merge_config()
+        explicit_enabled, merge_enabled = _merge_env_state(merge_env_cfg)
+
+        if explicit_enabled and merge_enabled:
+            fields_override = _sanitize_config_field_list(merge_env_cfg.get("fields"))
+            if fields_override:
+                config_fields = fields_override
+
+            weights_override = _sanitize_numeric_mapping(merge_env_cfg.get("weights"))
+            if weights_override:
+                points.update(weights_override)
+
+            thresholds_override = _sanitize_numeric_mapping(
+                merge_env_cfg.get("thresholds"), upper_keys=True
+            )
+            if thresholds_override:
+                thresholds.update(thresholds_override)
+
+            overrides_mapping = _sanitize_overrides_mapping(
+                merge_env_cfg.get("overrides")
+            )
+        else:
+            # When MERGE_ENABLED is absent or disabled we retain legacy fields.
+            config_fields = _FIELD_SEQUENCE
+            overrides_mapping = {}
+    else:
+        config_fields = _FIELD_SEQUENCE
+        overrides_mapping = {}
+
     return MergeCfg(
         points=points,
         thresholds=thresholds,
         triggers=triggers,
         tolerances=tolerances,
+        fields=config_fields,
+        overrides=overrides_mapping,
     )
 
 
@@ -1139,7 +1263,10 @@ def score_pair_0_100(
     parts: Dict[str, int] = {}
     aux: Dict[str, Dict[str, Any]] = {}
     field_matches: Dict[str, bool] = {}
-    date_matches: Dict[str, bool] = {field: False for field in _DATE_FIELDS_ORDER}
+    field_sequence = _field_sequence_from_cfg(cfg)
+    date_matches: Dict[str, bool] = {
+        field: False for field in _DATE_FIELDS_ORDER if field in field_sequence
+    }
     trigger_events: List[Dict[str, Any]] = []
 
     acct_match_raw, acct_aux_raw = match_field_best_of_9(
@@ -1179,7 +1306,7 @@ def score_pair_0_100(
     )
     aux["account_number"] = acct_aux
 
-    for field in _FIELD_SEQUENCE:
+    for field in field_sequence:
         if field == "account_number":
             continue
         matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
@@ -1345,13 +1472,22 @@ def score_all_pairs_0_100(
 ) -> Dict[int, Dict[int, Dict[str, Any]]]:
     """Score all unordered account pairs for a case run."""
 
+    merge_env_cfg = get_merge_config()
+    explicit_enabled, merge_enabled = _merge_env_state(merge_env_cfg)
+    if explicit_enabled and not merge_enabled:
+        # When MERGE_ENABLED=0 we honour the guardrail and skip scoring entirely.
+        logger.info("Merge disabled via ENV sid=%s", sid)
+        return {}
+
     runs_root = Path(runs_root)
     merge_paths = get_merge_paths(runs_root, sid, create=True)
     packs_dir = merge_paths.packs_dir
     log_file = merge_paths.log_file
     pairs_index_path = merge_paths.base / "pairs_index.json"
     cfg = get_merge_cfg()
-    ai_threshold = AI_PACK_SCORE_THRESHOLD
+    ai_threshold = int(
+        cfg.thresholds.get("AI_THRESHOLD", AI_PACK_SCORE_THRESHOLD)
+    )
     requested_raw = list(idx_list) if idx_list is not None else []
     requested_indices: List[int] = []
     for raw_idx in requested_raw:
@@ -1489,8 +1625,8 @@ def score_all_pairs_0_100(
         )
 
         total_score = int(result.get("total", 0) or 0)
-        sanitized_parts = _sanitize_parts(result.get("parts"))
-        aux_payload = _build_aux_payload(result.get("aux", {}))
+        sanitized_parts = _sanitize_parts(result.get("parts"), cfg)
+        aux_payload = _build_aux_payload(result.get("aux", {}), cfg=cfg)
 
         acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
         raw_aux = result.get("aux") if isinstance(result.get("aux"), Mapping) else {}
@@ -1921,7 +2057,9 @@ def choose_best_partner(
     return best_map
 
 
-def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
+def _build_aux_payload(
+    aux: Mapping[str, Any], *, cfg: Optional[MergeCfg] = None
+) -> Dict[str, Any]:
     acct_level = _sanitize_acct_level(None)
     by_field_pairs: Dict[str, List[str]] = {}
     matched_fields: Dict[str, bool] = {"account_number": False}
@@ -1950,7 +2088,7 @@ def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 acct_digits_len_b = acct_digits_len_b
 
-        for field in _FIELD_SEQUENCE:
+        for field in _field_sequence_from_cfg(cfg):
             field_aux = aux.get(field) if isinstance(aux, Mapping) else None
             if not isinstance(field_aux, Mapping):
                 continue
@@ -2029,9 +2167,11 @@ def _build_ai_highlights(result: Mapping[str, Any] | None) -> Dict[str, Any]:
     }
 
 
-def _sanitize_parts(parts: Optional[Mapping[str, Any]]) -> Dict[str, int]:
+def _sanitize_parts(
+    parts: Optional[Mapping[str, Any]], cfg: Optional[MergeCfg] = None
+) -> Dict[str, int]:
     values: Dict[str, int] = {}
-    for field in _FIELD_SEQUENCE:
+    for field in _field_sequence_from_cfg(cfg):
         value = 0
         if isinstance(parts, Mapping):
             try:
@@ -2824,12 +2964,14 @@ def _merge_tag_from_best(
     partner_scores: Mapping[int, Mapping[str, Any]],
     best_info: Mapping[str, Any],
 ) -> Dict[str, Any]:
+    cfg = get_merge_cfg()
+    field_sequence = _field_sequence_from_cfg(cfg)
     best_partner = best_info.get("partner_index")
     best_result = best_info.get("result")
     tiebreaker = str(best_info.get("tiebreaker") or "none")
 
     if not isinstance(best_partner, int) or not isinstance(best_result, Mapping):
-        parts = {field: 0 for field in _FIELD_SEQUENCE}
+        parts = {field: 0 for field in field_sequence}
         merge_tag = {
             "group_id": f"g{idx}",
             "decision": "different",
@@ -2848,8 +2990,8 @@ def _merge_tag_from_best(
     decision = str(best_result.get("decision", "different"))
     triggers = list(best_result.get("triggers", []))
     conflicts = list(best_result.get("conflicts", []))
-    parts = _sanitize_parts(best_result.get("parts"))
-    aux_payload = _build_aux_payload(best_result.get("aux", {}))
+    parts = _sanitize_parts(best_result.get("parts"), cfg)
+    aux_payload = _build_aux_payload(best_result.get("aux", {}), cfg=cfg)
     acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
 
     score_entries = _build_score_entries(partner_scores, best_partner)

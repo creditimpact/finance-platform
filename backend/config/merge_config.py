@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 from functools import lru_cache
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 # Base prefix for all merge related environment variables.
 MERGE_PREFIX = "MERGE_"
@@ -87,6 +87,7 @@ def _build_merge_config() -> Dict[str, Any]:
     """Construct the merge configuration from environment variables."""
 
     config: Dict[str, Any] = dict(DEFAULT_CONFIG)
+    present_keys: Set[str] = set()
 
     for key, raw_value in os.environ.items():
         if not key.startswith(MERGE_PREFIX):
@@ -101,6 +102,11 @@ def _build_merge_config() -> Dict[str, Any]:
 
         # Update the runtime configuration using the normalized key.
         config[short_key] = parsed_value
+        # Track which keys were explicitly provided so that callers can
+        # distinguish default values from environment overrides.
+        present_keys.add(short_key)
+
+    config["_present_keys"] = frozenset(present_keys)
 
     return config
 

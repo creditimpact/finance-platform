@@ -392,6 +392,29 @@ class MergeCfg:
 
         return self.weights
 
+    @property
+    def MERGE_SCORE_THRESHOLD(self) -> int:
+        """Return the active merge score cutoff with AUTO fallback."""
+
+        def _coerce(value: Any) -> Optional[int]:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        # Prefer the explicit MERGE_SCORE_THRESHOLD when provided via env config.
+        primary = _coerce(self.thresholds.get("MERGE_SCORE_THRESHOLD"))
+        if primary is not None:
+            return primary
+
+        # Fall back to the historic AUTO_MERGE_THRESHOLD for backward compatibility.
+        fallback = _coerce(self.thresholds.get("AUTO_MERGE_THRESHOLD"))
+        if fallback is not None:
+            return fallback
+
+        # Final defensive guard keeps the contract stable even on bad inputs.
+        return 0
+
 
 _POINT_DEFAULTS: Dict[str, int] = {
     "balance_owed": 31,
@@ -413,6 +436,8 @@ _POINT_DEFAULTS: Dict[str, int] = {
 _THRESHOLD_DEFAULTS: Dict[str, int] = {
     "AI_THRESHOLD": 27,
     "AUTO_MERGE_THRESHOLD": 70,
+    # Default merge score cutoff keeps legacy behaviour when the new env flag is absent.
+    "MERGE_SCORE_THRESHOLD": 70,
 }
 
 _TRIGGER_DEFAULTS: Dict[str, Union[int, str, bool]] = {
@@ -1535,7 +1560,8 @@ def score_pair_0_100(
         if conflict not in conflicts:
             conflicts.append(conflict)
 
-    auto_threshold = int(cfg.thresholds.get("AUTO_MERGE_THRESHOLD", 0))
+    # Honour the runtime-configurable merge score cutoff with legacy fallback.
+    auto_threshold = int(cfg.MERGE_SCORE_THRESHOLD)
     has_hard_conflict = bool(conflicts)
 
     decision = "different"

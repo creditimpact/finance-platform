@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from backend.core.logic.report_analysis import account_merge
 
 
@@ -48,11 +50,16 @@ def test_hard_pairs_bypass_per_account_caps(tmp_path, monkeypatch) -> None:
     built_pairs = _all_pairs(scores)
     assert built_pairs == {(28, 29), (28, 39), (29, 39)}
 
+    cfg = account_merge.get_merge_cfg()
+    acct_weight = pytest.approx(
+        getattr(cfg, "MERGE_WEIGHTS", {}).get("account_number", 0.0)
+    )
+
     for left, right in built_pairs:
         result = scores[left][right]
-        acct_aux = result["aux"]["account_number"]
+        acct_aux = result["field_aux"]["account_number"]
         assert acct_aux["acctnum_level"] == "exact_or_known_match"
-        assert result["total"] >= account_merge.POINTS_ACCTNUM_VISIBLE
+        assert result["field_contributions"]["account_number"] == acct_weight
 
 
 def test_account_number_points_open_score_gate(tmp_path, monkeypatch) -> None:
@@ -70,8 +77,13 @@ def test_account_number_points_open_score_gate(tmp_path, monkeypatch) -> None:
     scores = account_merge.score_all_pairs_0_100(sid, [0, 1], runs_root=tmp_path)
 
     result = scores[0][1]
-    acct_aux = result["aux"]["account_number"]
+    acct_aux = result["field_aux"]["account_number"]
 
-    assert result["total"] == account_merge.POINTS_ACCTNUM_VISIBLE
+    cfg = account_merge.get_merge_cfg()
+    acct_weight = pytest.approx(
+        getattr(cfg, "MERGE_WEIGHTS", {}).get("account_number", 0.0)
+    )
+
+    assert result["total"] == acct_weight
     assert acct_aux["acctnum_level"] == "exact_or_known_match"
-    assert "strong:account_number" in result["triggers"]
+    assert result["triggers"] == []

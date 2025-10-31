@@ -39,7 +39,11 @@ from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.runflow import runflow_event, steps_pair_topn
 from backend.core.runflow_spans import end_span, span_step, start_span
-from backend.config.merge_config import DEFAULT_FIELDS, get_merge_config
+from backend.config.merge_config import (
+    DEFAULT_FIELDS,
+    POINTS_MODE_DEFAULT_WEIGHTS,
+    get_merge_config,
+)
 # NOTE: do not import validation_builder at module import-time.
 # We'll lazy-import inside the function to avoid circular imports.
 from backend.core.logic.validation_requirements import (
@@ -73,7 +77,6 @@ __all__ = [
     "coerce_score_value",
     "detect_points_mode_from_payload",
     "normalize_parts_for_serialization",
-    "POINTS_ACCTNUM_VISIBLE",
 ]
 
 
@@ -641,69 +644,30 @@ def _sanitize_overrides_mapping(candidate: Any) -> Dict[str, Any]:
 
 
 def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
-    """Resolve the active field sequence, falling back to legacy defaults."""
+    """Resolve the active field sequence constrained to supported points fields."""
 
-    if cfg is None:
-        current_cfg = get_merge_cfg()
-    else:
-        current_cfg = cfg
+    current_cfg = cfg or get_merge_cfg()
 
-    fields_attr = getattr(current_cfg, "fields", None)
-    if fields_attr:
-        fields: Tuple[str, ...] = tuple(fields_attr)
-    else:
-        use_legacy_defaults = bool(
-            not getattr(current_cfg, "allowlist_enforce", False)
-            and not getattr(current_cfg, "points_mode", False)
-        )
-        if use_legacy_defaults:
-            fields = _FIELD_SEQUENCE
-        else:
-            fields = tuple(getattr(current_cfg, "allowlist_fields", ()) or ())
-    # When ``cfg`` was not provided we continue with the cached instance so
-    # allowlist state remains in sync for filtering.
-    cfg = current_cfg
+    configured_fields = tuple(getattr(current_cfg, "field_sequence", ()) or ())
+    if not configured_fields:
+        configured_fields = tuple(getattr(current_cfg, "fields", ()) or ())
+    if not configured_fields:
+        configured_fields = tuple(DEFAULT_FIELDS)
 
-    allowlist_enforced = bool(getattr(cfg, "MERGE_ALLOWLIST_ENFORCE", False))
-    if allowlist_enforced:
-        # Allowlist enforcement locks the active sequence to the configured list
-        # without appending legacy extras or optional toggles. The allowlist is
-        # sourced directly from the environment-driven configuration so legacy
-        # fallbacks cannot leak back in when enforcement is active.
-        allowlist: Tuple[str, ...] = tuple(getattr(cfg, "allowlist_fields", ()) or ())
-        logger.debug("Merge active fields: %s", list(allowlist))
-        return allowlist
+    allowlist_fields = tuple(getattr(current_cfg, "allowlist_fields", ()) or ())
+    if allowlist_fields:
+        defaults = set(DEFAULT_FIELDS)
+        filtered = tuple(field for field in allowlist_fields if field in defaults)
+        if filtered:
+            logger.debug("Merge active fields: %s", list(filtered))
+            return filtered
 
-    override_fields = tuple(getattr(cfg, "MERGE_FIELDS_OVERRIDE", ()) or ())
-    override_lookup = {str(name) for name in override_fields if name}
+    defaults = set(DEFAULT_FIELDS)
+    filtered = tuple(field for field in configured_fields if field in defaults)
+    if filtered:
+        return filtered
 
-    allow_optional_original_creditor = bool(
-        getattr(cfg, "MERGE_USE_ORIGINAL_CREDITOR", False)
-        and "original_creditor" in override_lookup
-    )
-    allow_optional_creditor_name = bool(
-        getattr(cfg, "MERGE_USE_CREDITOR_NAME", False)
-        and "creditor_name" in override_lookup
-    )
-
-    # Allow optional fields to be appended without mutating the cached tuple when
-    # the allowlist is not being enforced.
-    field_list: List[str] = list(fields)
-
-    def include_field(name: str) -> None:
-        """Append ``name`` to the active sequence when not already present."""
-
-        if name not in field_list:
-            field_list.append(name)
-
-    if allow_optional_original_creditor:
-        # Future toggle makes ``original_creditor`` available when explicitly enabled.
-        include_field("original_creditor")
-    if allow_optional_creditor_name:
-        # Future toggle makes ``creditor_name`` available when explicitly enabled.
-        include_field("creditor_name")
-
-    return tuple(field_list)
+    return tuple(DEFAULT_FIELDS)
 
 
 def resolve_identity_debt_fields(
@@ -770,12 +734,12 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     triggers["MERGE_AI_ON_BALOWED_EXACT"] = _read_env_flag(
         env_mapping,
         "MERGE_AI_ON_BALOWED_EXACT",
-        False,
+        True,
     )
     triggers["MERGE_AI_ON_HARD_ACCTNUM"] = _read_env_flag(
         env_mapping,
         "MERGE_AI_ON_HARD_ACCTNUM",
-        False,
+        True,
     )
     triggers["MERGE_AI_ON_MID_K"] = _read_env_int(
         env_mapping,
@@ -861,11 +825,11 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
 
         weights_map = dict(getattr(merge_env_cfg, "weights_map", {}))
         if legacy_defaults_allowed and not weights_map:
-            weights_map = {field: 1.0 for field in _FIELD_SEQUENCE}
+            weights_map = {field: 1.0 for field in _POINTS_MODE_FIELD_ALLOWLIST}
 
         if legacy_defaults_allowed:
-            config_fields = _FIELD_SEQUENCE
-            allowlist_fields = _FIELD_SEQUENCE
+            config_fields = _POINTS_MODE_FIELD_ALLOWLIST
+            allowlist_fields = _POINTS_MODE_FIELD_ALLOWLIST
         else:
             config_fields = tuple()
             allowlist_fields = tuple()
@@ -880,7 +844,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             elif configured_fields:
                 config_fields = configured_fields
             elif legacy_defaults_allowed:
-                config_fields = _FIELD_SEQUENCE
+                config_fields = _POINTS_MODE_FIELD_ALLOWLIST
 
             if points_mode_active:
                 weights_map = dict(getattr(merge_env_cfg, "weights_map", {}))
@@ -909,7 +873,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         else:
             # When MERGE_ENABLED is absent or disabled we retain legacy fields.
             if legacy_defaults_allowed:
-                config_fields = _FIELD_SEQUENCE
+                config_fields = _POINTS_MODE_FIELD_ALLOWLIST
             overrides_mapping = {}
 
         if fields_override:
@@ -924,7 +888,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             allowlist_enforce = bool(getattr(merge_env_cfg, "allowlist_enforce", False))
         # Fall back to legacy fields when no override is provided.
         if not allowlist_fields and legacy_defaults_allowed and not points_mode_locked:
-            allowlist_fields = _FIELD_SEQUENCE
+            allowlist_fields = _POINTS_MODE_FIELD_ALLOWLIST
     else:
         points_mode_active = _read_env_flag(env_mapping, "MERGE_POINTS_MODE", False)
         allowlist_enforce = _read_env_flag(env_mapping, "MERGE_ALLOWLIST_ENFORCE", False)
@@ -932,9 +896,9 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         legacy_defaults_allowed = not allowlist_enforce and not points_mode_active
 
         if legacy_defaults_allowed:
-            weights_map = {field: 1.0 for field in _FIELD_SEQUENCE}
-            config_fields = _FIELD_SEQUENCE
-            allowlist_fields = _FIELD_SEQUENCE
+            weights_map = {field: 1.0 for field in _POINTS_MODE_FIELD_ALLOWLIST}
+            config_fields = _POINTS_MODE_FIELD_ALLOWLIST
+            allowlist_fields = _POINTS_MODE_FIELD_ALLOWLIST
         else:
             weights_map = {}
             config_fields = tuple()
@@ -982,6 +946,10 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     allowlist_fields = tuple(allowlist_fields)
     allowlist_lookup: Set[str] = set(allowlist_fields)
     override_lookup: Set[str] = {str(name) for name in fields_override if name}
+
+    points_mode_active = True
+    points_mode_locked = True
+    legacy_defaults_allowed = False
 
     allow_optional_original_creditor = bool(
         merge_use_original_creditor
@@ -1040,6 +1008,14 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     if allowlist_enforce:
         allowed_field_set = set(allowlist_fields)
         weights_map = {name: weight for name, weight in weights_map.items() if name in allowed_field_set}
+
+    if not weights_map:
+        resolved_fields = allowlist_fields or config_fields or _POINTS_MODE_FIELD_ALLOWLIST
+        weights_map = {
+            field: float(POINTS_MODE_DEFAULT_WEIGHTS.get(field, 0.0))
+            for field in resolved_fields
+            if field in POINTS_MODE_DEFAULT_WEIGHTS
+        }
 
     config_fields = tuple(config_fields)
     allowlist_fields = tuple(allowlist_fields)
@@ -1276,38 +1252,6 @@ _DATE_FIELDS_DET = {
     "date_opened",
     "closed_date",
 }
-_FIELD_SEQUENCE = (
-    "balance_owed",
-    "account_number",
-    "last_payment",
-    "past_due_amount",
-    "high_balance",
-    "creditor_type",
-    "account_type",
-    "payment_amount",
-    "credit_limit",
-    "last_verified",
-    "date_of_last_activity",
-    "date_reported",
-    "date_opened",
-    "closed_date",
-)
-_MID_FIELD_SET = {
-    "last_payment",
-    "past_due_amount",
-    "high_balance",
-    "creditor_type",
-    "account_type",
-    "payment_amount",
-    "credit_limit",
-}
-_DATE_FIELDS_ORDER = (
-    "last_verified",
-    "date_of_last_activity",
-    "date_reported",
-    "date_opened",
-    "closed_date",
-)
 _AMOUNT_CONFLICT_FIELDS = {
     "balance_owed",
     "payment_amount",
@@ -1322,9 +1266,6 @@ _POINTS_MODE_FIELD_ALLOWLIST: Tuple[str, ...] = tuple(DEFAULT_FIELDS)
 _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK = 3
 _POINTS_MODE_DIAGNOSTICS_EMITTED = 0
 
-# Legacy base contribution for visible account-number matches (0-100 scale).
-POINTS_ACCTNUM_VISIBLE = 28
-
 
 def _resolve_points_mode_allowlist(cfg: MergeCfg) -> Tuple[str, ...]:
     """Return the active allowlist for points mode constrained to supported fields."""
@@ -1332,32 +1273,20 @@ def _resolve_points_mode_allowlist(cfg: MergeCfg) -> Tuple[str, ...]:
     if cfg is None:
         return _POINTS_MODE_FIELD_ALLOWLIST
 
-    candidate_sequences: Sequence[Sequence[str]] = (
+    candidates: Sequence[Sequence[str]] = (
+        tuple(getattr(cfg, "allowlist_fields", ()) or ()),
         tuple(getattr(cfg, "field_sequence", ()) or ()),
-        tuple(getattr(cfg, "MERGE_FIELDS_OVERRIDE", ()) or ()),
         tuple(getattr(cfg, "fields", ()) or ()),
     )
 
-    configured: Tuple[str, ...] = tuple()
-    for sequence in candidate_sequences:
-        if sequence:
-            configured = tuple(sequence)
-            break
-    if not configured:
-        configured = _POINTS_MODE_FIELD_ALLOWLIST
+    defaults = set(_POINTS_MODE_FIELD_ALLOWLIST)
+    for sequence in candidates:
+        filtered = [str(field) for field in sequence if str(field) in defaults]
+        if filtered:
+            # Preserve ordering but ensure uniqueness.
+            return tuple(dict.fromkeys(filtered))
 
-    allowed: List[str] = []
-    seen: Set[str] = set()
-    allowed_defaults = set(_POINTS_MODE_FIELD_ALLOWLIST)
-    for field in configured:
-        field_name = str(field)
-        if field_name in allowed_defaults and field_name not in seen:
-            allowed.append(field_name)
-            seen.add(field_name)
-
-    if not allowed:
-        return _POINTS_MODE_FIELD_ALLOWLIST
-    return tuple(allowed)
+    return _POINTS_MODE_FIELD_ALLOWLIST
 
 
 def _normalize_field_value(field: str, value: Any) -> Optional[Any]:
@@ -1902,13 +1831,10 @@ def _detect_amount_conflicts(
         tol_ratio,
     )
 
-    if getattr(cfg, "points_mode", False):
-        allowed_fields = set(_resolve_points_mode_allowlist(cfg))
-        amount_fields: Iterable[str] = (
-            field for field in _AMOUNT_CONFLICT_FIELDS if field in allowed_fields
-        )
-    else:
-        amount_fields = _AMOUNT_CONFLICT_FIELDS
+    allowed_fields = set(_resolve_points_mode_allowlist(cfg))
+    amount_fields: Iterable[str] = (
+        field for field in _AMOUNT_CONFLICT_FIELDS if field in allowed_fields
+    )
 
     for field in amount_fields:
         values_a = _collect_normalized_field_values(A, field)
@@ -2136,284 +2062,26 @@ def score_pair_0_100(
     else:
         B_data = B_bureaus
 
-    # Determine whether verbose field-by-field logging should occur for this pair.
     if debug_pair is None:
         debug_enabled = bool(cfg.MERGE_DEBUG)
     else:
         debug_enabled = bool(debug_pair)
 
-    field_sequence = _field_sequence_from_cfg(cfg)
+    field_sequence = tuple(_field_sequence_from_cfg(cfg))
     weights_attr = getattr(cfg, "MERGE_WEIGHTS", None)
     if isinstance(weights_attr, Mapping):
         weights_map = dict(weights_attr)
     else:
         weights_map = dict(getattr(cfg, "weights", {}) or {})
 
-    if getattr(cfg, "points_mode", False):
-        return _score_pair_points_mode(
-            A_data,
-            B_data,
-            cfg,
-            field_sequence=field_sequence,
-            weights_map=weights_map,
-            debug_enabled=debug_enabled,
-        )
-
-    total = 0.0
-    mid_sum = 0.0
-    identity_sum = 0.0
-    parts: Dict[str, Union[int, float]] = {}
-    aux: Dict[str, Dict[str, Any]] = {}
-    field_matches: Dict[str, bool] = {}
-    legacy_defaults_allowed = bool(
-        not getattr(cfg, "allowlist_enforce", False)
-        and not getattr(cfg, "points_mode", False)
+    return _score_pair_points_mode(
+        A_data,
+        B_data,
+        cfg,
+        field_sequence=field_sequence,
+        weights_map=weights_map,
+        debug_enabled=debug_enabled,
     )
-    if legacy_defaults_allowed:
-        date_matches: Dict[str, bool] = {
-            field: False for field in _DATE_FIELDS_ORDER if field in field_sequence
-        }
-    else:
-        date_matches = {}
-    trigger_events: List[Dict[str, Any]] = []
-
-    acct_match_raw, acct_aux_raw = match_field_best_of_9(
-        "account_number", A_data, B_data, cfg
-    )
-    acct_aux: Dict[str, Any] = dict(acct_aux_raw) if isinstance(acct_aux_raw, Mapping) else {}
-    best_pair = acct_aux.get("best_pair") if isinstance(acct_aux, Mapping) else None
-    left_pref: Optional[str]
-    right_pref: Optional[str]
-    if isinstance(best_pair, (list, tuple)) and len(best_pair) == 2:
-        left_pref = str(best_pair[0])
-        right_pref = str(best_pair[1])
-    else:
-        left_pref = None
-        right_pref = None
-
-    a_account_str = _extract_account_number_string(A_data, left_pref)
-    b_account_str = _extract_account_number_string(B_data, right_pref)
-
-    acct_level, acct_debug = acctnum_match_level(a_account_str, b_account_str)
-    acct_points = int(cfg.points.get("account_number", 0)) if acct_level == "exact_or_known_match" else 0
-    weight_account = float(weights_map.get("account_number", 1.0))
-    acct_matched = acct_level == "exact_or_known_match"
-
-    field_matches["account_number"] = acct_matched
-    parts["account_number"] = acct_points if acct_matched else 0
-    weighted_acct_points = float(acct_points) * weight_account if acct_matched else 0.0
-    if acct_matched:
-        identity_sum += weighted_acct_points
-        total += weighted_acct_points
-
-    if debug_enabled:
-        # Emit detailed account-number comparison metrics only when debugging is on.
-        logger.info(
-            "[MERGE] Comparing account_number: matched=%s level=%s score=%.2f weight=%.2f base=%s",
-            acct_matched,
-            acct_level,
-            weighted_acct_points,
-            weight_account,
-            acct_points,
-        )
-
-    acct_aux.update(
-        {
-            "acctnum_level": acct_level,
-            "matched": acct_matched,
-            "acctnum_debug": acct_debug,
-            "raw_values": {"a": a_account_str, "b": b_account_str},
-            "threshold_matched": bool(acct_match_raw),
-        }
-    )
-    aux["account_number"] = acct_aux
-
-    for field in field_sequence:
-        if field == "account_number":
-            continue
-        matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
-        base_points = int(cfg.points.get(field, 0))
-        weight_factor = float(weights_map.get(field, 1.0))
-        weighted_points = float(base_points) * weight_factor if matched else 0.0
-        parts[field] = base_points if matched else 0
-        if matched:
-            total += weighted_points
-            if legacy_defaults_allowed and field in _MID_FIELD_SET:
-                mid_sum += weighted_points
-            if legacy_defaults_allowed and field in _IDENTITY_FIELD_SET:
-                identity_sum += weighted_points
-
-        per_field_aux: Dict[str, Any] = dict(match_aux)
-        per_field_aux["matched"] = matched
-        aux[field] = per_field_aux
-        field_matches[field] = matched
-
-        if field in date_matches:
-            date_matches[field] = matched
-
-        if debug_enabled:
-            # Include field comparison metrics with per-field scores for debugging.
-            logger.info(
-                "[MERGE] Comparing %s: matched=%s score=%.2f weight=%.2f base=%s",
-                field,
-                matched,
-                weighted_points,
-                weight_factor,
-                base_points,
-            )
-
-    dates_all = bool(date_matches) and all(date_matches.values())
-
-    triggers: List[str] = []
-    strong_triggered = False
-    mid_triggered = False
-    dates_triggered = False
-    total_triggered = False
-
-    balance_aux = aux.get("balance_owed", {})
-    balance_pair = balance_aux.get("normalized_values") if isinstance(balance_aux, Mapping) else None
-    if (
-        cfg.triggers.get("MERGE_AI_ON_BALOWED_EXACT", True)
-        and field_matches.get("balance_owed")
-        and _both_amounts_positive(balance_pair)
-    ):
-        triggers.append("strong:balance_owed")
-        strong_triggered = True
-        trigger_events.append(
-            {
-                "kind": "strong",
-                "details": {
-                    "field": "balance_owed",
-                    "points": int(cfg.points.get("balance_owed", 0)),
-                },
-            }
-        )
-
-    acctnum_aux = aux.get("account_number", {})
-    acct_level = _sanitize_acct_level(acctnum_aux.get("acctnum_level"))
-    if field_matches.get("account_number") and acct_level == "exact_or_known_match":
-        triggers.append("strong:account_number")
-        strong_triggered = True
-        trigger_events.append(
-                    {
-                        "kind": "strong",
-                        "details": {
-                            "field": "account_number",
-                            "level": acct_level,
-                        },
-                    }
-                )
-
-    mid_threshold = int(cfg.triggers.get("MERGE_AI_ON_MID_K", 0))
-    if mid_sum >= mid_threshold and mid_threshold > 0:
-        triggers.append("mid")
-        mid_triggered = True
-        trigger_events.append(
-            {
-                "kind": "mid",
-                "details": {
-                    "mid_sum": int(mid_sum),
-                    "threshold": int(mid_threshold),
-                },
-            }
-        )
-
-    if cfg.triggers.get("MERGE_AI_ON_ALL_DATES", False) and dates_all:
-        triggers.append("dates")
-        dates_triggered = True
-        trigger_events.append(
-            {
-                "kind": "dates",
-                "details": {
-                    "matched_fields": [
-                        field
-                        for field, matched in date_matches.items()
-                        if matched
-                    ],
-                    "required_all": True,
-                },
-            }
-        )
-
-    ai_threshold = int(cfg.thresholds.get("AI_THRESHOLD", 0))
-    effective_total_threshold = ai_threshold
-    if mid_threshold > 0 and (
-        effective_total_threshold <= 0 or mid_threshold < effective_total_threshold
-    ):
-        effective_total_threshold = mid_threshold
-
-    if total >= effective_total_threshold and effective_total_threshold > 0:
-        triggers.append("total")
-        total_triggered = True
-        trigger_events.append(
-            {
-                "kind": "total",
-                "details": {
-                    "total": int(total),
-                    "threshold": int(effective_total_threshold),
-                    "configured_ai_threshold": int(ai_threshold),
-                    "mid_threshold": int(mid_threshold),
-                },
-            }
-        )
-
-    conflicts: List[str] = []
-    for conflict in _detect_amount_conflicts(A_data, B_data, cfg):
-        if conflict not in conflicts:
-            conflicts.append(conflict)
-
-    # Honour the runtime-configurable merge score cutoff with legacy fallback.
-    auto_threshold = int(cfg.MERGE_SCORE_THRESHOLD)
-    has_hard_conflict = bool(conflicts)
-
-    decision = "different"
-    if total >= auto_threshold and auto_threshold > 0 and not has_hard_conflict:
-        decision = "auto"
-    else:
-        ai_triggered = (
-            strong_triggered
-            or mid_triggered
-            or dates_triggered
-            or total_triggered
-        )
-        if ai_triggered:
-            decision = "ai"
-
-    result = {
-        "total": float(total),
-        "parts": parts,
-        "mid_sum": float(mid_sum),
-        "identity_sum": float(identity_sum),
-        "identity_score": float(identity_sum),
-        "dates_all": dates_all,
-        "aux": aux,
-        "triggers": triggers,
-        "conflicts": conflicts,
-        "decision": decision,
-        "trigger_events": trigger_events,
-    }
-
-    if debug_enabled:
-        passed = bool(decision == "auto")
-        logger.info(
-            "[MERGE] Final decision: passed=%s total=%.2f threshold=%s decision=%s conflicts=%s",
-            passed,
-            float(total),
-            int(auto_threshold),
-            decision,
-            list(conflicts),
-        )
-        logger.info(
-            "[MERGE] Trigger summary: triggers=%s strong=%s mid=%s total_gate=%s dates_all=%s",
-            list(triggers),
-            strong_triggered,
-            mid_triggered,
-            total_triggered,
-            dates_all,
-        )
-
-    return result
-
 
 def _strong_priority(triggers: Iterable[str]) -> int:
     """Return a numeric priority for strong triggers."""

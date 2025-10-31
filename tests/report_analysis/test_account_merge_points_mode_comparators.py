@@ -267,7 +267,7 @@ def test_points_mode_rejects_legacy_point_values(make_points_cfg) -> None:
 
     with pytest.raises(AssertionError):
         account_merge._sanitize_parts(
-            {"account_number": account_merge.POINTS_ACCTNUM_VISIBLE},
+            {"account_number": 100.0},
             cfg,
             points_mode=True,
         )

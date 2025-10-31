@@ -98,7 +98,7 @@ def test_points_mode_account_number_adds_single_point(points_cfg) -> None:
     assert scored["field_contributions"]["account_number"] == pytest.approx(1.0)
 
 
-def test_points_mode_balance_within_tolerance(points_cfg) -> None:
+def test_points_mode_balance_requires_exact_match(points_cfg) -> None:
     custom_cfg = _build_points_cfg()
     custom_cfg.tolerances = dict(custom_cfg.tolerances)
     custom_cfg.tolerances.update({"MERGE_TOL_BALANCE_ABS": 5.0})
@@ -108,8 +108,9 @@ def test_points_mode_balance_within_tolerance(points_cfg) -> None:
 
     scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, custom_cfg)
 
-    assert scored["total"] == pytest.approx(3.0)
-    assert scored["field_contributions"]["balance_owed"] == pytest.approx(3.0)
+    assert scored["total"] == pytest.approx(0.0)
+    assert scored["field_contributions"]["balance_owed"] == pytest.approx(0.0)
+    assert "amount_conflict:balance_owed" in scored["conflicts"]
 
 
 def test_points_mode_ai_and_direct_thresholds(points_cfg, make_points_accounts) -> None:
@@ -151,6 +152,26 @@ def test_points_mode_ai_and_direct_thresholds(points_cfg, make_points_accounts) 
     assert auto_result["total"] == pytest.approx(5.0)
     assert auto_result["decision"] == "auto"
     assert "points:direct" in auto_result["triggers"]
+
+
+def test_points_mode_emits_balance_conflict_without_exact_match(points_cfg) -> None:
+    bureaus_a = _make_bureaus(transunion={"balance_owed": "100"})
+    bureaus_b = _make_bureaus(experian={"balance_owed": "103"})
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["field_contributions"]["balance_owed"] == pytest.approx(0.0)
+    assert "amount_conflict:balance_owed" in scored["conflicts"]
+
+
+def test_points_mode_skips_balance_conflict_with_any_bureau_match(points_cfg) -> None:
+    bureaus_a = _make_bureaus(transunion={"balance_owed": "100"}, experian={"balance_owed": "250"})
+    bureaus_b = _make_bureaus(equifax={"balance_owed": "100"})
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["field_contributions"]["balance_owed"] == pytest.approx(3.0)
+    assert "amount_conflict:balance_owed" not in scored["conflicts"]
 
 
 def test_points_mode_allowlist_filters_unknown_fields(monkeypatch, caplog) -> None:

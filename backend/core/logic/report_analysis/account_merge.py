@@ -10,6 +10,7 @@ from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
@@ -1061,6 +1062,8 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
 
 _AMOUNT_SANITIZE_RE = re.compile(r"[\s$,/]")
 _AMOUNT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+_DECIMAL_ONE = Decimal("1")
+_DECIMAL_HUNDRED = Decimal("100")
 _ACCOUNT_LEVEL_ORDER = {
     "none": 0,
     "exact_or_known_match": 1,
@@ -1611,23 +1614,38 @@ def _match_field_values(
         return max(0.0, min(1.0, float(score))), aux
 
     if field == "balance_owed":
-        tol_abs = _resolve_tolerance_float(
-            cfg,
-            "MERGE_TOL_BALANCE_ABS",
-            0.0,
-        )
-        tol_ratio = _resolve_tolerance_float(
-            cfg,
-            "MERGE_TOL_BALANCE_RATIO",
-            0.0,
-        )
-        matched = match_balance_owed(
-            norm_a,
-            norm_b,
-            tol_abs=tol_abs,
-            tol_ratio=tol_ratio,
-        )
-        aux["tolerance"] = {"abs": tol_abs, "ratio": tol_ratio}
+        points_mode_active = bool(getattr(cfg, "points_mode", False))
+        if points_mode_active:
+            left_cents = normalize_balance_owed_cents(raw_a)
+            right_cents = normalize_balance_owed_cents(raw_b)
+            matched = (
+                left_cents is not None
+                and right_cents is not None
+                and left_cents == right_cents
+            )
+            aux["tolerance"] = {"abs": 0.0, "ratio": 0.0}
+            aux["points_mode_balance_cents"] = (
+                left_cents,
+                right_cents,
+            )
+        else:
+            tol_abs = _resolve_tolerance_float(
+                cfg,
+                "MERGE_TOL_BALANCE_ABS",
+                0.0,
+            )
+            tol_ratio = _resolve_tolerance_float(
+                cfg,
+                "MERGE_TOL_BALANCE_RATIO",
+                0.0,
+            )
+            matched = match_balance_owed(
+                norm_a,
+                norm_b,
+                tol_abs=tol_abs,
+                tol_ratio=tol_ratio,
+            )
+            aux["tolerance"] = {"abs": tol_abs, "ratio": tol_ratio}
         if matched and (_is_zero_amount(norm_a) or _is_zero_amount(norm_b)):
             return _finalize(False, 0.0)
         return _finalize(matched, 1.0 if matched else 0.0)
@@ -1811,6 +1829,28 @@ def _collect_normalized_field_values(
     return values
 
 
+def _collect_balance_cents(
+    bureaus: Mapping[str, Mapping[str, Any]]
+) -> List[int]:
+    values: List[int] = []
+    if not isinstance(bureaus, Mapping):
+        return values
+
+    for bureau_key in ("transunion", "experian", "equifax"):
+        branch = bureaus.get(bureau_key)
+        if not isinstance(branch, Mapping):
+            continue
+        raw_value = branch.get("balance_owed")
+        if is_missing(raw_value):
+            continue
+        cents_value = normalize_balance_owed_cents(raw_value)
+        if cents_value is None:
+            continue
+        values.append(cents_value)
+
+    return values
+
+
 def _detect_amount_conflicts(
     A: Mapping[str, Mapping[str, Any]],
     B: Mapping[str, Mapping[str, Any]],
@@ -1831,31 +1871,45 @@ def _detect_amount_conflicts(
         tol_ratio,
     )
 
+    points_mode_active = bool(getattr(cfg, "points_mode", False))
     allowed_fields = set(_resolve_points_mode_allowlist(cfg))
     amount_fields: Iterable[str] = (
         field for field in _AMOUNT_CONFLICT_FIELDS if field in allowed_fields
     )
 
     for field in amount_fields:
-        values_a = _collect_normalized_field_values(A, field)
-        values_b = _collect_normalized_field_values(B, field)
+        if field == "balance_owed" and points_mode_active:
+            values_a = _collect_balance_cents(A)
+            values_b = _collect_balance_cents(B)
+        else:
+            values_a = _collect_normalized_field_values(A, field)
+            values_b = _collect_normalized_field_values(B, field)
         if not values_a or not values_b:
             continue
 
         conflict = True
         if field == "balance_owed":
-            for left in values_a:
-                for right in values_b:
-                    if match_balance_owed(
-                        left,
-                        right,
-                        tol_abs=balance_tol_abs,
-                        tol_ratio=balance_tol_ratio,
-                    ):
-                        conflict = False
+            if points_mode_active:
+                for left in values_a:
+                    for right in values_b:
+                        if left == right:
+                            conflict = False
+                            break
+                    if not conflict:
                         break
-                if not conflict:
-                    break
+            else:
+                for left in values_a:
+                    for right in values_b:
+                        if match_balance_owed(
+                            left,
+                            right,
+                            tol_abs=balance_tol_abs,
+                            tol_ratio=balance_tol_ratio,
+                        ):
+                            conflict = False
+                            break
+                    if not conflict:
+                        break
         else:
             for left in values_a:
                 for right in values_b:
@@ -4348,6 +4402,62 @@ def to_amount(value: Any) -> Optional[float]:
     return number
 
 
+def to_amount_cents(value: Any) -> Optional[int]:
+    """Normalize free-form amount text to cents represented as an integer."""
+
+    if is_missing(value):
+        return None
+
+    decimal_value: Decimal
+
+    if isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)):
+        try:
+            if isinstance(value, float):
+                decimal_value = Decimal(str(value))
+            else:
+                decimal_value = Decimal(int(value))
+        except (ValueError, InvalidOperation):
+            return None
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+
+        negative = False
+        if text.startswith("(") and text.endswith(")"):
+            negative = True
+            text = text[1:-1]
+
+        cleaned = _AMOUNT_SANITIZE_RE.sub("", text)
+        if not cleaned:
+            return None
+
+        match = _AMOUNT_RE.search(cleaned)
+        if not match:
+            return None
+
+        number_text = match.group()
+        try:
+            decimal_value = Decimal(number_text)
+        except InvalidOperation:
+            return None
+
+        if negative and decimal_value >= 0:
+            decimal_value = -decimal_value
+
+    try:
+        scaled = (decimal_value * _DECIMAL_HUNDRED).quantize(
+            _DECIMAL_ONE, rounding=ROUND_HALF_UP
+        )
+    except InvalidOperation:
+        return None
+
+    return int(scaled)
+
+
 def amounts_match(a: Optional[float], b: Optional[float], tol_abs: float, tol_ratio: float) -> bool:
     """Return True when two normalized amounts match within tolerance."""
 
@@ -4363,6 +4473,10 @@ def amounts_match(a: Optional[float], b: Optional[float], tol_abs: float, tol_ra
 
 def normalize_balance_owed(value: Any) -> Optional[float]:
     return to_amount(value)
+
+
+def normalize_balance_owed_cents(value: Any) -> Optional[int]:
+    return to_amount_cents(value)
 
 
 def match_balance_owed(

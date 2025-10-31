@@ -689,9 +689,12 @@ def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
     allowlist_enforced = bool(getattr(cfg, "MERGE_ALLOWLIST_ENFORCE", False))
     if allowlist_enforced:
         # Allowlist enforcement locks the active sequence to the configured list
-        # without appending legacy extras or optional toggles.
-        logger.debug("Merge active fields: %s", list(fields))
-        return fields
+        # without appending legacy extras or optional toggles. The allowlist is
+        # sourced directly from the environment-driven configuration so legacy
+        # fallbacks cannot leak back in when enforcement is active.
+        allowlist: Tuple[str, ...] = tuple(getattr(cfg, "allowlist_fields", ()) or ())
+        logger.debug("Merge active fields: %s", list(allowlist))
+        return allowlist
 
     # Allow optional fields to be appended without mutating the cached tuple when
     # the allowlist is not being enforced.

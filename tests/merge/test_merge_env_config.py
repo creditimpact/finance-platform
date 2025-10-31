@@ -220,3 +220,33 @@ def test_optional_fields_require_allowlist_and_toggle(
     sequence_with_optional = _field_sequence_from_cfg(cfg_with_optional)
 
     assert "creditor_name" in sequence_with_optional
+
+
+def test_optional_fields_disabled_when_toggle_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Allowlisted optional fields must stay inactive when their toggles are off."""
+
+    base_allowlist = [
+        "account_number",
+        "date_opened",
+        "balance_owed",
+        "account_type",
+        "account_status",
+        "history_2y",
+        "history_7y",
+        "creditor_name",
+        "original_creditor",
+    ]
+
+    monkeypatch.setenv("MERGE_ENABLED", "true")
+    monkeypatch.setenv("MERGE_ALLOWLIST_ENFORCE", "true")
+    monkeypatch.setenv("MERGE_FIELDS_OVERRIDE_JSON", json.dumps(base_allowlist))
+    monkeypatch.setenv("MERGE_USE_CREDITOR_NAME", "0")
+    monkeypatch.setenv("MERGE_USE_ORIGINAL_CREDITOR", "0")
+
+    cfg = get_merge_cfg()
+    sequence = _field_sequence_from_cfg(cfg)
+
+    assert "creditor_name" not in sequence
+    assert "original_creditor" not in sequence
+    assert "creditor_name" not in cfg.MERGE_FIELDS_OVERRIDE
+    assert "original_creditor" not in cfg.MERGE_FIELDS_OVERRIDE

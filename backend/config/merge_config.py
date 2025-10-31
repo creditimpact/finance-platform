@@ -10,12 +10,11 @@ are missing.
 from __future__ import annotations
 
 import json
-import os
-from functools import lru_cache
-from collections.abc import Mapping
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
-
 import logging
+import os
+from collections.abc import Mapping
+from functools import lru_cache
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 # Base prefix for all merge related environment variables.
 MERGE_PREFIX = "MERGE_"
@@ -33,6 +32,9 @@ DEFAULT_FIELDS: List[str] = [
 ]
 
 logger = logging.getLogger(__name__)
+
+
+VALID_FIELDS: Set[str] = set(DEFAULT_FIELDS)
 
 
 POINTS_MODE_DEFAULT_WEIGHTS: Dict[str, float] = {
@@ -78,6 +80,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 ALLOWLIST_FIELDS: List[str] = list(DEFAULT_FIELDS)
 
 _MERGE_CONFIG_LOGGED = False
+
+
+class InvalidConfigError(ValueError):
+    """Raised when an environment variable contains an invalid value."""
+
+    def __init__(self, key: str, message: str) -> None:
+        self.key = key
+        super().__init__(message)
+
+    def __str__(self) -> str:  # pragma: no cover - representational only
+        return f"{self.args[0]} ({self.key})"
 
 
 class MergeConfig(Mapping[str, Any]):
@@ -144,17 +157,6 @@ class MergeConfig(Mapping[str, Any]):
 
 
 
-def _parse_json(value: str) -> Any:
-    """Parse JSON value while gracefully handling malformed payloads."""
-
-    try:
-        # We guard json loads so that a malformed value does not crash startup.
-        return json.loads(value)
-    except json.JSONDecodeError:
-        # Fall back to raw string if parsing fails to preserve backward compat.
-        return value
-
-
 def _parse_env_value(env_key: str, raw_value: str) -> Any:
     """Convert a raw environment string into an appropriate Python type."""
 
@@ -162,8 +164,13 @@ def _parse_env_value(env_key: str, raw_value: str) -> Any:
 
     # Automatically decode *_JSON variables first to support structured config.
     if env_key.endswith("_JSON"):
-        parsed = _parse_json(value)
-        return parsed
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise InvalidConfigError(
+                env_key,
+                f"Invalid JSON for {env_key}: {exc.msg}",
+            ) from exc
 
     lowered = value.lower()
     if lowered in {"true", "false"}:
@@ -386,13 +393,22 @@ def _build_merge_config() -> Dict[str, Any]:
 
     config: Dict[str, Any] = dict(DEFAULT_CONFIG)
     present_keys: Set[str] = set()
+    raw_values: Dict[str, str] = {}
+    issues: List[str] = []
 
     for key, raw_value in os.environ.items():
         if not key.startswith(MERGE_PREFIX):
             continue
 
-        parsed_value = _parse_env_value(key, raw_value)
         short_key = key[len(MERGE_PREFIX) :].lower()
+        raw_values[short_key] = raw_value
+
+        try:
+            parsed_value = _parse_env_value(key, raw_value)
+        except InvalidConfigError as exc:
+            logger.warning("[MERGE] %s", exc)
+            issues.append(str(exc))
+            continue
 
         # Normalize *_json keys to expose cleaner dictionary names (e.g., weights).
         if short_key.endswith("_json"):
@@ -405,12 +421,19 @@ def _build_merge_config() -> Dict[str, Any]:
         present_keys.add(short_key)
 
     config["_present_keys"] = frozenset(present_keys)
+    config["_raw_values"] = dict(raw_values)
+    config["_issues"] = tuple(issues)
 
     return config
 
 
 def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
     """Produce the structured ``MergeConfig`` wrapper from raw environment data."""
+
+    present_keys = set(raw_config.get("_present_keys", frozenset()))
+    raw_values: Dict[str, str] = dict(raw_config.get("_raw_values", {}))
+    validation_errors: List[str] = list(raw_config.get("_issues", []))
+    validation_warnings: List[str] = []
 
     allowlist_enforce = _coerce_bool(raw_config.get("allowlist_enforce"))
     points_mode = _coerce_bool(raw_config.get("points_mode"))
@@ -427,6 +450,20 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
     diagnostics_limit = max(int(diagnostics_limit), 0)
 
     fields_override = _normalize_fields(raw_config.get("fields_override"))
+    recognized_override_fields = [field for field in fields_override if field in VALID_FIELDS]
+
+    if "fields_override" in present_keys:
+        raw_override = raw_values.get("fields_override", "")
+        if not raw_override or not raw_override.strip():
+            validation_errors.append(
+                "MERGE_FIELDS_OVERRIDE must be a non-empty comma-separated list of merge fields."
+            )
+        unknown_fields = sorted(set(fields_override) - VALID_FIELDS)
+        if unknown_fields:
+            validation_warnings.append(
+                "MERGE_FIELDS_OVERRIDE includes unrecognized fields: %s" % ", ".join(unknown_fields)
+            )
+
     configured_fields = _normalize_fields(raw_config.get("fields"))
     effective_allowlist_enforce = allowlist_enforce or points_mode
 
@@ -440,12 +477,33 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
     raw_weights: Any = raw_config.get("weights")
     if isinstance(raw_weights, Mapping):
         weights_candidate: Any = dict(raw_weights)
-    else:
+    elif raw_weights is None:
         weights_candidate = {}
+    else:
+        validation_errors.append(
+            "MERGE_WEIGHTS_JSON must be a JSON object mapping fields to numeric weights."
+        )
+        weights_candidate = {}
+
+    override_field_set: Set[str] = (
+        set(recognized_override_fields) if recognized_override_fields else set(fields)
+    )
+    if weights_candidate:
+        extra_weight_keys = sorted(
+            {str(key).strip() for key in weights_candidate.keys()} - override_field_set
+        )
+        if extra_weight_keys:
+            validation_warnings.append(
+                "MERGE_WEIGHTS_JSON provided weights for fields outside MERGE_FIELDS_OVERRIDE: %s"
+                % ", ".join(extra_weight_keys)
+            )
+            for key in list(weights_candidate.keys()):
+                if str(key).strip() in extra_weight_keys:
+                    weights_candidate.pop(key, None)
 
     weights_from_env, invalid_weight_keys = _parse_weights_map(
         weights_candidate,
-        valid_fields=fields,
+        valid_fields=recognized_override_fields or fields,
     )
     if invalid_weight_keys:
         logger.warning(
@@ -482,10 +540,23 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
     tolerances = _resolve_tolerances(raw_config)
 
     processed_raw = dict(raw_config)
+    processed_raw.pop("_present_keys", None)
+    processed_raw.pop("_raw_values", None)
+    processed_raw.pop("_issues", None)
     processed_raw["use_custom_weights"] = bool(
         raw_config.get("use_custom_weights")
     ) or bool(points_mode)
     processed_raw["fields_override"] = fields_override
+
+    for warning in validation_warnings:
+        logger.warning("[MERGE] %s", warning)
+
+    if validation_errors:
+        message = "; ".join(validation_errors)
+        if points_mode:
+            logger.error("[MERGE] %s", message)
+            raise ValueError(f"Invalid merge configuration: {message}")
+        logger.warning("[MERGE] %s", message)
 
     global _MERGE_CONFIG_LOGGED
     if not _MERGE_CONFIG_LOGGED:

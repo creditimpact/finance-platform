@@ -24,7 +24,6 @@ from backend.runflow.counters import (
     frontend_answers_counters as _frontend_answers_counters,
     stage_counts as _stage_counts_from_disk,
 )
-from backend.runflow.umbrella import schedule_note_style_after_validation
 from backend.validation.index_schema import load_validation_index
 from backend.ai.note_style_logging import log_note_style_decision
 
@@ -2575,6 +2574,17 @@ def reconcile_umbrella_barriers(
     _atomic_write_json(runflow_path, data)
 
     try:
+        from backend.runflow.umbrella import schedule_merge_autosend
+
+        schedule_merge_autosend(sid, run_dir=run_dir)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "MERGE_AUTOSEND_STAGE_FAILED sid=%s", sid, exc_info=True
+        )
+
+    try:
+        from backend.runflow.umbrella import schedule_note_style_after_validation
+
         schedule_note_style_after_validation(sid, run_dir=run_dir)
     except Exception:  # pragma: no cover - defensive logging
         log.warning(

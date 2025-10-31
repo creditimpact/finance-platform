@@ -405,13 +405,17 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
     )
 
     use_custom_weights = _coerce_bool(raw_config.get("use_custom_weights"))
+    raw_weights: Any = raw_config.get("weights")
+    if isinstance(raw_weights, Mapping):
+        raw_weights = dict(raw_weights)
+
     weights_source: Any = {}
     if points_mode:
-        weights_source = raw_config.get("weights")
+        weights_source = raw_weights
         if not isinstance(weights_source, Mapping) or not weights_source:
             weights_source = dict(POINTS_MODE_DEFAULT_WEIGHTS)
     elif use_custom_weights:
-        weights_source = raw_config.get("weights")
+        weights_source = raw_weights
     weights = _normalize_weights(
         weights_source,
         allowlist_enforce=effective_allowlist_enforce,
@@ -445,7 +449,7 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
         print(message)
         _MERGE_CONFIG_LOGGED = True
 
-    return MergeConfig(
+    structured = MergeConfig(
         processed_raw,
         points_mode=points_mode,
         ai_points_threshold=float(ai_points_threshold),
@@ -456,6 +460,10 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
         tolerances=tolerances,
         points_diagnostics_limit=diagnostics_limit,
     )
+
+    setattr(structured, "weights_map", dict(structured.weights))
+
+    return structured
 
 
 @lru_cache(maxsize=1)

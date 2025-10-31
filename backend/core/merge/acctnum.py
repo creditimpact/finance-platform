@@ -16,7 +16,6 @@ __all__ = [
     "acctnum_match_level",
     "acctnum_match_visible",
     "acctnum_visible_match",
-    "account_number_weight_contribution",
     "best_account_number_match",
     "match_level",
     "normalize_display",
@@ -33,12 +32,6 @@ _LEVEL_RANK: Dict[str, int] = {
 _MASK_CHARACTERS = frozenset({"*", "X", "x", "•", "#", "∙", "·", "●", "_"})
 _ENDING_IN_PATTERN = re.compile(r"(?i)\bending[\s\-]*in\b")
 _HYPHEN_CHARACTERS = frozenset("-‐‑‒–—―−")
-
-
-def account_number_weight_contribution(*, points_mode: bool = False) -> float:
-    """Return the normalized contribution for matched account numbers."""
-
-    return 1.0 if points_mode else 0.0
 
 
 def _derive_mask_metadata(raw: str, digits: str) -> tuple[str, bool, int]:

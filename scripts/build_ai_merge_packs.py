@@ -5,8 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from collections.abc import Mapping as MappingABC
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence, Union
 
 try:  # pragma: no cover - convenience bootstrap
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -25,6 +26,12 @@ from backend.core.ai.paths import (
     pair_pack_path,
 )
 from backend.core.logic.normalize import last4, normalize_acctnum
+from backend.core.logic.report_analysis.account_merge import (
+    coerce_score_value,
+    detect_points_mode_from_payload,
+    normalize_parts_for_serialization,
+    resolve_identity_debt_fields,
+)
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RunManifest, persist_manifest
 
@@ -59,24 +66,6 @@ def _safe_int(value: object, default: int = 0) -> int:
         return default
 
 
-_IDENTITY_PART_FIELDS = {
-    "account_number",
-    "creditor_type",
-    "date_opened",
-    "closed_date",
-    "date_of_last_activity",
-    "date_reported",
-    "last_verified",
-}
-
-_DEBT_PART_FIELDS = {
-    "balance_owed",
-    "high_balance",
-    "past_due_amount",
-    "last_payment",
-}
-
-
 def _normalize_account_number(value: object) -> str | None:
     if value is None:
         return None
@@ -90,16 +79,27 @@ def _account_last4(value: object) -> str | None:
     return last4(str(value))
 
 
-def _compute_identity_score(parts: Mapping[str, object] | None) -> int:
-    if not isinstance(parts, Mapping):
-        return 0
-    return sum(_safe_int(parts.get(field)) for field in _IDENTITY_PART_FIELDS)
+def _compute_group_score(
+    parts: Mapping[str, object] | None,
+    fields: Iterable[str],
+    *,
+    points_mode: bool,
+) -> Union[int, float]:
+    if not isinstance(parts, MappingABC):
+        return 0.0 if points_mode else 0
 
-
-def _compute_debt_score(parts: Mapping[str, object] | None) -> int:
-    if not isinstance(parts, Mapping):
-        return 0
-    return sum(_safe_int(parts.get(field)) for field in _DEBT_PART_FIELDS)
+    total: Union[int, float] = 0.0 if points_mode else 0
+    for field in fields:
+        value = parts.get(field, 0.0 if points_mode else 0)
+        if isinstance(value, (int, float)):
+            total += value
+            continue
+        try:
+            numeric = float(value) if points_mode else int(value)
+        except (TypeError, ValueError):
+            continue
+        total += numeric
+    return total
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -177,11 +177,30 @@ def main(argv: Sequence[str] | None = None) -> None:
         context_b = context.get("b") if isinstance(context.get("b"), list) else []
         highlights_raw = pack.get("highlights") if isinstance(pack.get("highlights"), dict) else {}
         highlights = dict(highlights_raw)
-        parts = highlights.get("parts") if isinstance(highlights.get("parts"), Mapping) else {}
-        identity_score = _compute_identity_score(parts)
-        debt_score = _compute_debt_score(parts)
+        points_mode_active = detect_points_mode_from_payload(highlights_raw)
+        parts_raw = (
+            highlights.get("parts")
+            if isinstance(highlights.get("parts"), Mapping)
+            else {}
+        )
+        parts_normalized = normalize_parts_for_serialization(
+            parts_raw, points_mode=points_mode_active
+        )
+        identity_fields, debt_fields = resolve_identity_debt_fields()
+        identity_score = _compute_group_score(
+            parts_normalized,
+            identity_fields,
+            points_mode=points_mode_active,
+        )
+        debt_score = _compute_group_score(
+            parts_normalized,
+            debt_fields,
+            points_mode=points_mode_active,
+        )
+        highlights["parts"] = parts_normalized
         highlights["identity_score"] = identity_score
         highlights["debt_score"] = debt_score
+        highlights["points_mode"] = points_mode_active
         pack["highlights"] = highlights
 
         ids_raw = pack.get("ids") if isinstance(pack.get("ids"), dict) else {}
@@ -215,13 +234,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             message["content"] = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             break
 
-        if highlights.get("points_mode"):
-            try:
-                score_total = float(highlights.get("total"))
-            except (TypeError, ValueError):
-                score_total = 0.0
-        else:
-            score_total = _safe_int(highlights.get("total"))
+        score_total = coerce_score_value(
+            highlights.get("total"), points_mode=points_mode_active
+        )
 
         _write_pack(pack_path, pack)
         log.info("PACK_WRITTEN sid=%s file=%s a=%s b=%s", sid, pack_filename, a_idx, b_idx)

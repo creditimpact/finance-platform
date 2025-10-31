@@ -221,9 +221,6 @@ def _configure_candidate_logger(logs_path: Path) -> None:
     _candidate_logger.propagate = False
 
 
-POINTS_ACCTNUM_VISIBLE = 28
-
-
 def _sanitize_acct_level(v: object) -> str:
     s = str(v or "none").strip().lower()
     return (
@@ -451,43 +448,6 @@ class MergeCfg:
             return 0
         return value if value >= 0 else 0
 
-
-_POINT_DEFAULTS: Dict[str, int] = {
-    "balance_owed": 31,
-    "account_number": POINTS_ACCTNUM_VISIBLE,
-    "last_payment": 12,
-    "past_due_amount": 8,
-    "high_balance": 6,
-    "creditor_type": 3,
-    "account_type": 3,
-    "payment_amount": 2,
-    "credit_limit": 1,
-    "last_verified": 1,
-    "date_of_last_activity": 2,
-    "date_reported": 1,
-    "date_opened": 1,
-    "closed_date": 1,
-}
-
-_LEGACY_POINTS_MODE_VALUES: frozenset[float] = frozenset(
-    float(value)
-    for value in _POINT_DEFAULTS.values()
-    if isinstance(value, (int, float)) and float(value) >= 6.0
-)
-
-_THRESHOLD_DEFAULTS: Dict[str, int] = {
-    "AI_THRESHOLD": 27,
-    "AUTO_MERGE_THRESHOLD": 70,
-    # Default merge score cutoff keeps legacy behaviour when the new env flag is absent.
-    "MERGE_SCORE_THRESHOLD": 70,
-}
-
-_TRIGGER_DEFAULTS: Dict[str, Union[int, str, bool]] = {
-    "MERGE_AI_ON_BALOWED_EXACT": 1,
-    "MERGE_AI_ON_HARD_ACCTNUM": 1,
-    "MERGE_AI_ON_MID_K": 26,
-    "MERGE_AI_ON_ALL_DATES": 1,
-}
 
 _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
     "AMOUNT_TOL_ABS": 50.0,
@@ -760,31 +720,31 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     direct_points_threshold = 5.0
     points_diagnostics_limit = _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
 
+    threshold_keys = ("AI_THRESHOLD", "AUTO_MERGE_THRESHOLD", "MERGE_SCORE_THRESHOLD")
     thresholds = {
-        key: _read_env_int(env_mapping, key, default)
-        for key, default in _THRESHOLD_DEFAULTS.items()
+        key: _read_env_int(env_mapping, key, 0) for key in threshold_keys
     }
 
     triggers: Dict[str, Union[int, str, bool]] = {}
     triggers["MERGE_AI_ON_BALOWED_EXACT"] = _read_env_flag(
         env_mapping,
         "MERGE_AI_ON_BALOWED_EXACT",
-        bool(_TRIGGER_DEFAULTS["MERGE_AI_ON_BALOWED_EXACT"]),
+        False,
     )
     triggers["MERGE_AI_ON_HARD_ACCTNUM"] = _read_env_flag(
         env_mapping,
         "MERGE_AI_ON_HARD_ACCTNUM",
-        bool(_TRIGGER_DEFAULTS["MERGE_AI_ON_HARD_ACCTNUM"]),
+        False,
     )
     triggers["MERGE_AI_ON_MID_K"] = _read_env_int(
         env_mapping,
         "MERGE_AI_ON_MID_K",
-        int(_TRIGGER_DEFAULTS["MERGE_AI_ON_MID_K"]),
+        0,
     )
     triggers["MERGE_AI_ON_ALL_DATES"] = _read_env_flag(
         env_mapping,
         "MERGE_AI_ON_ALL_DATES",
-        bool(_TRIGGER_DEFAULTS["MERGE_AI_ON_ALL_DATES"]),
+        False,
     )
 
     tolerances = {
@@ -858,12 +818,10 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         legacy_defaults_allowed = not allowlist_enforce and not points_mode_active
 
         if legacy_defaults_allowed:
-            points = dict(_POINT_DEFAULTS)
-            weights_map = {field: 1.0 for field in points}
+            weights_map = {field: 1.0 for field in _FIELD_SEQUENCE}
             config_fields = _FIELD_SEQUENCE
             allowlist_fields = _FIELD_SEQUENCE
         else:
-            points = {}
             weights_map = {}
             config_fields = tuple()
             allowlist_fields = tuple()
@@ -927,12 +885,10 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         legacy_defaults_allowed = not allowlist_enforce and not points_mode_active
 
         if legacy_defaults_allowed:
-            points = dict(_POINT_DEFAULTS)
-            weights_map = {field: 1.0 for field in points}
+            weights_map = {field: 1.0 for field in _FIELD_SEQUENCE}
             config_fields = _FIELD_SEQUENCE
             allowlist_fields = _FIELD_SEQUENCE
         else:
-            points = {}
             weights_map = {}
             config_fields = tuple()
             allowlist_fields = tuple()
@@ -1052,9 +1008,6 @@ _AMOUNT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 _ACCOUNT_LEVEL_ORDER = {
     "none": 0,
     "exact_or_known_match": 1,
-}
-_ACCOUNT_NUMBER_WEIGHTS = {
-    "exact_or_known_match": POINTS_ACCTNUM_VISIBLE,
 }
 _ACCOUNT_STRONG_LEVELS = {"exact_or_known_match"}
 _MASK_CHARS = {"*", "x", "X", "•", "●"}
@@ -2129,7 +2082,7 @@ def score_pair_0_100(
     b_account_str = _extract_account_number_string(B_data, right_pref)
 
     acct_level, acct_debug = acctnum_match_level(a_account_str, b_account_str)
-    acct_points = int(_ACCOUNT_NUMBER_WEIGHTS.get(acct_level, 0) or 0)
+    acct_points = int(cfg.points.get("account_number", 0)) if acct_level == "exact_or_known_match" else 0
     weight_account = float(weights_map.get("account_number", 1.0))
     acct_matched = acct_level == "exact_or_known_match"
 
@@ -3262,10 +3215,8 @@ def _sanitize_parts(
                 numeric_value = float(raw_value)
             except (TypeError, ValueError):
                 continue
-            assert (
-                numeric_value not in _LEGACY_POINTS_MODE_VALUES
-            ), (
-                "points_mode parts contained legacy points value"
+            assert 0.0 <= numeric_value <= 8.0, (
+                "points_mode parts contained out-of-range value"
                 f" field={field_name!s} value={numeric_value!r}"
             )
 

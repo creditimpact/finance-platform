@@ -851,12 +851,14 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         points_mode_locked = bool(points_mode_active)
         legacy_defaults_allowed = not allowlist_enforce and not points_mode_active
 
-        if legacy_defaults_allowed:
+        weights_map = dict(getattr(merge_env_cfg, "weights_map", {}))
+        if legacy_defaults_allowed and not weights_map:
             weights_map = {field: 1.0 for field in _FIELD_SEQUENCE}
+
+        if legacy_defaults_allowed:
             config_fields = _FIELD_SEQUENCE
             allowlist_fields = _FIELD_SEQUENCE
         else:
-            weights_map = {}
             config_fields = tuple()
             allowlist_fields = tuple()
 
@@ -872,11 +874,14 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             elif legacy_defaults_allowed:
                 config_fields = _FIELD_SEQUENCE
 
-            weights_override = _sanitize_weight_mapping(
-                merge_env_cfg.get("weights")
-            )  # controlled by MERGE_WEIGHTS_JSON
-            if custom_weights_enabled and weights_override:
-                weights_map.update(weights_override)
+            if points_mode_active:
+                weights_map = dict(getattr(merge_env_cfg, "weights_map", {}))
+            else:
+                weights_override = _sanitize_weight_mapping(
+                    merge_env_cfg.get("weights")
+                )  # controlled by MERGE_WEIGHTS_JSON
+                if custom_weights_enabled and weights_override:
+                    weights_map.update(weights_override)
 
             thresholds_override = _sanitize_numeric_mapping(
                 merge_env_cfg.get("thresholds"), upper_keys=True
@@ -967,11 +972,13 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     if allow_optional_original_creditor and "original_creditor" not in points:
         # Optional field participates with zero points until weights are defined.
         points["original_creditor"] = 0
-        weights_map.setdefault("original_creditor", 1.0)
+        if not points_mode_active:
+            weights_map.setdefault("original_creditor", 1.0)
     if allow_optional_creditor_name and "creditor_name" not in points:
         # Optional field participates with zero points until weights are defined.
         points["creditor_name"] = 0
-        weights_map.setdefault("creditor_name", 1.0)
+        if not points_mode_active:
+            weights_map.setdefault("creditor_name", 1.0)
 
     def _with_optional_fields(sequence: Sequence[str]) -> Tuple[str, ...]:
         """Return ``sequence`` plus any optional fields toggled on via config."""
@@ -1028,7 +1035,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         allowlist_fields if (allowlist_enforce or points_mode_locked) else config_fields
     )
     setattr(cfg_obj, "field_sequence", tuple(active_field_sequence))
-    setattr(cfg_obj, "weights_map", dict(getattr(cfg_obj, "MERGE_WEIGHTS", {})))
+    setattr(cfg_obj, "weights_map", dict(weights_map))
 
     return cfg_obj
 

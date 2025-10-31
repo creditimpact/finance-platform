@@ -764,15 +764,20 @@ def _write_decision_tags_resolved(
                         summary_changed = True
 
         if merge_best_tag is not None:
+            points_mode_active = bool(merge_best_tag.get("points_mode"))
             score_total = (
                 merge_best_tag.get("score_total")
                 or merge_best_tag.get("total")
                 or 0
             )
             try:
-                score_total_int = int(score_total)
+                score_total_value = (
+                    float(score_total)
+                    if points_mode_active
+                    else int(score_total)
+                )
             except (TypeError, ValueError):
-                score_total_int = 0
+                score_total_value = 0.0 if points_mode_active else 0
             reasons_raw = merge_best_tag.get("reasons") or []
             if isinstance(reasons_raw, Iterable) and not isinstance(reasons_raw, (str, bytes)):
                 reasons = [str(item) for item in reasons_raw if item is not None]
@@ -795,10 +800,14 @@ def _write_decision_tags_resolved(
                 extras.append("strong")
             mid_value = merge_best_tag.get("mid")
             try:
-                mid_int = int(mid_value)
+                mid_score = (
+                    float(mid_value)
+                    if points_mode_active
+                    else int(mid_value)
+                )
             except (TypeError, ValueError):
-                mid_int = 0
-            if mid_int > 0:
+                mid_score = 0.0 if points_mode_active else 0
+            if mid_score > 0:
                 extras.append("mid")
             extras.append("total")
             unique_reasons: list[str] = []
@@ -821,12 +830,13 @@ def _write_decision_tags_resolved(
                 acctnum_level = normalize_level(acct_val)
             merge_summary: dict[str, object] = {
                 "best_with": other_idx,
-                "score_total": score_total_int,
+                "score_total": score_total_value,
                 "reasons": reasons,
                 "matched_fields": matched_fields,
                 "conflicts": conflicts,
                 "identity_score": identity_score,
                 "debt_score": debt_score,
+                "points_mode": points_mode_active,
             }
             merge_summary["acctnum_level"] = acctnum_level
             summary_payload["merge_scoring"] = merge_summary

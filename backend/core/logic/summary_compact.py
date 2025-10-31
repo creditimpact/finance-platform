@@ -16,6 +16,7 @@ _MERGE_SCORING_ALLOWED = (
     "matched_fields",
     "acctnum_digits_len_a",
     "acctnum_digits_len_b",
+    "points_mode",
 )
 
 _MERGE_EXPLANATION_ALLOWED = (
@@ -162,9 +163,19 @@ def _normalize_merge_scoring(source: Mapping[str, Any] | None) -> dict[str, Any]
     if partner is not None:
         normalized["best_with"] = partner
 
-    score_total = _coerce_int(source.get("score_total"))
-    if score_total is not None:
-        normalized["score_total"] = score_total
+    points_mode_active = bool(source.get("points_mode"))
+    if points_mode_active:
+        try:
+            score_total = float(source.get("score_total"))
+        except (TypeError, ValueError):
+            score_total = None
+        if score_total is not None:
+            normalized["score_total"] = score_total
+            normalized["points_mode"] = True
+    else:
+        score_total = _coerce_int(source.get("score_total"))
+        if score_total is not None:
+            normalized["score_total"] = score_total
 
     reasons_raw = source.get("reasons")
     reasons = _coerce_str_list(reasons_raw)
@@ -176,13 +187,27 @@ def _normalize_merge_scoring(source: Mapping[str, Any] | None) -> dict[str, Any]
     if conflicts or conflicts_raw is not None:
         normalized["conflicts"] = conflicts
 
-    identity_score = _coerce_int(source.get("identity_score"))
-    if identity_score is not None:
-        normalized["identity_score"] = identity_score
+    if points_mode_active:
+        try:
+            identity_score = float(source.get("identity_score"))
+        except (TypeError, ValueError):
+            identity_score = None
+        if identity_score is not None:
+            normalized["identity_score"] = identity_score
+        try:
+            debt_score = float(source.get("debt_score"))
+        except (TypeError, ValueError):
+            debt_score = None
+        if debt_score is not None:
+            normalized["debt_score"] = debt_score
+    else:
+        identity_score = _coerce_int(source.get("identity_score"))
+        if identity_score is not None:
+            normalized["identity_score"] = identity_score
 
-    debt_score = _coerce_int(source.get("debt_score"))
-    if debt_score is not None:
-        normalized["debt_score"] = debt_score
+        debt_score = _coerce_int(source.get("debt_score"))
+        if debt_score is not None:
+            normalized["debt_score"] = debt_score
 
     acctnum_level = _coerce_str(source.get("acctnum_level"))
     if acctnum_level is not None:

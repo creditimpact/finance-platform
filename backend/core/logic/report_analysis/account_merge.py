@@ -2504,12 +2504,19 @@ def score_all_pairs_0_100(
 
         left_bureaus = bureaus_by_idx.get(left, {})
         right_bureaus = bureaus_by_idx.get(right, {})
-        result = score_pair_0_100(
-            left_bureaus,
-            right_bureaus,
-            cfg,
-            debug_pair=should_debug_pair,
-        )
+        if should_debug_pair:
+            result = score_pair_0_100(
+                left_bureaus,
+                right_bureaus,
+                cfg,
+                debug_pair=True,
+            )
+        else:
+            result = score_pair_0_100(
+                left_bureaus,
+                right_bureaus,
+                cfg,
+            )
 
         points_mode_active = bool(getattr(cfg, "points_mode", False))
         try:
@@ -2778,6 +2785,9 @@ def score_all_pairs_0_100(
                 account=f"{left}-{right}",
                 out={"reason": "no_candidates"},
             )
+            if result.get("conflicts"):
+                scores[left].pop(right, None)
+                scores[right].pop(left, None)
 
     for left_pos in range(total_accounts - 1):
         for right_pos in range(left_pos + 1, total_accounts):
@@ -2905,7 +2915,7 @@ def score_all_pairs_0_100(
     }
     logger.debug("MERGE_PAIR_SUMMARY %s", json.dumps(summary_log, sort_keys=True))
 
-    logger.info("CANDIDATE_LOOP_END sid=%s created_packs=%s", sid, created_packs)
+    logger.info("CANDIDATE_LOOP_END sid=%s built_pairs=%s", sid, created_packs)
 
     return scores
 
@@ -2932,7 +2942,7 @@ def choose_best_partner(
                 continue
             triggers = result.get("triggers") or []
             strong_rank = _strong_priority(triggers)
-            total_score = int(result.get("total", 0) or 0)
+            total_score, points_mode_active = _extract_total_from_result(result)
 
             choose = False
             reason = tiebreaker_reason
@@ -2963,6 +2973,8 @@ def choose_best_partner(
             best_score = total_score
             tiebreaker_reason = reason
             best_result = deepcopy(result)
+            if isinstance(best_result, Mapping):
+                best_result["points_mode"] = points_mode_active
 
         best_map[idx] = {
             "partner_index": best_partner,
@@ -3048,7 +3060,7 @@ def _build_aux_payload(
 def _build_ai_highlights(result: Mapping[str, Any] | None) -> Dict[str, Any]:
     result_payload: Mapping[str, Any] = result if isinstance(result, Mapping) else {}
 
-    total = _tag_safe_int(result_payload.get("total"))
+    total, points_mode_active = _extract_total_from_result(result_payload)
 
     triggers_raw = result_payload.get("triggers", []) or []
     if isinstance(triggers_raw, Iterable) and not isinstance(triggers_raw, (str, bytes)):
@@ -3085,7 +3097,81 @@ def _build_ai_highlights(result: Mapping[str, Any] | None) -> Dict[str, Any]:
         "matched_fields": matched_fields,
         "conflicts": conflicts,
         "acctnum_level": acctnum_level,
+        "points_mode": points_mode_active,
     }
+
+
+def _coerce_points_mode_flag(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _detect_points_mode_from_result(result: Optional[Mapping[str, Any]]) -> bool:
+    if not isinstance(result, Mapping):
+        return False
+
+    flag = _coerce_points_mode_flag(result.get("points_mode"))
+    if flag is not None:
+        return flag
+
+    if "score_points" in result:
+        return True
+
+    parts_candidate = result.get("parts")
+    if isinstance(parts_candidate, Mapping):
+        for candidate in parts_candidate.values():
+            try:
+                value = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if not float(value).is_integer():
+                return True
+
+    return False
+
+
+def _coerce_score_value(value: Any, *, points_mode: bool) -> Union[int, float]:
+    if points_mode:
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_total_from_result(
+    result: Optional[Mapping[str, Any]]
+) -> Tuple[Union[int, float], bool]:
+    points_mode_active = _detect_points_mode_from_result(result)
+    raw_total: Any = 0.0 if points_mode_active else 0
+    if isinstance(result, Mapping):
+        if points_mode_active:
+            raw_total = result.get("score_points", result.get("total", 0.0))
+        else:
+            raw_total = result.get("total", 0)
+    total_value = _coerce_score_value(raw_total, points_mode=points_mode_active)
+    return total_value, points_mode_active
+
+
+def _extract_mid_from_result(
+    result: Optional[Mapping[str, Any]], *, points_mode: bool
+) -> Union[int, float]:
+    raw_mid: Any = 0.0 if points_mode else 0
+    if isinstance(result, Mapping):
+        raw_mid = result.get("mid_sum")
+        if raw_mid is None:
+            raw_mid = result.get("mid", raw_mid)
+    return _coerce_score_value(raw_mid, points_mode=points_mode)
 
 
 def _sanitize_parts(
@@ -3130,71 +3216,25 @@ def _sanitize_parts(
 def _build_pair_entry(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, Any]:
     """Build a stable payload describing the merge relationship with a partner."""
 
-    total: Union[int, float] = 0
-    mid_value: Union[int, float] = 0
-    dates_all = False
-    triggers_raw: Iterable[Any] = []
-    decision = "different"
-    aux_payload: Mapping[str, Any] = {}
-    parts_payload: Mapping[str, Any] = {}
-    points_mode_active = False
-
-    if isinstance(result, Mapping):
-        points_mode_candidate = result.get("points_mode")
-        if isinstance(points_mode_candidate, bool):
-            points_mode_active = points_mode_candidate
-        elif points_mode_candidate is not None:
-            points_mode_active = (
-                str(points_mode_candidate).strip().lower() not in {"", "0", "false"}
-            )
-
-        if not points_mode_active:
-            parts_candidate = result.get("parts")
-            if isinstance(parts_candidate, Mapping):
-                for candidate in parts_candidate.values():
-                    if isinstance(candidate, float) and not float(candidate).is_integer():
-                        points_mode_active = True
-                        break
-                    if isinstance(candidate, str):
-                        try:
-                            candidate_float = float(candidate)
-                        except (TypeError, ValueError):
-                            continue
-                        if not candidate_float.is_integer():
-                            points_mode_active = True
-                            break
-
-        if points_mode_active:
-            score_value = result.get("score_points", result.get("total", 0.0))
-            mid_source = result.get("mid_sum", result.get("mid", 0.0))
-            try:
-                total = float(score_value or 0.0)
-            except (TypeError, ValueError):
-                total = 0.0
-            try:
-                mid_value = float(mid_source or 0.0)
-            except (TypeError, ValueError):
-                mid_value = 0.0
-        else:
-            try:
-                total = int(result.get("total", 0) or 0)
-            except (TypeError, ValueError):
-                total = 0
-            try:
-                mid_value = int(result.get("mid_sum", 0) or 0)
-            except (TypeError, ValueError):
-                mid_value = 0
-        dates_all = bool(result.get("dates_all"))
-        decision = str(result.get("decision", "different"))
-        aux_candidate = result.get("aux")
-        if isinstance(aux_candidate, Mapping):
-            aux_payload = aux_candidate
-        parts_candidate = result.get("parts")
-        if isinstance(parts_candidate, Mapping):
-            parts_payload = parts_candidate
-        triggers_candidate = result.get("triggers", []) or []
-        if isinstance(triggers_candidate, Iterable):
-            triggers_raw = triggers_candidate
+    total_value, points_mode_active = _extract_total_from_result(result)
+    mid_value = _extract_mid_from_result(result, points_mode=points_mode_active)
+    dates_all = bool(result.get("dates_all"))
+    decision = str(result.get("decision", "different"))
+    aux_candidate = result.get("aux")
+    if isinstance(aux_candidate, Mapping):
+        aux_payload: Mapping[str, Any] = aux_candidate
+    else:
+        aux_payload = {}
+    parts_candidate = result.get("parts")
+    if isinstance(parts_candidate, Mapping):
+        parts_payload: Mapping[str, Any] = parts_candidate
+    else:
+        parts_payload = {}
+    triggers_candidate = result.get("triggers", []) or []
+    if isinstance(triggers_candidate, Iterable):
+        triggers_raw: Iterable[Any] = triggers_candidate
+    else:
+        triggers_raw = []
 
     triggers = [str(trigger) for trigger in triggers_raw if trigger is not None]
     strong = any(trigger.startswith("strong:") for trigger in triggers)
@@ -3207,7 +3247,8 @@ def _build_pair_entry(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, 
 
     entry: Dict[str, Any] = {
         "with": int(partner_idx),
-        "total": total,
+        "total": total_value,
+        "points_mode": points_mode_active,
         "decision": decision,
         "strong": strong,
         "mid": mid_value,
@@ -3234,41 +3275,39 @@ def _build_best_match_entry(
         return None
 
     entry = pair_entries.get(partner)
-    total = 0
-    decision = "different"
-
     acct_level = _sanitize_acct_level(None)
+    points_mode_active = False
+    decision = "different"
+    total_value: Union[int, float]
 
     if isinstance(entry, Mapping):
-        try:
-            total = int(entry.get("total", 0) or 0)
-        except (TypeError, ValueError):
-            total = 0
+        total_value, points_mode_active = _extract_total_from_result(entry)
         decision = str(entry.get("decision", "different"))
         acct_level = _sanitize_acct_level(entry.get("acctnum_level", acct_level))
     else:
         result_payload = best_info.get("result")
         if isinstance(result_payload, Mapping):
-            try:
-                total = int(result_payload.get("total", 0) or 0)
-            except (TypeError, ValueError):
-                total = 0
+            total_value, points_mode_active = _extract_total_from_result(result_payload)
             decision = str(result_payload.get("decision", "different"))
             aux_payload = _build_aux_payload(result_payload.get("aux", {}))
             acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level", acct_level))
-        try:
-            total = int(best_info.get("score_total", total) or total)
-        except (TypeError, ValueError):
-            pass
+        else:
+            total_value = 0.0
+        fallback_total = best_info.get("score_total")
+        if fallback_total is not None:
+            total_value = _coerce_score_value(
+                fallback_total, points_mode=points_mode_active
+            )
 
     tiebreaker = str(best_info.get("tiebreaker", "none"))
 
     return {
         "with": int(partner),
-        "total": total,
+        "total": total_value,
         "decision": decision,
         "tiebreaker": tiebreaker,
         "acctnum_level": acct_level,
+        "points_mode": points_mode_active,
     }
 
 
@@ -3279,17 +3318,30 @@ def _tag_safe_int(value: Any) -> int:
         return 0
 
 
+def _tag_safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _tag_normalize_str_list(values: Any) -> List[str]:
     if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
         return [str(item) for item in values if item is not None]
     return []
 
 
-def _tag_normalize_merge_parts(parts: Any) -> Dict[str, int]:
-    normalized: Dict[str, int] = {}
+def _tag_normalize_merge_parts(
+    parts: Any, *, points_mode: bool
+) -> Dict[str, Union[int, float]]:
+    normalized: Dict[str, Union[int, float]] = {}
     if isinstance(parts, Mapping):
         for key in sorted(parts.keys(), key=str):
-            normalized[str(key)] = _tag_safe_int(parts.get(key))
+            value = parts.get(key)
+            if points_mode:
+                normalized[str(key)] = _tag_safe_float(value)
+            else:
+                normalized[str(key)] = _tag_safe_int(value)
     return normalized
 
 
@@ -3388,14 +3440,17 @@ def _normalize_merge_payload_for_tag(
     }
 
     if isinstance(result, Mapping):
+        points_mode_active = _detect_points_mode_from_result(result)
+        payload["points_mode"] = points_mode_active
         payload["decision"] = str(result.get("decision", "different"))
-        payload["total"] = _tag_safe_int(result.get("total"))
-        mid_value = result.get("mid_sum")
-        if mid_value is None:
-            mid_value = result.get("mid")
-        payload["mid"] = _tag_safe_int(mid_value)
+        total_value, _ = _extract_total_from_result(result)
+        payload["total"] = total_value
+        mid_value = _extract_mid_from_result(result, points_mode=points_mode_active)
+        payload["mid"] = mid_value
         payload["dates_all"] = bool(result.get("dates_all"))
-        payload["parts"] = _tag_normalize_merge_parts(result.get("parts"))
+        payload["parts"] = _tag_normalize_merge_parts(
+            result.get("parts"), points_mode=points_mode_active
+        )
         payload["aux"] = _tag_normalize_merge_aux(result.get("aux"))
         triggers_source = result.get("triggers")
         if not triggers_source:
@@ -3521,7 +3576,10 @@ def build_summary_merge_entry(
             if value is None:
                 continue
             if key in {"strong_rank", "score_total"}:
-                normalized[key] = _tag_safe_int(value)
+                points_mode_active = bool(normalized.get("points_mode"))
+                normalized[key] = _coerce_score_value(
+                    value, points_mode=points_mode_active
+                )
             else:
                 normalized[key] = value
 
@@ -3902,6 +3960,7 @@ def build_merge_best_tag(best_info: Mapping[str, Any]) -> Optional[Dict[str, Any
         return None
 
     payload = _normalize_merge_payload_for_tag(result)
+    points_mode_active = bool(payload.get("points_mode"))
     payload.update(
         {
             "tag": "merge_best",
@@ -3910,8 +3969,9 @@ def build_merge_best_tag(best_info: Mapping[str, Any]) -> Optional[Dict[str, Any
             "with": int(partner),
             "tiebreaker": str(best_info.get("tiebreaker", "none")),
             "strong_rank": _tag_safe_int(best_info.get("strong_rank")),
-            "score_total": _tag_safe_int(
-                best_info.get("score_total", payload["total"])
+            "score_total": _coerce_score_value(
+                best_info.get("score_total", payload["total"]),
+                points_mode=points_mode_active,
             ),
         }
     )
@@ -3929,12 +3989,14 @@ def _build_score_entries(
             continue
         if not isinstance(result, Mapping):
             continue
+        score_value, points_mode_active = _extract_total_from_result(result)
         entry = {
             "account_index": partner_idx,
-            "score": int(result.get("total", 0) or 0),
+            "score": score_value,
             "decision": str(result.get("decision", "different")),
             "triggers": list(result.get("triggers", [])),
             "conflicts": list(result.get("conflicts", [])),
+            "points_mode": points_mode_active,
         }
         entries[partner_idx] = entry
 
@@ -3955,12 +4017,14 @@ def _merge_tag_from_best(
     best_result = best_info.get("result")
     tiebreaker = str(best_info.get("tiebreaker") or "none")
 
+    points_mode_active = bool(getattr(cfg, "points_mode", False))
+
     if not isinstance(best_partner, int) or not isinstance(best_result, Mapping):
-        parts = {field: 0 for field in field_sequence}
+        parts = {field: 0.0 if points_mode_active else 0 for field in field_sequence}
         merge_tag = {
             "group_id": f"g{idx}",
             "decision": "different",
-            "score_total": 0,
+            "score_total": 0.0 if points_mode_active else 0,
             "score_to": _build_score_entries(partner_scores, None),
             "parts": parts,
             "aux": {"acctnum_level": "none", "by_field_pairs": {}, "matched_fields": {}},
@@ -3969,16 +4033,17 @@ def _merge_tag_from_best(
         }
         merge_tag["acctnum_level"] = "none"
         merge_tag["matched_pairs"] = {"account_number": []}
+        merge_tag["points_mode"] = points_mode_active
         return merge_tag
 
-    score_total = int(best_result.get("total", 0) or 0)
+    score_total, points_mode_active = _extract_total_from_result(best_result)
     decision = str(best_result.get("decision", "different"))
     triggers = list(best_result.get("triggers", []))
     conflicts = list(best_result.get("conflicts", []))
     parts = _sanitize_parts(
         best_result.get("parts"),
         cfg,
-        points_mode=bool(getattr(cfg, "points_mode", False)),
+        points_mode=points_mode_active,
     )
     aux_payload = _build_aux_payload(best_result.get("aux", {}), cfg=cfg)
     acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
@@ -4006,6 +4071,7 @@ def _merge_tag_from_best(
         "aux": aux_payload,
         "reasons": reasons,
         "tiebreaker": tiebreaker,
+        "points_mode": points_mode_active,
     }
     merge_tag["acctnum_level"] = acct_level
     matched_pairs_raw = aux_payload.get("by_field_pairs", {})
@@ -4056,6 +4122,14 @@ def persist_merge_tags(
                 exc_info=True,
             )
 
+        cfg = get_merge_cfg()
+        points_mode_active = bool(getattr(cfg, "points_mode", False))
+        ai_pack_threshold = (
+            float(getattr(cfg, "ai_points_threshold", 0.0) or 0.0)
+            if points_mode_active
+            else AI_PACK_SCORE_THRESHOLD
+        )
+
         merge_tags: Dict[int, Dict[str, Any]] = {}
         all_indices = sorted(set(scores_by_idx.keys()) | set(best_by_idx.keys()))
 
@@ -4093,8 +4167,9 @@ def persist_merge_tags(
                 if not isinstance(result, Mapping):
                     continue
 
-                total_value = _tag_safe_int(result.get("total"))
-                if total_value >= AI_PACK_SCORE_THRESHOLD:
+                total_value, result_points_mode = _extract_total_from_result(result)
+                threshold = ai_pack_threshold if result_points_mode else AI_PACK_SCORE_THRESHOLD
+                if total_value >= threshold:
                     left_merge_entry = build_summary_merge_entry("merge_pair", right, result)
                     if left_merge_entry is not None:
                         summary_updates[left]["merge"].append(left_merge_entry)
@@ -4113,53 +4188,63 @@ def persist_merge_tags(
                     if right_path is not None:
                         upsert_tag(right_path, right_tag, unique_keys=("kind", "with"))
 
-                    if left_tag.get("decision") == "ai":
-                        highlights_from_pair = _build_ai_highlights(result)
-                        pack_payload = build_ai_pack_for_pair(
-                            sid,
-                            runs_root,
-                            left,
-                            right,
-                            highlights_from_pair,
+                if left_tag.get("decision") == "ai":
+                    highlights_from_pair = _build_ai_highlights(result)
+                    pack_payload = build_ai_pack_for_pair(
+                        sid,
+                        runs_root,
+                        left,
+                        right,
+                        highlights_from_pair,
+                    )
+                    try:
+                        context_payload = (
+                            pack_payload.get("context", {})
+                            if isinstance(pack_payload, Mapping)
+                            else {}
                         )
-                        try:
-                            context_payload = pack_payload.get("context", {}) if isinstance(
-                                pack_payload, Mapping
-                            ) else {}
-                            highlights_payload = pack_payload.get("highlights", {}) if isinstance(
-                                pack_payload, Mapping
-                            ) else {}
+                        highlights_payload = (
+                            pack_payload.get("highlights", {})
+                            if isinstance(pack_payload, Mapping)
+                            else {}
+                        )
 
-                            context_a = list(context_payload.get("a") or [])
-                            context_b = list(context_payload.get("b") or [])
+                        context_a = list(context_payload.get("a") or [])
+                        context_b = list(context_payload.get("b") or [])
 
-                            total_value = highlights_payload.get("total")
+                        total_value = highlights_payload.get("total")
+                        if points_mode_active:
+                            try:
+                                total_value = float(total_value)
+                            except (TypeError, ValueError):
+                                total_value = None
+                        else:
                             try:
                                 total_value = int(total_value)
                             except (TypeError, ValueError):
                                 total_value = None
 
-                            triggers_raw = highlights_payload.get("triggers", [])
-                            if isinstance(triggers_raw, Iterable) and not isinstance(
-                                triggers_raw, (str, bytes)
-                            ):
-                                triggers_value = [str(item) for item in triggers_raw if item is not None]
-                            else:
-                                triggers_value = []
+                        triggers_raw = highlights_payload.get("triggers", [])
+                        if isinstance(triggers_raw, Iterable) and not isinstance(
+                            triggers_raw, (str, bytes)
+                        ):
+                            triggers_value = [str(item) for item in triggers_raw if item is not None]
+                        else:
+                            triggers_value = []
 
-                            pack_log = {
-                                "sid": sid,
-                                "pair": {"a": left, "b": right},
-                                "lines_a": len(context_a),
-                                "lines_b": len(context_b),
-                                "total": total_value,
-                                "triggers": triggers_value,
-                            }
-                            logger.info("MERGE_V2_PACK %s", json.dumps(pack_log, sort_keys=True))
-                        except Exception:  # pragma: no cover - defensive logging
-                            logger.exception(
-                                "MERGE_V2_PACK_FAILED sid=%s pair=(%s,%s)", sid, left, right
-                            )
+                        pack_log = {
+                            "sid": sid,
+                            "pair": {"a": left, "b": right},
+                            "lines_a": len(context_a),
+                            "lines_b": len(context_b),
+                            "total": total_value,
+                            "triggers": triggers_value,
+                        }
+                        logger.info("MERGE_V2_PACK %s", json.dumps(pack_log, sort_keys=True))
+                    except Exception:  # pragma: no cover - defensive logging
+                        logger.exception(
+                            "MERGE_V2_PACK_FAILED sid=%s pair=(%s,%s)", sid, left, right
+                        )
 
         for idx in all_indices:
             best_info = best_by_idx.get(idx, {})
@@ -4173,10 +4258,11 @@ def persist_merge_tags(
             best_partner = best_info.get("partner_index") if isinstance(best_info, Mapping) else None
             best_result = best_info.get("result") if isinstance(best_info, Mapping) else None
             if best_partner is not None and isinstance(best_result, Mapping):
+                score_total_value, _ = _extract_total_from_result(best_result)
                 extra_fields = {
                     "tiebreaker": str(best_info.get("tiebreaker", "none")),
                     "strong_rank": best_info.get("strong_rank"),
-                    "score_total": best_info.get("score_total"),
+                    "score_total": best_info.get("score_total", score_total_value),
                 }
                 best_entry = build_summary_merge_entry(
                     "merge_best", best_partner, best_result, extra=extra_fields
@@ -4202,9 +4288,7 @@ def persist_merge_tags(
                             partner_extra = {
                                 "tiebreaker": "peer_best",
                                 "strong_rank": None,
-                                "score_total": best_result.get("total")
-                                if isinstance(best_result, Mapping)
-                                else None,
+                                "score_total": score_total_value,
                             }
 
                         reverse_entry = build_summary_merge_entry(

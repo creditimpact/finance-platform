@@ -260,3 +260,14 @@ def test_points_mode_legacy_field_contributes_zero(
     assert with_last["score_points"] == pytest.approx(without_last["score_points"])
     assert "last_payment" not in with_last["field_contributions"]
     assert "last_payment" not in with_last["fields_evaluated"]
+
+
+def test_points_mode_rejects_legacy_point_values(make_points_cfg) -> None:
+    cfg = make_points_cfg()
+
+    with pytest.raises(AssertionError):
+        account_merge._sanitize_parts(
+            {"account_number": account_merge.POINTS_ACCTNUM_VISIBLE},
+            cfg,
+            points_mode=True,
+        )

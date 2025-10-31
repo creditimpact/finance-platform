@@ -9,7 +9,7 @@ import json
 
 from typing import TYPE_CHECKING
 
-from backend.core.ai.paths import ensure_note_style_paths
+from backend.core.ai.paths import ensure_merge_paths, ensure_note_style_paths
 from backend.frontend.packs.config import load_frontend_stage_config
 
 
@@ -296,7 +296,8 @@ def frontend_answers_counters(
 def merge_scored_pairs_count(base_dir: Path) -> Optional[int]:
     """Return the number of merge pairs scored for ``sid``."""
 
-    index_path = base_dir / "ai_packs" / "merge" / "pairs_index.json"
+    merge_paths = ensure_merge_paths(base_dir.parent, base_dir.name, create=False)
+    index_path = merge_paths.index_file
     document = _load_document(index_path)
     if document is None:
         return None

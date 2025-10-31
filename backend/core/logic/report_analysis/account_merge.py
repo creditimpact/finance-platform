@@ -469,6 +469,12 @@ _POINT_DEFAULTS: Dict[str, int] = {
     "closed_date": 1,
 }
 
+_LEGACY_POINTS_MODE_VALUES: frozenset[float] = frozenset(
+    float(value)
+    for value in _POINT_DEFAULTS.values()
+    if isinstance(value, (int, float)) and float(value) >= 6.0
+)
+
 _THRESHOLD_DEFAULTS: Dict[str, int] = {
     "AI_THRESHOLD": 27,
     "AUTO_MERGE_THRESHOLD": 70,
@@ -2353,6 +2359,23 @@ def score_all_pairs_0_100(
     log_file = merge_paths.log_file
     pairs_index_path = merge_paths.base / "pairs_index.json"
     cfg = get_merge_cfg()
+    field_sequence = tuple(_field_sequence_from_cfg(cfg))
+    weights_map = getattr(cfg, "MERGE_WEIGHTS", {})
+    sum_weights = 0.0
+    if isinstance(weights_map, Mapping):
+        for field in field_sequence:
+            value = weights_map.get(field, 0.0)
+            try:
+                sum_weights += float(value)
+            except (TypeError, ValueError):
+                continue
+    points_mode_flag = bool(getattr(cfg, "points_mode", False))
+    logger.info(
+        "[MERGE] Points configuration resolved points_mode=%s field_sequence=%s sum_weights=%.3f",
+        points_mode_flag,
+        field_sequence,
+        sum_weights,
+    )
     ai_threshold = int(
         cfg.thresholds.get("AI_THRESHOLD", AI_PACK_SCORE_THRESHOLD)
     )
@@ -3191,6 +3214,19 @@ def _sanitize_parts(
                 break
     if resolved_points_mode is None:
         resolved_points_mode = False
+
+    if resolved_points_mode and isinstance(parts, Mapping):
+        for field_name, raw_value in parts.items():
+            try:
+                numeric_value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            assert (
+                numeric_value not in _LEGACY_POINTS_MODE_VALUES
+            ), (
+                "points_mode parts contained legacy points value"
+                f" field={field_name!s} value={numeric_value!r}"
+            )
 
     values: Dict[str, Union[int, float]] = {}
     for field in _field_sequence_from_cfg(cfg):

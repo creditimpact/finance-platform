@@ -490,6 +490,13 @@ def _merge_env_state(config: Mapping[str, Any]) -> tuple[bool, bool]:
 def _sanitize_config_field_list(candidate: Any) -> Tuple[str, ...]:
     """Return merge field overrides sourced from ``MERGE_FIELDS_OVERRIDE``."""
 
+    if isinstance(candidate, str):
+        try:
+            decoded = json.loads(candidate)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            decoded = [item.strip() for item in candidate.split(",") if item.strip()]
+        candidate = decoded
+
     if not isinstance(candidate, (list, tuple, set)):
         return ()
 
@@ -804,6 +811,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     config_fields: Tuple[str, ...] = tuple()
     overrides_mapping: Dict[str, Any] = {}
     allowlist_fields: Tuple[str, ...] = tuple()
+    fields_override: Tuple[str, ...] = tuple()
 
     if env is None:
         # Load merge-specific configuration when running against real env vars.
@@ -932,6 +940,16 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             config_fields = tuple()
             allowlist_fields = tuple()
 
+        fields_override = _sanitize_config_field_list(
+            env_mapping.get("MERGE_FIELDS_OVERRIDE_JSON")
+        )
+        if not fields_override:
+            fields_override = _sanitize_config_field_list(
+                env_mapping.get("MERGE_FIELDS_OVERRIDE")
+            )
+        if fields_override:
+            allowlist_fields = fields_override
+
         overrides_mapping = {}
         allowlist_enforce = allowlist_enforce
         ai_points_threshold = _read_env_float(env_mapping, "MERGE_AI_POINTS_THRESHOLD", 3.0)
@@ -960,14 +978,28 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK,
         )
 
+    fields_override = tuple(fields_override)
     allowlist_fields = tuple(allowlist_fields)
     allowlist_lookup: Set[str] = set(allowlist_fields)
+    override_lookup: Set[str] = {str(name) for name in fields_override if name}
+
     allow_optional_original_creditor = bool(
-        merge_use_original_creditor and "original_creditor" in allowlist_lookup
+        merge_use_original_creditor
+        and "original_creditor" in allowlist_lookup
+        and "original_creditor" in override_lookup
     )
     allow_optional_creditor_name = bool(
-        merge_use_creditor_name and "creditor_name" in allowlist_lookup
+        merge_use_creditor_name
+        and "creditor_name" in allowlist_lookup
+        and "creditor_name" in override_lookup
     )
+
+    if not allow_optional_original_creditor:
+        points.pop("original_creditor", None)
+        weights_map.pop("original_creditor", None)
+    if not allow_optional_creditor_name:
+        points.pop("creditor_name", None)
+        weights_map.pop("creditor_name", None)
 
     if allow_optional_original_creditor and "original_creditor" not in points:
         # Optional field participates with zero points until weights are defined.
@@ -983,7 +1015,14 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     def _with_optional_fields(sequence: Sequence[str]) -> Tuple[str, ...]:
         """Return ``sequence`` plus any optional fields toggled on via config."""
 
-        items = list(sequence)
+        items = [
+            item
+            for item in sequence
+            if not (
+                item == "original_creditor" and not allow_optional_original_creditor
+            )
+            and not (item == "creditor_name" and not allow_optional_creditor_name)
+        ]
         if allow_optional_original_creditor and "original_creditor" not in items:
             # Future toggle makes ``original_creditor`` opt-in without code churn.
             items.append("original_creditor")

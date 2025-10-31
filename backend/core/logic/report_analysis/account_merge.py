@@ -649,6 +649,9 @@ def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
 
     current_cfg = cfg or get_merge_cfg()
 
+    if bool(getattr(current_cfg, "points_mode", False)):
+        return _resolve_points_mode_allowlist(current_cfg)
+
     configured_fields = tuple(getattr(current_cfg, "field_sequence", ()) or ())
     if not configured_fields:
         configured_fields = tuple(getattr(current_cfg, "fields", ()) or ())
@@ -3300,26 +3303,50 @@ def _tag_normalize_str_list(values: Any) -> List[str]:
 
 
 def _tag_normalize_merge_parts(
-    parts: Any, *, points_mode: bool
+    parts: Any,
+    *,
+    points_mode: bool,
+    cfg: Optional[MergeCfg] = None,
 ) -> Dict[str, Union[int, float]]:
     normalized: Dict[str, Union[int, float]] = {}
-    if isinstance(parts, Mapping):
-        for key in sorted(parts.keys(), key=str):
-            value = parts.get(key)
-            if points_mode:
-                normalized[str(key)] = _tag_safe_float(value)
-            else:
-                normalized[str(key)] = _tag_safe_int(value)
+    if not isinstance(parts, Mapping):
+        return normalized
+
+    if points_mode:
+        allowlist_sequence = _resolve_points_mode_allowlist(cfg)
+        for field in allowlist_sequence:
+            if field not in parts:
+                continue
+            normalized[field] = _tag_safe_float(parts.get(field))
+        return normalized
+
+    for key in sorted(parts.keys(), key=str):
+        value = parts.get(key)
+        normalized[str(key)] = _tag_safe_int(value)
     return normalized
 
 
-def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
+def _tag_normalize_merge_aux(
+    aux: Any,
+    *,
+    points_mode: bool,
+    cfg: Optional[MergeCfg] = None,
+) -> Dict[str, Any]:
     acct_level = _sanitize_acct_level(None)
     by_field_pairs: Dict[str, List[str]] = {}
     matched_fields: Dict[str, bool] = {"account_number": False}
     account_number_matched = False
     acct_digits_len_a: Optional[int] = None
     acct_digits_len_b: Optional[int] = None
+
+    allowed_fields: Tuple[str, ...] = ()
+    allowed_field_set: Set[str] = set()
+    if points_mode:
+        allowed_fields = _resolve_points_mode_allowlist(cfg)
+        allowed_field_set = set(allowed_fields)
+        matched_fields = {field: False for field in allowed_fields}
+        if "account_number" not in matched_fields:
+            matched_fields["account_number"] = False
 
     if isinstance(aux, Mapping):
         acct_aux = aux.get("account_number")
@@ -3346,6 +3373,8 @@ def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
             if not isinstance(field_aux, Mapping):
                 continue
             field_name = str(field)
+            if points_mode and field_name not in allowed_field_set:
+                continue
             if field_name == "account_number":
                 level_value = field_aux.get("acctnum_level")
                 if level_value is not None:
@@ -3373,6 +3402,27 @@ def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
     if "account_number" not in by_field_pairs:
         by_field_pairs["account_number"] = []
 
+    if points_mode:
+        filtered_pairs = {
+            field: pair
+            for field, pair in by_field_pairs.items()
+            if field in allowed_field_set or field == "account_number"
+        }
+        ordered_pairs: Dict[str, List[str]] = {}
+        for field in allowed_fields:
+            if field in filtered_pairs:
+                ordered_pairs[field] = filtered_pairs[field]
+        if "account_number" not in ordered_pairs:
+            ordered_pairs["account_number"] = filtered_pairs.get("account_number", [])
+        by_field_pairs = ordered_pairs
+
+        ordered_matched: Dict[str, bool] = {}
+        for field in allowed_fields:
+            ordered_matched[field] = matched_fields.get(field, False)
+        if "account_number" not in ordered_matched:
+            ordered_matched["account_number"] = account_number_matched
+        matched_fields = ordered_matched
+
     payload: Dict[str, Any] = {
         "acctnum_level": acct_level,
         "by_field_pairs": by_field_pairs,
@@ -3389,6 +3439,8 @@ def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
 
 def _normalize_merge_payload_for_tag(
     result: Mapping[str, Any] | None,
+    *,
+    cfg: Optional[MergeCfg] = None,
 ) -> Dict[str, Any]:
     payload = {
         "decision": "different",
@@ -3409,6 +3461,9 @@ def _normalize_merge_payload_for_tag(
 
     if isinstance(result, Mapping):
         points_mode_active = _detect_points_mode_from_result(result)
+        cfg_for_points = cfg
+        if points_mode_active and cfg_for_points is None:
+            cfg_for_points = get_merge_cfg()
         payload["points_mode"] = points_mode_active
         payload["decision"] = str(result.get("decision", "different"))
         total_value, _ = _extract_total_from_result(result)
@@ -3417,9 +3472,15 @@ def _normalize_merge_payload_for_tag(
         payload["mid"] = mid_value
         payload["dates_all"] = bool(result.get("dates_all"))
         payload["parts"] = _tag_normalize_merge_parts(
-            result.get("parts"), points_mode=points_mode_active
+            result.get("parts"),
+            points_mode=points_mode_active,
+            cfg=cfg_for_points,
         )
-        payload["aux"] = _tag_normalize_merge_aux(result.get("aux"))
+        payload["aux"] = _tag_normalize_merge_aux(
+            result.get("aux"),
+            points_mode=points_mode_active,
+            cfg=cfg_for_points,
+        )
         triggers_source = result.get("triggers")
         if not triggers_source:
             triggers_source = result.get("reasons")

@@ -1829,26 +1829,43 @@ def _collect_normalized_field_values(
     return values
 
 
-def _collect_balance_cents(
-    bureaus: Mapping[str, Mapping[str, Any]]
-) -> List[int]:
-    values: List[int] = []
-    if not isinstance(bureaus, Mapping):
-        return values
+def _points_mode_balance_has_exact_match(
+    left_bureaus: Mapping[str, Mapping[str, Any]],
+    right_bureaus: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """Return True when any bureau pair has an exact balance match."""
 
-    for bureau_key in ("transunion", "experian", "equifax"):
-        branch = bureaus.get(bureau_key)
-        if not isinstance(branch, Mapping):
-            continue
-        raw_value = branch.get("balance_owed")
-        if is_missing(raw_value):
-            continue
-        cents_value = normalize_balance_owed_cents(raw_value)
-        if cents_value is None:
-            continue
-        values.append(cents_value)
+    if not isinstance(left_bureaus, Mapping) or not isinstance(
+        right_bureaus, Mapping
+    ):
+        return False
 
-    return values
+    for left_key in ("transunion", "experian", "equifax"):
+        left_branch = left_bureaus.get(left_key)
+        if not isinstance(left_branch, Mapping):
+            continue
+        left_raw = left_branch.get("balance_owed")
+        if is_missing(left_raw):
+            continue
+        left_cents = normalize_balance_owed_cents(left_raw)
+        if left_cents is None:
+            continue
+
+        for right_key in ("transunion", "experian", "equifax"):
+            right_branch = right_bureaus.get(right_key)
+            if not isinstance(right_branch, Mapping):
+                continue
+            right_raw = right_branch.get("balance_owed")
+            if is_missing(right_raw):
+                continue
+            right_cents = normalize_balance_owed_cents(right_raw)
+            if right_cents is None:
+                continue
+
+            if left_cents == right_cents:
+                return True
+
+    return False
 
 
 def _detect_amount_conflicts(
@@ -1878,38 +1895,36 @@ def _detect_amount_conflicts(
     )
 
     for field in amount_fields:
-        if field == "balance_owed" and points_mode_active:
-            values_a = _collect_balance_cents(A)
-            values_b = _collect_balance_cents(B)
+        if field == "balance_owed":
+            if points_mode_active:
+                if _points_mode_balance_has_exact_match(A, B):
+                    continue
+                conflicts.append("amount_conflict:balance_owed")
+                continue
+
+            values_a = _collect_normalized_field_values(A, field)
+            values_b = _collect_normalized_field_values(B, field)
         else:
             values_a = _collect_normalized_field_values(A, field)
             values_b = _collect_normalized_field_values(B, field)
+
         if not values_a or not values_b:
             continue
 
         conflict = True
         if field == "balance_owed":
-            if points_mode_active:
-                for left in values_a:
-                    for right in values_b:
-                        if left == right:
-                            conflict = False
-                            break
-                    if not conflict:
+            for left in values_a:
+                for right in values_b:
+                    if match_balance_owed(
+                        left,
+                        right,
+                        tol_abs=balance_tol_abs,
+                        tol_ratio=balance_tol_ratio,
+                    ):
+                        conflict = False
                         break
-            else:
-                for left in values_a:
-                    for right in values_b:
-                        if match_balance_owed(
-                            left,
-                            right,
-                            tol_abs=balance_tol_abs,
-                            tol_ratio=balance_tol_ratio,
-                        ):
-                            conflict = False
-                            break
-                    if not conflict:
-                        break
+                if not conflict:
+                    break
         else:
             for left in values_a:
                 for right in values_b:

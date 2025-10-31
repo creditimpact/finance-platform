@@ -2074,7 +2074,13 @@ def _score_pair_points_mode(
     trigger_events: List[Dict[str, Any]] = []
     decision = "different"
 
-    if total_points >= direct_threshold > 0 and not has_conflict:
+    balance_exact_match = field_contributions.get("balance_owed", 0.0) > 0.0
+
+    if (
+        total_points >= direct_threshold > 0
+        and not has_conflict
+        and balance_exact_match
+    ):
         decision = "auto"
         triggers.append("points:direct")
         trigger_events.append(

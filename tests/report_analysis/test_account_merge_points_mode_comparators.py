@@ -271,3 +271,44 @@ def test_points_mode_rejects_legacy_point_values(make_points_cfg) -> None:
             cfg,
             points_mode=True,
         )
+
+def test_points_ai_threshold_overrides_legacy(
+    make_points_cfg, make_points_accounts
+) -> None:
+    cfg = make_points_cfg()
+    cfg.thresholds = {
+        "AI_THRESHOLD": 999,
+        "AUTO_MERGE_THRESHOLD": 999,
+        "MERGE_SCORE_THRESHOLD": 999,
+    }
+    setattr(cfg, "direct_points_threshold", 10.0)
+    setattr(cfg, "ai_points_threshold", 6.0)
+
+    bureaus_a, bureaus_b = make_points_accounts()
+    result = account_merge.score_pair_0_100(bureaus_a, bureaus_b, cfg)
+    assert result["decision"] == "ai"
+
+    setattr(cfg, "ai_points_threshold", 9.0)
+    higher_threshold = account_merge.score_pair_0_100(bureaus_a, bureaus_b, cfg)
+    assert higher_threshold["decision"] == "different"
+
+
+def test_points_direct_threshold_overrides_legacy(
+    make_points_cfg, make_points_accounts
+) -> None:
+    cfg = make_points_cfg()
+    cfg.thresholds = {
+        "AI_THRESHOLD": 999,
+        "AUTO_MERGE_THRESHOLD": 999,
+        "MERGE_SCORE_THRESHOLD": 999,
+    }
+    setattr(cfg, "ai_points_threshold", 6.0)
+    setattr(cfg, "direct_points_threshold", 5.5)
+
+    bureaus_a, bureaus_b = make_points_accounts()
+    result_auto = account_merge.score_pair_0_100(bureaus_a, bureaus_b, cfg)
+    assert result_auto["decision"] == "auto"
+
+    setattr(cfg, "direct_points_threshold", 6.5)
+    downgraded = account_merge.score_pair_0_100(bureaus_a, bureaus_b, cfg)
+    assert downgraded["decision"] == "ai"

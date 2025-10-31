@@ -1623,6 +1623,7 @@ def _match_field_values(
                 and right_cents is not None
                 and left_cents == right_cents
             )
+            # Hard guard: points mode never uses configured tolerances for balances.
             aux["tolerance"] = {"abs": 0.0, "ratio": 0.0}
             aux["points_mode_balance_cents"] = (
                 left_cents,
@@ -1874,22 +1875,27 @@ def _detect_amount_conflicts(
     cfg: MergeCfg,
 ) -> List[str]:
     conflicts: List[str] = []
+    points_mode_active = bool(getattr(cfg, "points_mode", False))
+    allowed_fields = set(_resolve_points_mode_allowlist(cfg))
     tol_abs = float(cfg.tolerances.get("AMOUNT_TOL_ABS", 0.0))
     tol_ratio = float(cfg.tolerances.get("AMOUNT_TOL_RATIO", 0.0))
 
-    balance_tol_abs = _resolve_tolerance_float(
-        cfg,
-        "MERGE_TOL_BALANCE_ABS",
-        tol_abs,
-    )
-    balance_tol_ratio = _resolve_tolerance_float(
-        cfg,
-        "MERGE_TOL_BALANCE_RATIO",
-        tol_ratio,
-    )
-
-    points_mode_active = bool(getattr(cfg, "points_mode", False))
-    allowed_fields = set(_resolve_points_mode_allowlist(cfg))
+    if points_mode_active:
+        # Hard guard: points mode never applies balance tolerances, even if
+        # configured. Other amount fields (if any) still respect tol_abs/tol_ratio.
+        balance_tol_abs = 0.0
+        balance_tol_ratio = 0.0
+    else:
+        balance_tol_abs = _resolve_tolerance_float(
+            cfg,
+            "MERGE_TOL_BALANCE_ABS",
+            tol_abs,
+        )
+        balance_tol_ratio = _resolve_tolerance_float(
+            cfg,
+            "MERGE_TOL_BALANCE_RATIO",
+            tol_ratio,
+        )
     amount_fields: Iterable[str] = (
         field for field in _AMOUNT_CONFLICT_FIELDS if field in allowed_fields
     )

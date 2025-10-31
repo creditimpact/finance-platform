@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, Literal, Mapping, Optional, Sequence, Tuple
 
 from backend import config
-from backend.core.ai.paths import ensure_note_style_paths
+from backend.core.ai.paths import (
+    ensure_merge_paths,
+    ensure_note_style_paths,
+    merge_result_glob_pattern,
+)
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import (
     _apply_umbrella_barriers,
@@ -818,13 +822,14 @@ def finalize_merge_stage(
 
     base_root = _resolve_runs_root(runs_root)
     base_dir = base_root / sid
-    merge_dir = base_dir / "ai_packs" / "merge"
+    merge_paths = ensure_merge_paths(base_root, sid, create=False)
+    merge_dir = merge_paths.base
 
     runflow_path = base_root / sid / _RUNFLOW_FILENAME
     existing_runflow = _load_runflow(runflow_path, sid)
     previous_status = _stage_status(existing_runflow.get("stages"), "merge")
 
-    index_path = merge_dir / "pairs_index.json"
+    index_path = merge_paths.index_file
     index_payload = _load_json_mapping(index_path)
     if not isinstance(index_payload, Mapping):
         index_payload = {}
@@ -867,20 +872,22 @@ def finalize_merge_stage(
         if "created_packs" not in metrics:
             metrics["created_packs"] = len(pairs_payload)
 
-    results_dir = merge_dir / "results"
+    results_dir = merge_paths.results_dir
+    result_glob = merge_result_glob_pattern()
     try:
         result_files_total = sum(
-            1 for path in results_dir.rglob("*.result.json") if path.is_file()
+            1 for path in results_dir.rglob(result_glob) if path.is_file()
         )
     except OSError:
         result_files_total = 0
 
     metrics["result_files"] = result_files_total
 
-    packs_dir = merge_dir / "packs"
+    packs_dir = merge_paths.packs_dir
+    pack_glob = config.MERGE_PACK_GLOB or "pair_*.jsonl"
     try:
         pack_files_total = sum(
-            1 for path in packs_dir.glob("pair_*.jsonl") if path.is_file()
+            1 for path in packs_dir.glob(pack_glob) if path.is_file()
         )
     except OSError:
         pack_files_total = 0
@@ -2076,27 +2083,28 @@ def _stage_empty_ok(stage_info: Mapping[str, Any] | None) -> bool:
 def _merge_artifacts_progress(
     run_dir: Path,
 ) -> tuple[int, int, Optional[int], bool]:
-    merge_dir = run_dir / "ai_packs" / "merge"
-    results_dir = merge_dir / "results"
-    packs_dir = merge_dir / "packs"
+    merge_paths = ensure_merge_paths(run_dir.parent, run_dir.name, create=False)
+    results_dir = merge_paths.results_dir
+    packs_dir = merge_paths.packs_dir
+    result_glob = merge_result_glob_pattern()
+    pack_glob = config.MERGE_PACK_GLOB or "pair_*.jsonl"
 
     try:
         result_files_total = sum(
-            1 for path in results_dir.rglob("*.result.json") if path.is_file()
+            1 for path in results_dir.rglob(result_glob) if path.is_file()
         )
     except OSError:
         result_files_total = 0
 
     try:
         pack_files_total = sum(
-            1 for path in packs_dir.glob("pair_*.jsonl") if path.is_file()
+            1 for path in packs_dir.glob(pack_glob) if path.is_file()
         )
     except OSError:
         pack_files_total = 0
 
     expected_total: Optional[int] = None
-    index_path = merge_dir / "pairs_index.json"
-    index_payload = _load_json_mapping(index_path)
+    index_payload = _load_json_mapping(merge_paths.index_file)
     if isinstance(index_payload, Mapping):
         totals_payload = index_payload.get("totals")
         if isinstance(totals_payload, Mapping):

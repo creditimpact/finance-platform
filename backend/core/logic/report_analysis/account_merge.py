@@ -2405,7 +2405,7 @@ def score_all_pairs_0_100(
     merge_paths = get_merge_paths(runs_root, sid, create=True)
     packs_dir = merge_paths.packs_dir
     log_file = merge_paths.log_file
-    pairs_index_path = merge_paths.base / "pairs_index.json"
+    pairs_index_path = merge_paths.index_file
     cfg = get_merge_cfg()
     field_sequence = tuple(_field_sequence_from_cfg(cfg))
     weights_map = getattr(cfg, "MERGE_WEIGHTS", {})

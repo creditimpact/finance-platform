@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import functools
 import os
 import re
+import string
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,21 +156,41 @@ class MergePaths:
     index_file: Path
 
 
-def _merge_paths_from_base(base: Path, *, create: bool) -> MergePaths:
-    base_path = Path(base).resolve()
-    packs_dir = base_path / "packs"
-    results_dir = base_path / "results"
+_DEFAULT_MERGE_RESULTS_TEMPLATE = "pair_{lo:03d}_{hi:03d}.result.json"
+
+
+def _merge_results_template() -> str:
+    template = getattr(config, "MERGE_RESULTS_BASENAME", "") or ""
+    if "{lo" not in template or "{hi" not in template:
+        return _DEFAULT_MERGE_RESULTS_TEMPLATE
+    return template
+
+
+def _scoped_merge_path(run_base: Path, raw_value: str) -> Path:
+    value_path = Path(raw_value)
+    if value_path.is_absolute():
+        return value_path.resolve()
+    return (run_base / value_path).resolve()
+
+
+def _merge_paths_from_run_base(run_base: Path, *, create: bool) -> MergePaths:
+    stage_dir = _scoped_merge_path(run_base, config.MERGE_STAGE_DIR)
+    packs_dir = _scoped_merge_path(run_base, config.MERGE_PACKS_DIR)
+    results_dir = _scoped_merge_path(run_base, config.MERGE_RESULTS_DIR)
+    index_file = _scoped_merge_path(run_base, config.MERGE_INDEX_PATH)
 
     if create:
+        stage_dir.mkdir(parents=True, exist_ok=True)
         packs_dir.mkdir(parents=True, exist_ok=True)
         results_dir.mkdir(parents=True, exist_ok=True)
+        index_file.parent.mkdir(parents=True, exist_ok=True)
 
     return MergePaths(
-        base=base_path,
+        base=stage_dir,
         packs_dir=packs_dir,
         results_dir=results_dir,
-        log_file=base_path / "logs.txt",
-        index_file=base_path / "index.json",
+        log_file=stage_dir / "logs.txt",
+        index_file=index_file,
     )
 
 
@@ -181,24 +203,41 @@ def ensure_merge_paths(runs_root: Path, sid: str, create: bool = True) -> MergeP
     the filesystem.
     """
 
-    base = Path(runs_root) / sid / "ai_packs" / "merge"
-    return _merge_paths_from_base(base, create=create)
+    runs_root_path = Path(runs_root).resolve()
+    run_base = (runs_root_path / sid).resolve()
+    return _merge_paths_from_run_base(run_base, create=create)
 
 
 def merge_paths_from_any(path: Path | str, *, create: bool = False) -> MergePaths:
     """Return :class:`MergePaths` using ``path`` rooted at the merge base.
 
-    ``path`` may point at the merge base itself (``.../merge``) or one of its
-    canonical children (``.../merge/packs`` or ``.../merge/results``).  The
-    caller controls directory creation via ``create``; by default this function
-    is read-only.
+    ``path`` may point at the merge stage itself or any of the configured pack
+    or result directories. The caller controls directory creation via
+    ``create``; by default this function is read-only.
     """
 
     resolved = Path(path).resolve()
-    if resolved.name == "merge":
-        return _merge_paths_from_base(resolved, create=create)
-    if resolved.parent.name == "merge" and resolved.name in {"packs", "results"}:
-        return _merge_paths_from_base(resolved.parent, create=create)
+    suffixes = (
+        Path(config.MERGE_PACKS_DIR),
+        Path(config.MERGE_RESULTS_DIR),
+        Path(config.MERGE_STAGE_DIR),
+        Path(config.MERGE_INDEX_PATH),
+    )
+
+    candidates = (resolved,) + tuple(resolved.parents)
+    for candidate in candidates:
+        for suffix in suffixes:
+            suffix_parts = tuple(part for part in suffix.parts if part not in {"", "."})
+            if not suffix_parts:
+                continue
+            candidate_parts = candidate.parts
+            if len(candidate_parts) < len(suffix_parts):
+                continue
+            if candidate_parts[-len(suffix_parts) :] != suffix_parts:
+                continue
+            run_base_parts = candidate_parts[: -len(suffix_parts)]
+            run_base = Path(*run_base_parts)
+            return _merge_paths_from_run_base(run_base, create=create)
 
     raise ValueError(f"Path does not identify merge layout: {resolved}")
 
@@ -214,7 +253,11 @@ def pair_result_filename(a_idx: int, b_idx: int) -> str:
     """Return the canonical filename for a pair result."""
 
     lo, hi = sorted((a_idx, b_idx))
-    return f"pair_{lo:03d}_{hi:03d}.result.json"
+    template = _merge_results_template()
+    try:
+        return template.format(lo=lo, hi=hi)
+    except Exception:
+        return _DEFAULT_MERGE_RESULTS_TEMPLATE.format(lo=lo, hi=hi)
 
 
 def pair_pack_path(paths: MergePaths, a_idx: int, b_idx: int) -> Path:
@@ -227,6 +270,63 @@ def pair_result_path(paths: MergePaths, a_idx: int, b_idx: int) -> Path:
     """Return the resolved filesystem path for a pair result."""
 
     return paths.results_dir / pair_result_filename(a_idx, b_idx)
+
+
+@functools.lru_cache(maxsize=None)
+def _merge_result_pattern(template: str) -> re.Pattern[str]:
+    formatter = string.Formatter()
+    regex_parts: list[str] = []
+    for literal_text, field_name, format_spec, _ in formatter.parse(template):
+        if literal_text:
+            regex_parts.append(re.escape(literal_text))
+        if field_name is None:
+            continue
+        key = field_name.strip()
+        if key not in {"lo", "hi"}:
+            return _merge_result_pattern(_DEFAULT_MERGE_RESULTS_TEMPLATE)
+        width: Optional[int] = None
+        if format_spec:
+            width_match = re.search(r"(\d+)", format_spec)
+            if width_match:
+                try:
+                    width = int(width_match.group(1))
+                except (TypeError, ValueError):
+                    width = None
+        if width:
+            regex_parts.append(rf"(?P<{key}>\d{{{width}}})")
+        else:
+            regex_parts.append(rf"(?P<{key}>\d+)")
+
+    pattern_text = "".join(regex_parts)
+    if not pattern_text:
+        return _merge_result_pattern(_DEFAULT_MERGE_RESULTS_TEMPLATE)
+    return re.compile(f"^{pattern_text}$")
+
+
+def merge_result_glob_pattern() -> str:
+    template = _merge_results_template()
+    formatter = string.Formatter()
+    parts: list[str] = []
+    for literal_text, field_name, _, _ in formatter.parse(template):
+        if literal_text:
+            parts.append(literal_text)
+        if field_name is not None:
+            parts.append("*")
+    return "".join(parts) or "*.result.json"
+
+
+def parse_pair_result_filename(name: str) -> Optional[tuple[int, int]]:
+    template = _merge_results_template()
+    pattern = _merge_result_pattern(template)
+    match = pattern.match(name)
+    if not match:
+        return None
+    try:
+        lo = int(match.group("lo"))
+        hi = int(match.group("hi"))
+    except (TypeError, ValueError):
+        return None
+    return (lo, hi)
 
 
 def get_merge_paths(runs_root: Path, sid: str, *, create: bool = True) -> MergePaths:
@@ -465,7 +565,8 @@ def probe_legacy_ai_packs(runs_root: Path, sid: str) -> Optional[Path]:
     if not legacy_dir.is_dir():
         return None
 
-    if any(legacy_dir.glob("pair_*.jsonl")):
+    pattern = config.MERGE_PACK_GLOB or "pair_*.jsonl"
+    if any(legacy_dir.glob(pattern)):
         return legacy_dir
 
     return None

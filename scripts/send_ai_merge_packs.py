@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover - fallback when bootstrap is unavailable
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from backend.config import AI_REQUEST_TIMEOUT
+from backend.config import AI_REQUEST_TIMEOUT, MERGE_PACK_GLOB
 from backend.core.ai.adjudicator import (
     ALLOWED_DECISIONS,
     AdjudicatorError,
@@ -944,6 +944,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     pack_candidates.append(packs_dir)
 
     read_paths: MergePaths | None = None
+    pack_glob = os.getenv("MERGE_PACK_GLOB", MERGE_PACK_GLOB)
+
     for candidate in pack_candidates:
         try:
             candidate_paths = merge_paths_from_any(candidate, create=False)
@@ -951,7 +953,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             continue
 
         candidate_dir = candidate_paths.packs_dir
-        if candidate_dir.exists() and any(candidate_dir.glob("pair_*.jsonl")):
+        if candidate_dir.exists() and any(candidate_dir.glob(pack_glob)):
             read_paths = candidate_paths
             break
 
@@ -966,15 +968,17 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if pack_dir is None:
         raise SystemExit(
-            "No AI packs for SID (no pair_*.jsonl files found in new or legacy layout)"
+            f"No AI packs for SID (no {pack_glob} files found in new or legacy layout)"
         )
 
     if read_paths is None:
         read_paths = merge_paths
 
-    pair_paths = sorted(pack_dir.glob("pair_*.jsonl"))
+    pair_paths = sorted(pack_dir.glob(pack_glob))
     if not pair_paths:
-        raise SystemExit(f"No AI packs for SID (no pair_*.jsonl files at {pack_dir})")
+        raise SystemExit(
+            f"No AI packs for SID (no {pack_glob} files at {pack_dir})"
+        )
 
     if legacy_pack_dir is not None:
         index_read_path = legacy_pack_dir / "index.json"

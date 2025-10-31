@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, MutableMapping
@@ -16,6 +15,8 @@ from backend.ai.manifest import ensure_validation_section
 from backend.ai.validation_builder import build_validation_packs_for_run
 from backend.core.ai.paths import (
     ensure_merge_paths,
+    merge_result_glob_pattern,
+    parse_pair_result_filename,
     probe_legacy_ai_packs,
     validation_index_path,
 )
@@ -113,9 +114,6 @@ _PAIR_TAG_BY_DECISION: dict[str, str] = {
     "same_debt_account_unknown": "same_debt_pair",
 }
 
-_RESULT_FILENAME_PATTERN = re.compile(r"^pair_(\d{3})_(\d{3})\.result\.json$")
-
-
 def _isoformat_timestamp(now: datetime | None = None) -> str:
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
@@ -140,18 +138,14 @@ def _load_ai_results(results_dir: Path) -> list[tuple[int, int, dict[str, object
         return []
 
     pairs: list[tuple[int, int, dict[str, object]]] = []
-    for path in sorted(results_dir.glob("pair_*.result.json")):
-        match = _RESULT_FILENAME_PATTERN.match(path.name)
-        if not match:
+    pattern = merge_result_glob_pattern()
+    for path in sorted(results_dir.glob(pattern)):
+        parsed = parse_pair_result_filename(path.name)
+        if not parsed:
             logger.debug("AUTO_AI_RESULT_SKIP_UNMATCHED path=%s", path)
             continue
 
-        try:
-            a_idx = int(match.group(1))
-            b_idx = int(match.group(2))
-        except (TypeError, ValueError):
-            logger.debug("AUTO_AI_RESULT_SKIP_PARSE path=%s", path)
-            continue
+        a_idx, b_idx = parsed
 
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
@@ -926,7 +920,7 @@ def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
     if merge_paths is not None:
         try:
             pairs_index_payload = json.loads(
-                (merge_paths.base / "pairs_index.json").read_text(encoding="utf-8")
+                merge_paths.index_file.read_text(encoding="utf-8")
             )
         except (FileNotFoundError, OSError, json.JSONDecodeError):
             scored_pairs_value = 0

@@ -75,15 +75,43 @@ def _has_value(value: Any) -> bool:
     return True
 
 
-def _sum_parts(parts: Mapping[str, object] | None, fields: Iterable[str]) -> int:
-    total = 0
+def _sum_parts(
+    parts: Mapping[str, object] | None,
+    fields: Iterable[str],
+    *,
+    as_float: bool = False,
+) -> Union[int, float]:
+    if as_float:
+        total_float = 0.0
+        if isinstance(parts, Mapping):
+            for field in fields:
+                try:
+                    part_value = parts.get(field, 0.0)
+                except AttributeError:
+                    part_value = 0.0
+                try:
+                    total_float += float(part_value or 0.0)
+                except (TypeError, ValueError):
+                    continue
+        return total_float
+
+    total_int = 0
     if isinstance(parts, Mapping):
         for field in fields:
             part_value = parts.get(field)
             coerced = _coerce_int(part_value)
             if coerced is not None:
-                total += coerced
-    return total
+                total_int += coerced
+    return total_int
+
+
+def _coerce_score(value: object, *, as_float: bool) -> Union[int, float, None]:
+    if as_float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return _coerce_int(value)
 
 
 def _normalize_matched_fields(raw: Mapping[str, object] | None) -> dict[str, bool]:
@@ -108,11 +136,40 @@ def _build_merge_scoring_summary(
 
     updates: dict[str, object] = {}
 
+    points_mode_active = False
+    points_mode_candidate = best_tag.get("points_mode")
+    if isinstance(points_mode_candidate, bool):
+        points_mode_active = points_mode_candidate
+    elif points_mode_candidate is not None:
+        points_mode_active = str(points_mode_candidate).strip().lower() in {"1", "true"}
+
     has_parts = "parts" in best_tag
     parts = best_tag.get("parts") if isinstance(best_tag.get("parts"), Mapping) else None
+    if not points_mode_active and isinstance(parts, Mapping):
+        for value in parts.values():
+            if isinstance(value, float) and not float(value).is_integer():
+                points_mode_active = True
+                break
+            if isinstance(value, str):
+                try:
+                    coerced_float = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if not coerced_float.is_integer():
+                    points_mode_active = True
+                    break
+
     if has_parts:
-        updates["identity_score"] = _sum_parts(parts, _IDENTITY_PART_FIELDS)
-        updates["debt_score"] = _sum_parts(parts, _DEBT_PART_FIELDS)
+        updates["identity_score"] = _sum_parts(
+            parts,
+            _IDENTITY_PART_FIELDS,
+            as_float=points_mode_active,
+        )
+        updates["debt_score"] = _sum_parts(
+            parts,
+            _DEBT_PART_FIELDS,
+            as_float=points_mode_active,
+        )
 
     aux_payload = best_tag.get("aux") if isinstance(best_tag.get("aux"), Mapping) else None
     if "aux" in best_tag and isinstance(aux_payload, Mapping):
@@ -164,9 +221,11 @@ def _build_merge_scoring_summary(
             updates["reasons"] = reasons
 
     partner = _coerce_int(best_tag.get("with"))
-    score_total = _coerce_int(best_tag.get("score_total"))
+    score_total = _coerce_score(
+        best_tag.get("score_total"), as_float=points_mode_active
+    )
     if score_total is None:
-        score_total = _coerce_int(best_tag.get("total"))
+        score_total = _coerce_score(best_tag.get("total"), as_float=points_mode_active)
     if score_total is not None and ("score_total" in best_tag or "total" in best_tag):
         updates["score_total"] = score_total
 

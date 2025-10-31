@@ -702,6 +702,18 @@ def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
         logger.debug("Merge active fields: %s", list(allowlist))
         return allowlist
 
+    override_fields = tuple(getattr(cfg, "MERGE_FIELDS_OVERRIDE", ()) or ())
+    override_lookup = {str(name) for name in override_fields if name}
+
+    allow_optional_original_creditor = bool(
+        getattr(cfg, "MERGE_USE_ORIGINAL_CREDITOR", False)
+        and "original_creditor" in override_lookup
+    )
+    allow_optional_creditor_name = bool(
+        getattr(cfg, "MERGE_USE_CREDITOR_NAME", False)
+        and "creditor_name" in override_lookup
+    )
+
     # Allow optional fields to be appended without mutating the cached tuple when
     # the allowlist is not being enforced.
     field_list: List[str] = list(fields)
@@ -712,10 +724,10 @@ def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
         if name not in field_list:
             field_list.append(name)
 
-    if cfg is not None and getattr(cfg, "MERGE_USE_ORIGINAL_CREDITOR", False):
+    if allow_optional_original_creditor:
         # Future toggle makes ``original_creditor`` available when explicitly enabled.
         include_field("original_creditor")
-    if cfg is not None and getattr(cfg, "MERGE_USE_CREDITOR_NAME", False):
+    if allow_optional_creditor_name:
         # Future toggle makes ``creditor_name`` available when explicitly enabled.
         include_field("creditor_name")
 
@@ -956,12 +968,10 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     allowlist_fields = tuple(allowlist_fields)
     allowlist_lookup: Set[str] = set(allowlist_fields)
     allow_optional_original_creditor = bool(
-        merge_use_original_creditor
-        and (not allowlist_enforce or "original_creditor" in allowlist_lookup)
+        merge_use_original_creditor and "original_creditor" in allowlist_lookup
     )
     allow_optional_creditor_name = bool(
-        merge_use_creditor_name
-        and (not allowlist_enforce or "creditor_name" in allowlist_lookup)
+        merge_use_creditor_name and "creditor_name" in allowlist_lookup
     )
 
     if allow_optional_original_creditor and "original_creditor" not in points:
@@ -1261,10 +1271,20 @@ _POINTS_MODE_DIAGNOSTICS_EMITTED = 0
 def _resolve_points_mode_allowlist(cfg: MergeCfg) -> Tuple[str, ...]:
     """Return the active allowlist for points mode constrained to supported fields."""
 
-    configured = tuple(getattr(cfg, "MERGE_FIELDS_OVERRIDE", ()) or ())
-    if not configured:
-        fields_attr = getattr(cfg, "fields", ()) or ()
-        configured = tuple(fields_attr)
+    if cfg is None:
+        return _POINTS_MODE_FIELD_ALLOWLIST
+
+    candidate_sequences: Sequence[Sequence[str]] = (
+        tuple(getattr(cfg, "field_sequence", ()) or ()),
+        tuple(getattr(cfg, "MERGE_FIELDS_OVERRIDE", ()) or ()),
+        tuple(getattr(cfg, "fields", ()) or ()),
+    )
+
+    configured: Tuple[str, ...] = tuple()
+    for sequence in candidate_sequences:
+        if sequence:
+            configured = tuple(sequence)
+            break
     if not configured:
         configured = _POINTS_MODE_FIELD_ALLOWLIST
 
@@ -1824,7 +1844,15 @@ def _detect_amount_conflicts(
         tol_ratio,
     )
 
-    for field in _AMOUNT_CONFLICT_FIELDS:
+    if getattr(cfg, "points_mode", False):
+        allowed_fields = set(_resolve_points_mode_allowlist(cfg))
+        amount_fields: Iterable[str] = (
+            field for field in _AMOUNT_CONFLICT_FIELDS if field in allowed_fields
+        )
+    else:
+        amount_fields = _AMOUNT_CONFLICT_FIELDS
+
+    for field in amount_fields:
         values_a = _collect_normalized_field_values(A, field)
         values_b = _collect_normalized_field_values(B, field)
         if not values_a or not values_b:

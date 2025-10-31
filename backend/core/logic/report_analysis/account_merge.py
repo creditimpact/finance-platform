@@ -2072,6 +2072,10 @@ def _score_pair_points_mode(
         emit_diagnostics = True
         diagnostics_pair_index = _POINTS_MODE_DIAGNOSTICS_EMITTED + 1
 
+    balance_exact_match = False
+    if "balance_owed" in allowlist_set:
+        balance_exact_match = _points_mode_balance_has_exact_match(A_data, B_data)
+
     for field in evaluated_fields:
         matched, match_aux = _points_mode_match_field_any_bureau(
             field, A_data, B_data, cfg
@@ -2088,9 +2092,8 @@ def _score_pair_points_mode(
         matched_flag = bool(aux.get("matched_bool", aux.get("matched", matched)))
 
         if field == "balance_owed":
-            exact_match = _points_mode_balance_has_exact_match(A_data, B_data)
-            aux["points_mode_exact_match"] = exact_match
-            matched_flag = bool(exact_match)
+            aux["points_mode_exact_match"] = bool(balance_exact_match)
+            matched_flag = bool(balance_exact_match)
 
         match_score = 1.0 if matched_flag else 0.0
         contribution = weight if matched_flag else 0.0
@@ -2152,8 +2155,6 @@ def _score_pair_points_mode(
     triggers: List[str] = []
     trigger_events: List[Dict[str, Any]] = []
     decision = "different"
-
-    balance_exact_match = field_contributions.get("balance_owed", 0.0) > 0.0
 
     if (
         total_points >= direct_threshold > 0

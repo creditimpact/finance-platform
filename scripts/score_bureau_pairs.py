@@ -10,7 +10,7 @@ from copy import deepcopy
 from functools import lru_cache
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from backend.core.logic.report_analysis.account_merge import (
     get_merge_cfg,
@@ -109,13 +109,23 @@ def _format_matched_pairs(mapping: Mapping[str, Sequence[str]]) -> str:
     return ", ".join(parts) if parts else "-"
 
 
-def _sanitize_parts(parts: Optional[Mapping[str, Any]]) -> Dict[str, int]:
-    sanitized: Dict[str, int] = {}
+def _sanitize_parts(
+    parts: Optional[Mapping[str, Any]], *, points_mode: bool = False
+) -> Dict[str, Union[int, float]]:
+    sanitized: Dict[str, Union[int, float]] = {}
     for field in _field_sequence():
-        value = 0
         if isinstance(parts, Mapping):
+            raw_value = parts.get(field, 0)
+        else:
+            raw_value = 0
+        if points_mode:
             try:
-                value = int(parts.get(field, 0) or 0)
+                value = float(raw_value or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+        else:
+            try:
+                value = int(raw_value or 0)
             except (TypeError, ValueError):
                 value = 0
         sanitized[field] = value
@@ -178,8 +188,25 @@ def _build_row(
     result: Mapping[str, Any],
 ) -> Dict[str, Any]:
     decision = str(result.get("decision", "different"))
-    total = int(result.get("total", 0) or 0)
-    mid_sum = int(result.get("mid_sum", 0) or 0)
+    points_mode_active = bool(result.get("points_mode"))
+    if points_mode_active:
+        try:
+            total = float(result.get("score_points", result.get("total", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            total = 0.0
+        try:
+            mid_sum = float(result.get("mid_sum", result.get("mid", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            mid_sum = 0.0
+    else:
+        try:
+            total = int(result.get("total", 0) or 0)
+        except (TypeError, ValueError):
+            total = 0
+        try:
+            mid_sum = int(result.get("mid_sum", 0) or 0)
+        except (TypeError, ValueError):
+            mid_sum = 0
     dates_all = bool(result.get("dates_all", False))
     triggers = list(result.get("triggers", []))
     conflicts = list(result.get("conflicts", []))
@@ -187,7 +214,7 @@ def _build_row(
     if conflicts:
         reasons.extend([f"conflict:{name}" for name in conflicts])
 
-    parts = _sanitize_parts(result.get("parts"))
+    parts = _sanitize_parts(result.get("parts"), points_mode=points_mode_active)
     aux_payload = _extract_aux_payload(result.get("aux", {}))
     acctnum_level = aux_payload.get("acctnum_level", "none")
     matched_pairs_map = aux_payload.get("by_field_pairs", {})

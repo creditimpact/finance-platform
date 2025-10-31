@@ -692,7 +692,11 @@ def _build_problem_cases_lean(
 
         merge_summary: dict[str, object] = {
             "best_with": best_tag.get("with"),
-            "score_total": int(best_tag.get("score_total") or best_tag.get("total") or 0),
+            "score_total": (
+                float(best_tag.get("score_total") or best_tag.get("total") or 0.0)
+                if best_tag.get("points_mode")
+                else int(best_tag.get("score_total") or best_tag.get("total") or 0)
+            ),
             "reasons": [
                 str(reason)
                 for reason in (best_tag.get("reasons") or [])

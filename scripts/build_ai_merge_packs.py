@@ -215,7 +215,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             message["content"] = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             break
 
-        score_total = _safe_int(highlights.get("total"))
+        if highlights.get("points_mode"):
+            try:
+                score_total = float(highlights.get("total"))
+            except (TypeError, ValueError):
+                score_total = 0.0
+        else:
+            score_total = _safe_int(highlights.get("total"))
 
         _write_pack(pack_path, pack)
         log.info("PACK_WRITTEN sid=%s file=%s a=%s b=%s", sid, pack_filename, a_idx, b_idx)

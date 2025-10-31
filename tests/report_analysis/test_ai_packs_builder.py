@@ -444,7 +444,7 @@ def test_build_ai_merge_packs_cli_updates_manifest(
     assert pair_entry["pack_file"].endswith(".jsonl")
     assert isinstance(pair_entry["lines_a"], int)
     assert isinstance(pair_entry["lines_b"], int)
-    assert isinstance(pair_entry["score_total"], int)
+    assert isinstance(pair_entry["score_total"], (int, float))
     assert pair_entry["pair"] == [11, 16]
     assert pair_entry["score"] == pair_entry["score_total"]
 

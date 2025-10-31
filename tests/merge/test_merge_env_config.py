@@ -11,6 +11,7 @@ import pytest
 from backend.config.merge_config import reset_merge_config_cache
 from backend.core.logic.report_analysis.account_merge import (
     _FIELD_SEQUENCE,
+    _field_sequence_from_cfg,
     get_merge_cfg,
 )
 
@@ -160,3 +161,62 @@ def test_points_mode_enforces_allowlist(monkeypatch: pytest.MonkeyPatch) -> None
     assert tuple(cfg.MERGE_FIELDS_OVERRIDE) == tuple(override_fields)
     assert all(field in cfg.MERGE_WEIGHTS for field in override_fields)
     assert cfg.MERGE_WEIGHTS == pytest.approx(weights)
+
+
+def test_allowlist_enforcement_uses_env_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the allowlist is enforced the field order should mirror the ENV override."""
+
+    override_fields = (
+        "account_number",
+        "date_opened",
+        "balance_owed",
+        "account_type",
+        "account_status",
+        "history_2y",
+        "history_7y",
+    )
+
+    monkeypatch.setenv("MERGE_ENABLED", "true")
+    monkeypatch.setenv("MERGE_ALLOWLIST_ENFORCE", "true")
+    monkeypatch.setenv("MERGE_FIELDS_OVERRIDE_JSON", json.dumps(list(override_fields)))
+
+    cfg = get_merge_cfg()
+
+    assert cfg.MERGE_ALLOWLIST_ENFORCE is True
+    assert _field_sequence_from_cfg(cfg) == override_fields
+
+
+def test_optional_fields_require_allowlist_and_toggle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optional fields only participate when toggled and present in the allowlist."""
+
+    base_allowlist = [
+        "account_number",
+        "date_opened",
+        "balance_owed",
+        "account_type",
+        "account_status",
+        "history_2y",
+        "history_7y",
+    ]
+
+    monkeypatch.setenv("MERGE_ENABLED", "true")
+    monkeypatch.setenv("MERGE_ALLOWLIST_ENFORCE", "true")
+    monkeypatch.setenv("MERGE_USE_CREDITOR_NAME", "true")
+    monkeypatch.setenv("MERGE_FIELDS_OVERRIDE_JSON", json.dumps(base_allowlist))
+
+    cfg_without_optional = get_merge_cfg()
+
+    sequence_without_optional = _field_sequence_from_cfg(cfg_without_optional)
+    assert "creditor_name" not in sequence_without_optional
+
+    # Updating the allowlist to include the optional field should surface it when toggled.
+    base_allowlist.append("creditor_name")
+    monkeypatch.setenv("MERGE_FIELDS_OVERRIDE_JSON", json.dumps(base_allowlist))
+    reset_merge_config_cache()
+
+    cfg_with_optional = get_merge_cfg()
+    sequence_with_optional = _field_sequence_from_cfg(cfg_with_optional)
+
+    assert "creditor_name" in sequence_with_optional

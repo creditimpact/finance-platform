@@ -2411,14 +2411,24 @@ def score_all_pairs_0_100(
             except (TypeError, ValueError):
                 continue
     points_mode_flag = bool(getattr(cfg, "points_mode", False))
+    if points_mode_flag:
+        try:
+            ai_points_threshold_value = float(
+                getattr(cfg, "ai_points_threshold", 3.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            ai_points_threshold_value = 0.0
+        ai_threshold = 0
+    else:
+        ai_points_threshold_value = 0.0
+        ai_threshold = int(
+            cfg.thresholds.get("AI_THRESHOLD", AI_PACK_SCORE_THRESHOLD)
+        )
     logger.info(
         "[MERGE] Points configuration resolved points_mode=%s field_sequence=%s sum_weights=%.3f",
         points_mode_flag,
         field_sequence,
         sum_weights,
-    )
-    ai_threshold = int(
-        cfg.thresholds.get("AI_THRESHOLD", AI_PACK_SCORE_THRESHOLD)
     )
     requested_raw = list(idx_list) if idx_list is not None else []
     requested_indices: List[int] = []
@@ -2765,11 +2775,7 @@ def score_all_pairs_0_100(
         level_value = _sanitize_acct_level(level_value)
 
         if points_mode_active:
-            try:
-                ai_points_threshold = float(getattr(cfg, "ai_points_threshold", 3.0) or 0.0)
-            except (TypeError, ValueError):
-                ai_points_threshold = 0.0
-            allowed = total_score_value >= ai_points_threshold
+            allowed = total_score_value >= ai_points_threshold_value
         else:
             allowed = total_score_int >= ai_threshold
 

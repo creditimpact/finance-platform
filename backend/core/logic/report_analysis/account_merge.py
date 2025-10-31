@@ -2057,15 +2057,8 @@ def score_pair_0_100(
         debug_enabled = bool(debug_pair)
 
     if getattr(cfg, "points_mode", False):
-        field_sequence = _field_sequence_from_cfg(cfg)
-        weights_map = cfg.MERGE_WEIGHTS
-        return _score_pair_points_mode(
-            A_data,
-            B_data,
-            cfg,
-            field_sequence=field_sequence,
-            weights_map=weights_map,
-            debug_enabled=debug_enabled,
+        raise AssertionError(
+            "points_mode scoring must call _score_pair_points_mode directly"
         )
 
     field_sequence = _field_sequence_from_cfg(cfg)
@@ -2527,21 +2520,41 @@ def score_all_pairs_0_100(
 
         left_bureaus = bureaus_by_idx.get(left, {})
         right_bureaus = bureaus_by_idx.get(right, {})
-        if should_debug_pair:
-            result = score_pair_0_100(
-                left_bureaus,
-                right_bureaus,
+        points_mode_active = bool(points_mode_flag)
+        if not isinstance(left_bureaus, Mapping):
+            left_data: Mapping[str, Mapping[str, Any]] = {}
+        else:
+            left_data = left_bureaus
+        if not isinstance(right_bureaus, Mapping):
+            right_data: Mapping[str, Mapping[str, Any]] = {}
+        else:
+            right_data = right_bureaus
+
+        if points_mode_active:
+            debug_enabled = bool(cfg.MERGE_DEBUG) or should_debug_pair
+            result = _score_pair_points_mode(
+                left_data,
+                right_data,
                 cfg,
-                debug_pair=True,
+                field_sequence=field_sequence,
+                weights_map=weights_map,
+                debug_enabled=debug_enabled,
             )
         else:
-            result = score_pair_0_100(
-                left_bureaus,
-                right_bureaus,
-                cfg,
-            )
+            if should_debug_pair:
+                result = score_pair_0_100(
+                    left_data,
+                    right_data,
+                    cfg,
+                    debug_pair=True,
+                )
+            else:
+                result = score_pair_0_100(
+                    left_data,
+                    right_data,
+                    cfg,
+                )
 
-        points_mode_active = bool(getattr(cfg, "points_mode", False))
         try:
             score_points = float(result.get("score_points", 0.0) or 0.0)
         except (TypeError, ValueError):

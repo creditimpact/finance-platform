@@ -13,7 +13,7 @@ import json
 import os
 from functools import lru_cache
 from collections.abc import Mapping
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Set
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 import logging
 
@@ -267,7 +267,11 @@ def _normalize_fields(value: Any) -> List[str]:
 
 
 def _normalize_weights(
-    raw_weights: Any, *, allowlist_enforce: bool, fields: List[str]
+    raw_weights: Any,
+    *,
+    allowlist_enforce: bool,
+    fields: List[str],
+    default_weight: Optional[float] = 1.0,
 ) -> Dict[str, float]:
     """Normalize configured weights into a float mapping keyed by field name."""
 
@@ -282,17 +286,45 @@ def _normalize_weights(
             coerced = _coerce_float(value)
             if coerced is None:
                 continue
-            weights[field] = coerced
+            weights[field] = float(coerced)
 
     resolved: Dict[str, float] = {}
     for field in fields:
-        weight = weights.get(field)
-        if weight is None:
-            resolved[field] = 1.0
-        else:
-            resolved[field] = float(weight)
+        if field in weights:
+            resolved[field] = weights[field]
+        elif default_weight is not None:
+            resolved[field] = float(default_weight)
 
     return resolved
+
+
+def _parse_weights_map(
+    raw_weights: Any, *, valid_fields: Sequence[str]
+) -> Tuple[Dict[str, float], List[str]]:
+    """Return sanitized weight mapping restricted to ``valid_fields``."""
+
+    if not isinstance(raw_weights, Mapping):
+        return {}, []
+
+    allowed = {str(field).strip() for field in valid_fields if str(field).strip()}
+    weights: Dict[str, float] = {}
+    invalid: List[str] = []
+
+    for key, value in raw_weights.items():
+        if key is None:
+            continue
+        field = str(key).strip()
+        if not field:
+            continue
+        coerced = _coerce_float(value)
+        if coerced is None:
+            continue
+        if field not in allowed:
+            invalid.append(field)
+            continue
+        weights[field] = float(coerced)
+
+    return weights, invalid
 
 
 def _resolve_fields(
@@ -407,20 +439,45 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
     use_custom_weights = _coerce_bool(raw_config.get("use_custom_weights"))
     raw_weights: Any = raw_config.get("weights")
     if isinstance(raw_weights, Mapping):
-        raw_weights = dict(raw_weights)
+        weights_candidate: Any = dict(raw_weights)
+    else:
+        weights_candidate = {}
 
-    weights_source: Any = {}
-    if points_mode:
-        weights_source = raw_weights
-        if not isinstance(weights_source, Mapping) or not weights_source:
-            weights_source = dict(POINTS_MODE_DEFAULT_WEIGHTS)
-    elif use_custom_weights:
-        weights_source = raw_weights
-    weights = _normalize_weights(
-        weights_source,
-        allowlist_enforce=effective_allowlist_enforce,
-        fields=fields,
+    weights_from_env, invalid_weight_keys = _parse_weights_map(
+        weights_candidate,
+        valid_fields=fields,
     )
+    if invalid_weight_keys:
+        logger.warning(
+            "[MERGE] Ignoring weights for non-configured fields: %s",
+            sorted({key for key in invalid_weight_keys}),
+        )
+
+    weights_source: Dict[str, float] = {}
+    if points_mode:
+        weights_source = dict(weights_from_env)
+        if not weights_source:
+            weights_source = {
+                field: weight
+                for field, weight in POINTS_MODE_DEFAULT_WEIGHTS.items()
+                if field in fields
+            }
+    elif use_custom_weights:
+        weights_source = dict(weights_from_env)
+
+    if points_mode:
+        weights = {
+            field: float(weights_source[field])
+            for field in fields
+            if field in weights_source
+        }
+    else:
+        weights = _normalize_weights(
+            weights_source,
+            allowlist_enforce=effective_allowlist_enforce,
+            fields=fields,
+            default_weight=1.0,
+        )
 
     tolerances = _resolve_tolerances(raw_config)
 
@@ -461,7 +518,7 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
         points_diagnostics_limit=diagnostics_limit,
     )
 
-    setattr(structured, "weights_map", dict(structured.weights))
+    setattr(structured, "weights_map", dict(weights_from_env))
 
     return structured
 

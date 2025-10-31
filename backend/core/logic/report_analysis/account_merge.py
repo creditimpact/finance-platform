@@ -2437,6 +2437,24 @@ def score_all_pairs_0_100(
         field_sequence,
         sum_weights,
     )
+
+    snapshot_logger = logger.info if getattr(cfg, "debug", False) else logger.debug
+    snapshot_logger(
+        "[MERGE] Runtime snapshot %s",
+        {
+            "points_mode": points_mode_flag,
+            "fields": list(field_sequence),
+            "weights_map": dict(weights_map) if isinstance(weights_map, Mapping) else {},
+            "ai_points_threshold": float(getattr(cfg, "ai_points_threshold", 3.0) or 0.0),
+            "direct_points_threshold": float(
+                getattr(cfg, "direct_points_threshold", 5.0) or 0.0
+            ),
+            "MERGE_PACKS_DIR": app_config.MERGE_PACKS_DIR,
+            "MERGE_INDEX_PATH": app_config.MERGE_INDEX_PATH,
+            "MERGE_PACK_GLOB": app_config.MERGE_PACK_GLOB,
+            "allowlist_enforce": bool(getattr(cfg, "allowlist_enforce", False)),
+        },
+    )
     requested_raw = list(idx_list) if idx_list is not None else []
     requested_indices: List[int] = []
     for raw_idx in requested_raw:

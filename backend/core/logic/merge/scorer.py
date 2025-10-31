@@ -104,7 +104,7 @@ def _update_result_with_match(
 ) -> None:
     parts = dict(result.get("parts") or {})
     old_points = int(parts.get("account_number", 0) or 0)
-    new_points = match.points
+    new_points = 1 if match.level == "exact_or_known_match" else 0
     parts["account_number"] = new_points
     result["parts"] = parts
 

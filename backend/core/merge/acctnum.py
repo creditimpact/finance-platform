@@ -25,10 +25,6 @@ __all__ = [
 
 _BUREAUS = ("transunion", "experian", "equifax")
 
-_LEVEL_POINTS: Dict[str, int] = {
-    _MATCH_LEVEL: 28,
-}
-
 _LEVEL_RANK: Dict[str, int] = {
     _NONE_LEVEL: 0,
     _MATCH_LEVEL: 1,
@@ -42,9 +38,7 @@ _HYPHEN_CHARACTERS = frozenset("-‐‑‒–—―−")
 def account_number_weight_contribution(*, points_mode: bool = False) -> float:
     """Return the normalized contribution for matched account numbers."""
 
-    if points_mode:
-        return 1.0
-    return float(_LEVEL_POINTS.get(_MATCH_LEVEL, 0))
+    return 1.0 if points_mode else 0.0
 
 
 def _derive_mask_metadata(raw: str, digits: str) -> tuple[str, bool, int]:
@@ -162,10 +156,6 @@ class AccountNumberMatch:
     a: NormalizedAccountNumber
     b: NormalizedAccountNumber
     debug: Dict[str, dict[str, str] | str]
-
-    @property
-    def points(self) -> int:
-        return _LEVEL_POINTS.get(self.level, 0)
 
     def swapped(self) -> "AccountNumberMatch":
         return AccountNumberMatch(

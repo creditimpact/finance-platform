@@ -2041,10 +2041,6 @@ def score_pair_0_100(
     else:
         B_data = B_bureaus
 
-    field_sequence = _field_sequence_from_cfg(cfg)
-    # Snapshot the resolved weights so each field reuses the same multiplier.
-    weights_map = cfg.MERGE_WEIGHTS
-
     # Determine whether verbose field-by-field logging should occur for this pair.
     if debug_pair is None:
         debug_enabled = bool(cfg.MERGE_DEBUG)
@@ -2052,6 +2048,8 @@ def score_pair_0_100(
         debug_enabled = bool(debug_pair)
 
     if getattr(cfg, "points_mode", False):
+        field_sequence = _field_sequence_from_cfg(cfg)
+        weights_map = cfg.MERGE_WEIGHTS
         return _score_pair_points_mode(
             A_data,
             B_data,
@@ -2060,6 +2058,10 @@ def score_pair_0_100(
             weights_map=weights_map,
             debug_enabled=debug_enabled,
         )
+
+    field_sequence = _field_sequence_from_cfg(cfg)
+    # Snapshot the resolved weights so each field reuses the same multiplier.
+    weights_map = cfg.MERGE_WEIGHTS
 
     total = 0.0
     mid_sum = 0.0

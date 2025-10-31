@@ -18,6 +18,7 @@ from typing import (
     Any,
     Dict,
     Iterable,
+    Iterator,
     List,
     Mapping,
     Optional,
@@ -1841,43 +1842,119 @@ def _collect_normalized_field_values(
     return values
 
 
+def _iter_bureau_field_pairs(
+    left_bureaus: Mapping[str, Mapping[str, Any]] | None,
+    right_bureaus: Mapping[str, Mapping[str, Any]] | None,
+    field: str,
+) -> Iterator[Tuple[str, str, Any, Any, Any, Any]]:
+    """Yield normalized cross-bureau value pairs for a merge field."""
+
+    if not isinstance(left_bureaus, Mapping) or not isinstance(right_bureaus, Mapping):
+        return
+
+    bureaus = ("transunion", "experian", "equifax")
+
+    for left_key in bureaus:
+        left_branch = left_bureaus.get(left_key)
+        if not isinstance(left_branch, Mapping):
+            continue
+
+        left_raw = left_branch.get(field)
+        if is_missing(left_raw):
+            continue
+
+        left_norm = _normalize_field_value(field, left_raw)
+        if left_norm is None:
+            continue
+
+        for right_key in bureaus:
+            right_branch = right_bureaus.get(right_key)
+            if not isinstance(right_branch, Mapping):
+                continue
+
+            right_raw = right_branch.get(field)
+            if is_missing(right_raw):
+                continue
+
+            right_norm = _normalize_field_value(field, right_raw)
+            if right_norm is None:
+                continue
+
+            yield (left_key, right_key, left_norm, right_norm, left_raw, right_raw)
+
+
 def _points_mode_balance_has_exact_match(
     left_bureaus: Mapping[str, Mapping[str, Any]],
     right_bureaus: Mapping[str, Mapping[str, Any]],
 ) -> bool:
     """Return True when any bureau pair has an exact balance match."""
 
-    if not isinstance(left_bureaus, Mapping) or not isinstance(
-        right_bureaus, Mapping
+    for _, _, _, _, left_raw, right_raw in _iter_bureau_field_pairs(
+        left_bureaus, right_bureaus, "balance_owed"
     ):
-        return False
-
-    for left_key in ("transunion", "experian", "equifax"):
-        left_branch = left_bureaus.get(left_key)
-        if not isinstance(left_branch, Mapping):
-            continue
-        left_raw = left_branch.get("balance_owed")
-        if is_missing(left_raw):
-            continue
         left_cents = normalize_balance_owed_cents(left_raw)
-        if left_cents is None:
+        right_cents = normalize_balance_owed_cents(right_raw)
+
+        if left_cents is None or right_cents is None:
             continue
 
-        for right_key in ("transunion", "experian", "equifax"):
-            right_branch = right_bureaus.get(right_key)
-            if not isinstance(right_branch, Mapping):
-                continue
-            right_raw = right_branch.get("balance_owed")
-            if is_missing(right_raw):
-                continue
-            right_cents = normalize_balance_owed_cents(right_raw)
-            if right_cents is None:
-                continue
-
-            if left_cents == right_cents:
-                return True
+        if left_cents == right_cents:
+            return True
 
     return False
+
+
+def _points_mode_match_field_any_bureau(
+    field: str,
+    left_bureaus: Mapping[str, Mapping[str, Any]],
+    right_bureaus: Mapping[str, Mapping[str, Any]],
+    cfg: MergeCfg,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Return match metadata for a field using strict points-mode semantics."""
+
+    if field == "account_number":
+        matched, aux = _match_account_number_best_pair(left_bureaus, right_bureaus, cfg)
+        return matched, dict(aux)
+
+    bureau_positions = {name: idx for idx, name in enumerate(("transunion", "experian", "equifax"))}
+    best_aux: Dict[str, Any] | None = None
+    best_rank: Tuple[int, int] | None = None
+    first_aux: Dict[str, Any] | None = None
+
+    for left_key, right_key, left_norm, right_norm, left_raw, right_raw in _iter_bureau_field_pairs(
+        left_bureaus, right_bureaus, field
+    ):
+        match_score, aux = _match_field_values(
+            field,
+            left_norm,
+            right_norm,
+            left_raw,
+            right_raw,
+            cfg,
+        )
+        matched = bool(aux.get("matched_bool", match_score >= 1.0))
+
+        result_aux: Dict[str, Any] = {
+            "best_pair": (left_key, right_key),
+            "normalized_values": _serialize_normalized_pair(left_norm, right_norm),
+            "match_score": match_score,
+        }
+        result_aux.update(aux)
+
+        if first_aux is None:
+            first_aux = dict(result_aux)
+
+        if matched:
+            pair_rank = (bureau_positions[left_key], bureau_positions[right_key])
+            if best_aux is None or best_rank is None or pair_rank < best_rank:
+                best_aux = dict(result_aux)
+                best_rank = pair_rank
+
+    if best_aux is not None:
+        return True, best_aux
+    if first_aux is not None:
+        return False, first_aux
+    return False, {}
 
 
 def _detect_amount_conflicts(
@@ -1996,7 +2073,9 @@ def _score_pair_points_mode(
         diagnostics_pair_index = _POINTS_MODE_DIAGNOSTICS_EMITTED + 1
 
     for field in evaluated_fields:
-        matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
+        matched, match_aux = _points_mode_match_field_any_bureau(
+            field, A_data, B_data, cfg
+        )
         aux = dict(match_aux) if isinstance(match_aux, Mapping) else {}
 
         if "match_score" in aux:

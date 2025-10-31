@@ -725,6 +725,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     points_mode_active = False
     allowlist_enforce = False
     legacy_defaults_allowed = False
+    points_mode_locked = False
 
     points: Dict[str, int] = {}
     # Default weights act as neutral multipliers until custom overrides are enabled.
@@ -832,6 +833,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             points_diagnostics_limit = _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
 
         allowlist_enforce = bool(getattr(merge_env_cfg, "allowlist_enforce", False))
+        points_mode_locked = bool(points_mode_active)
         legacy_defaults_allowed = not allowlist_enforce and not points_mode_active
 
         if legacy_defaults_allowed:
@@ -895,11 +897,12 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             # controlled by MERGE_ALLOWLIST_ENFORCE
             allowlist_enforce = bool(getattr(merge_env_cfg, "allowlist_enforce", False))
         # Fall back to legacy fields when no override is provided.
-        if not allowlist_fields and legacy_defaults_allowed:
+        if not allowlist_fields and legacy_defaults_allowed and not points_mode_locked:
             allowlist_fields = _FIELD_SEQUENCE
     else:
         points_mode_active = _read_env_flag(env_mapping, "MERGE_POINTS_MODE", False)
         allowlist_enforce = _read_env_flag(env_mapping, "MERGE_ALLOWLIST_ENFORCE", False)
+        points_mode_locked = bool(points_mode_active)
         legacy_defaults_allowed = not allowlist_enforce and not points_mode_active
 
         if legacy_defaults_allowed:
@@ -976,9 +979,15 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     config_fields = _with_optional_fields(config_fields)
     allowlist_fields = _with_optional_fields(allowlist_fields)
 
+    if (allowlist_enforce or points_mode_locked) and allowlist_fields:
+        config_fields = allowlist_fields
+
     if allowlist_enforce:
         allowed_field_set = set(allowlist_fields)
         weights_map = {name: weight for name, weight in weights_map.items() if name in allowed_field_set}
+
+    config_fields = tuple(config_fields)
+    allowlist_fields = tuple(allowlist_fields)
 
     cfg_obj = MergeCfg(
         points=points,
@@ -1005,6 +1014,12 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         "points_diagnostics_limit",
         int(max(points_diagnostics_limit or 0, 0)),
     )
+
+    active_field_sequence = (
+        allowlist_fields if (allowlist_enforce or points_mode_locked) else config_fields
+    )
+    setattr(cfg_obj, "field_sequence", tuple(active_field_sequence))
+    setattr(cfg_obj, "weights_map", dict(getattr(cfg_obj, "MERGE_WEIGHTS", {})))
 
     return cfg_obj
 

@@ -11,7 +11,7 @@ import time
 from collections.abc import Mapping as MappingABC
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence, overload
+from typing import Iterable, Mapping, Sequence, Union, overload
 
 try:  # pragma: no cover - convenience bootstrap for direct execution
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -51,7 +51,11 @@ from backend.core.io.tags import read_tags, upsert_tag
 from backend.core.logic.report_analysis.account_merge import (
     build_summary_ai_entries,
     build_summary_merge_entry,
+    coerce_score_value,
+    detect_points_mode_from_payload,
     merge_summary_sections,
+    normalize_parts_for_serialization,
+    resolve_identity_debt_fields,
 )
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.merge.acctnum import normalize_level
@@ -506,33 +510,29 @@ _PAIR_TAG_BY_DECISION: dict[str, str] = {
     "same_debt_account_unknown": "same_debt_pair",
 }
 
-_IDENTITY_PART_FIELDS = {
-    "account_number",
-    "creditor_type",
-    "date_opened",
-    "closed_date",
-    "date_of_last_activity",
-    "date_reported",
-    "last_verified",
-}
-
-_DEBT_PART_FIELDS = {
-    "balance_owed",
-    "high_balance",
-    "past_due_amount",
-    "last_payment",
-}
+_IDENTITY_PART_FIELDS, _DEBT_PART_FIELDS = resolve_identity_debt_fields()
 
 
-def _sum_parts(parts: Mapping[str, object] | None, fields: Iterable[str]) -> int:
-    total = 0
+def _sum_parts(
+    parts: Mapping[str, object] | None,
+    fields: Iterable[str],
+    *,
+    points_mode: bool,
+) -> Union[int, float]:
     if not isinstance(parts, MappingABC):
-        return total
+        return 0.0 if points_mode else 0
+
+    total: Union[int, float] = 0.0 if points_mode else 0
     for field in fields:
+        value = parts.get(field, 0.0 if points_mode else 0)
+        if isinstance(value, (int, float)):
+            total += value
+            continue
         try:
-            total += int(parts.get(field, 0) or 0)
+            numeric = float(value) if points_mode else int(value)
         except (TypeError, ValueError):
             continue
+        total += numeric
     return total
 
 
@@ -764,20 +764,14 @@ def _write_decision_tags_resolved(
                         summary_changed = True
 
         if merge_best_tag is not None:
-            points_mode_active = bool(merge_best_tag.get("points_mode"))
-            score_total = (
-                merge_best_tag.get("score_total")
-                or merge_best_tag.get("total")
-                or 0
+            points_mode_active = detect_points_mode_from_payload(merge_best_tag)
+            score_total_candidate = merge_best_tag.get("score_total")
+            if score_total_candidate is None:
+                score_total_candidate = merge_best_tag.get("total")
+            score_total_value = coerce_score_value(
+                score_total_candidate,
+                points_mode=points_mode_active,
             )
-            try:
-                score_total_value = (
-                    float(score_total)
-                    if points_mode_active
-                    else int(score_total)
-                )
-            except (TypeError, ValueError):
-                score_total_value = 0.0 if points_mode_active else 0
             reasons_raw = merge_best_tag.get("reasons") or []
             if isinstance(reasons_raw, Iterable) and not isinstance(reasons_raw, (str, bytes)):
                 reasons = [str(item) for item in reasons_raw if item is not None]
@@ -790,23 +784,30 @@ def _write_decision_tags_resolved(
                 conflicts = []
             parts_payload = merge_best_tag.get("parts")
             if isinstance(parts_payload, MappingABC):
-                identity_score = _sum_parts(parts_payload, _IDENTITY_PART_FIELDS)
-                debt_score = _sum_parts(parts_payload, _DEBT_PART_FIELDS)
+                normalized_parts = normalize_parts_for_serialization(
+                    parts_payload,
+                    points_mode=points_mode_active,
+                )
+                identity_score = _sum_parts(
+                    normalized_parts,
+                    _IDENTITY_PART_FIELDS,
+                    points_mode=points_mode_active,
+                )
+                debt_score = _sum_parts(
+                    normalized_parts,
+                    _DEBT_PART_FIELDS,
+                    points_mode=points_mode_active,
+                )
             else:
-                identity_score = 0
-                debt_score = 0
+                identity_score = 0.0 if points_mode_active else 0
+                debt_score = 0.0 if points_mode_active else 0
             extras: list[str] = []
             if bool(merge_best_tag.get("strong")):
                 extras.append("strong")
             mid_value = merge_best_tag.get("mid")
-            try:
-                mid_score = (
-                    float(mid_value)
-                    if points_mode_active
-                    else int(mid_value)
-                )
-            except (TypeError, ValueError):
-                mid_score = 0.0 if points_mode_active else 0
+            if mid_value is None:
+                mid_value = merge_best_tag.get("mid_sum")
+            mid_score = coerce_score_value(mid_value, points_mode=points_mode_active)
             if mid_score > 0:
                 extras.append("mid")
             extras.append("total")

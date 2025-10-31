@@ -7,13 +7,19 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence
+from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Union
 
 from backend.core.io.tags import read_tags
 from backend.core.merge.acctnum import normalize_level
 from backend.core.logic.normalize import last4 as normalize_last4
 from backend.core.logic.normalize import normalize_acctnum
-from backend.core.logic.report_analysis.account_merge import get_merge_cfg
+from backend.core.logic.report_analysis.account_merge import (
+    coerce_score_value,
+    detect_points_mode_from_payload,
+    get_merge_cfg,
+    normalize_parts_for_serialization,
+    resolve_identity_debt_fields,
+)
 from backend.core.logic.report_analysis.ai_pack import build_context_flags
 from backend.core.logic.report_analysis.constants import BUREAUS
 from backend.core.logic.report_analysis.keys import normalize_issuer
@@ -57,23 +63,6 @@ SYSTEM_PROMPT = (
     "language\",\"flags\":{\"account_match\":true|false|\"unknown\",\"debt_match\":true|false|"
     "\"unknown\"}}. Do not add commentary or extra keys."
 )
-
-IDENTITY_PART_FIELDS = {
-    "account_number",
-    "creditor_type",
-    "date_opened",
-    "closed_date",
-    "date_of_last_activity",
-    "date_reported",
-    "last_verified",
-}
-
-DEBT_PART_FIELDS = {
-    "balance_owed",
-    "high_balance",
-    "past_due_amount",
-    "last_payment",
-}
 
 MAX_CONTEXT_LINE_LENGTH = 240
 
@@ -347,16 +336,35 @@ def _safe_int(value: object, default: int = 0) -> int:
         return default
 
 
-def _sum_parts(parts: Mapping[str, object] | None, fields: Iterable[str]) -> int:
-    total = 0
+def _sum_parts(
+    parts: Mapping[str, object] | None,
+    fields: Iterable[str],
+    *,
+    as_float: bool,
+) -> Union[int, float]:
     if not isinstance(parts, Mapping):
-        return total
+        return 0.0 if as_float else 0
+
+    if as_float:
+        total_float = 0.0
+        for field in fields:
+            try:
+                value = parts.get(field, 0.0)
+            except AttributeError:
+                value = 0.0
+            try:
+                total_float += float(value or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return total_float
+
+    total_int = 0
     for field in fields:
         try:
-            total += int(parts.get(field, 0) or 0)
+            total_int += int(parts.get(field, 0) or 0)
         except (TypeError, ValueError):
             continue
-    return total
+    return total_int
 
 
 def _select_primary_tag(entries: Sequence[_PairTag]) -> Mapping[str, object] | None:
@@ -366,7 +374,10 @@ def _select_primary_tag(entries: Sequence[_PairTag]) -> Mapping[str, object] | N
     best_score = None
     for entry in entries:
         payload = entry.payload
-        total = _safe_int(payload.get("total"))
+        points_mode_active = detect_points_mode_from_payload(payload)
+        total = coerce_score_value(
+            payload.get("total"), points_mode=points_mode_active
+        )
         score = (total, 1 if entry.kind == "merge_pair" else 0)
         if best_score is None or score > best_score:
             best_entry = entry
@@ -377,25 +388,40 @@ def _select_primary_tag(entries: Sequence[_PairTag]) -> Mapping[str, object] | N
 def _build_highlights(tag_payload: Mapping[str, object]) -> Mapping[str, object]:
     aux = tag_payload.get("aux") if isinstance(tag_payload.get("aux"), Mapping) else {}
     raw_parts = tag_payload.get("parts") if isinstance(tag_payload.get("parts"), Mapping) else {}
-    parts: dict[str, int] = {}
-    for key, value in raw_parts.items():
-        try:
-            parts[str(key)] = int(value)
-        except (TypeError, ValueError):
-            continue
+    points_mode_active = detect_points_mode_from_payload(tag_payload)
+    parts = normalize_parts_for_serialization(
+        raw_parts, points_mode=points_mode_active
+    )
     conflicts = (
         list(tag_payload.get("conflicts"))
         if isinstance(tag_payload.get("conflicts"), Sequence)
         else []
     )
 
-    identity_score = _sum_parts(parts, IDENTITY_PART_FIELDS)
-    debt_score = _sum_parts(parts, DEBT_PART_FIELDS)
+    identity_fields, debt_fields = resolve_identity_debt_fields()
+    identity_score = _sum_parts(
+        parts,
+        identity_fields,
+        as_float=points_mode_active,
+    )
+    debt_score = _sum_parts(
+        parts,
+        debt_fields,
+        as_float=points_mode_active,
+    )
+
+    total_value = coerce_score_value(
+        tag_payload.get("total"), points_mode=points_mode_active
+    )
+    mid_candidate = tag_payload.get("mid")
+    if mid_candidate is None:
+        mid_candidate = tag_payload.get("mid_sum")
+    mid_value = coerce_score_value(mid_candidate, points_mode=points_mode_active)
 
     return {
-        "total": _safe_int(tag_payload.get("total")),
+        "total": total_value,
         "strong": bool(tag_payload.get("strong")),
-        "mid_sum": _safe_int(tag_payload.get("mid") or tag_payload.get("mid_sum")),
+        "mid_sum": mid_value,
         "parts": dict(parts),
         "identity_score": identity_score,
         "debt_score": debt_score,
@@ -404,6 +430,7 @@ def _build_highlights(tag_payload: Mapping[str, object]) -> Mapping[str, object]
         "acctnum_level": normalize_level(aux.get("acctnum_level"))
         if isinstance(aux, Mapping)
         else "none",
+        "points_mode": points_mode_active,
     }
 
 

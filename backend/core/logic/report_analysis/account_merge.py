@@ -69,6 +69,11 @@ __all__ = [
     "normalize_history_field",
     "history_similarity_score",
     "match_history_field",
+    "resolve_identity_debt_fields",
+    "coerce_score_value",
+    "detect_points_mode_from_payload",
+    "normalize_parts_for_serialization",
+    "POINTS_ACCTNUM_VISIBLE",
 ]
 
 
@@ -694,6 +699,35 @@ def _field_sequence_from_cfg(cfg: Optional[MergeCfg] = None) -> Tuple[str, ...]:
     return tuple(field_list)
 
 
+def resolve_identity_debt_fields(
+    cfg: Optional[MergeCfg] = None,
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Return the active identity/debt fields for the configured merge mode."""
+
+    if cfg is None:
+        cfg = get_merge_cfg()
+
+    field_sequence = _field_sequence_from_cfg(cfg)
+    points_mode_active = bool(getattr(cfg, "points_mode", False))
+
+    if points_mode_active:
+        identity_fields = tuple(
+            field for field in field_sequence if field in _POINTS_MODE_IDENTITY_FIELDS
+        )
+        debt_fields = tuple(
+            field for field in field_sequence if field in _POINTS_MODE_DEBT_FIELDS
+        )
+    else:
+        identity_fields = tuple(
+            field for field in field_sequence if field in _IDENTITY_FIELD_SET
+        )
+        debt_fields = tuple(
+            field for field in field_sequence if field in _DEBT_FIELD_SET
+        )
+
+    return identity_fields, debt_fields
+
+
 def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     """Return merge configuration using environment overrides when provided."""
 
@@ -1025,7 +1059,29 @@ _IDENTITY_FIELD_SET = {
     "date_of_last_activity",
     "date_reported",
     "last_verified",
+    "account_type",
+    "account_status",
 }
+
+_DEBT_FIELD_SET = {
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+    "last_payment",
+}
+
+_POINTS_MODE_IDENTITY_FIELDS: Tuple[str, ...] = (
+    "account_number",
+    "date_opened",
+    "account_type",
+    "account_status",
+)
+
+_POINTS_MODE_DEBT_FIELDS: Tuple[str, ...] = (
+    "balance_owed",
+    "history_2y",
+    "history_7y",
+)
 
 
 def normalize_acctnum(raw: str | None) -> Dict[str, object]:
@@ -1219,6 +1275,9 @@ _POINTS_MODE_FIELD_ALLOWLIST: Tuple[str, ...] = tuple(DEFAULT_FIELDS)
 
 _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK = 3
 _POINTS_MODE_DIAGNOSTICS_EMITTED = 0
+
+# Legacy base contribution for visible account-number matches (0-100 scale).
+POINTS_ACCTNUM_VISIBLE = 28
 
 
 def _resolve_points_mode_allowlist(cfg: MergeCfg) -> Tuple[str, ...]:
@@ -2037,14 +2096,22 @@ def score_pair_0_100(
     else:
         debug_enabled = bool(debug_pair)
 
-    if getattr(cfg, "points_mode", False):
-        raise AssertionError(
-            "points_mode scoring must call _score_pair_points_mode directly"
-        )
-
     field_sequence = _field_sequence_from_cfg(cfg)
-    # Snapshot the resolved weights so each field reuses the same multiplier.
-    weights_map = cfg.MERGE_WEIGHTS
+    weights_attr = getattr(cfg, "MERGE_WEIGHTS", None)
+    if isinstance(weights_attr, Mapping):
+        weights_map = dict(weights_attr)
+    else:
+        weights_map = dict(getattr(cfg, "weights", {}) or {})
+
+    if getattr(cfg, "points_mode", False):
+        return _score_pair_points_mode(
+            A_data,
+            B_data,
+            cfg,
+            field_sequence=field_sequence,
+            weights_map=weights_map,
+            debug_enabled=debug_enabled,
+        )
 
     total = 0.0
     mid_sum = 0.0
@@ -3154,6 +3221,12 @@ def _detect_points_mode_from_result(result: Optional[Mapping[str, Any]]) -> bool
     return False
 
 
+def detect_points_mode_from_payload(result: Optional[Mapping[str, Any]]) -> bool:
+    """Public helper exposing points-mode detection for merge payloads."""
+
+    return _detect_points_mode_from_result(result)
+
+
 def _coerce_score_value(value: Any, *, points_mode: bool) -> Union[int, float]:
     if points_mode:
         try:
@@ -3164,6 +3237,12 @@ def _coerce_score_value(value: Any, *, points_mode: bool) -> Union[int, float]:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def coerce_score_value(value: Any, *, points_mode: bool) -> Union[int, float]:
+    """Public wrapper that preserves score scale for downstream consumers."""
+
+    return _coerce_score_value(value, points_mode=points_mode)
 
 
 def _extract_total_from_result(
@@ -3239,6 +3318,17 @@ def _sanitize_parts(
                 value = 0
         values[field] = value
     return values
+
+
+def normalize_parts_for_serialization(
+    parts: Optional[Mapping[str, Any]],
+    cfg: Optional[MergeCfg] = None,
+    *,
+    points_mode: Optional[bool] = None,
+) -> Dict[str, Union[int, float]]:
+    """Expose sanitized parts for downstream serialization helpers."""
+
+    return _sanitize_parts(parts, cfg=cfg, points_mode=points_mode)
 
 
 def _build_pair_entry(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, Any]:
@@ -3853,12 +3943,11 @@ def _summary_entry_score(entry: Mapping[str, Any]) -> int:
             score += sum(1 for flag in matched_aux.values() if bool(flag))
     if entry.get("strong"):
         score += 1
-    total_value = entry.get("total")
-    try:
-        total_int = int(total_value)
-    except (TypeError, ValueError):
-        total_int = 0
-    if total_int:
+    points_mode_active = detect_points_mode_from_payload(entry)
+    total_value = coerce_score_value(
+        entry.get("total"), points_mode=points_mode_active
+    )
+    if total_value:
         score += 1
     return score
 

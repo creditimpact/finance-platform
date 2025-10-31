@@ -12,27 +12,13 @@ from typing import Any, Iterable, Mapping, MutableMapping, Sequence, Union
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.logic.report_analysis.account_merge import (
     MergeDecision,
+    detect_points_mode_from_payload,
     merge_summary_sections,
+    normalize_parts_for_serialization,
+    resolve_identity_debt_fields,
 )
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.merge.acctnum import normalize_level
-
-_IDENTITY_PART_FIELDS = {
-    "account_number",
-    "creditor_type",
-    "date_opened",
-    "closed_date",
-    "date_of_last_activity",
-    "date_reported",
-    "last_verified",
-}
-
-_DEBT_PART_FIELDS = {
-    "balance_owed",
-    "high_balance",
-    "past_due_amount",
-    "last_payment",
-}
 
 Pathish = Union[str, Path, PathLike[str]]
 
@@ -136,38 +122,24 @@ def _build_merge_scoring_summary(
 
     updates: dict[str, object] = {}
 
-    points_mode_active = False
-    points_mode_candidate = best_tag.get("points_mode")
-    if isinstance(points_mode_candidate, bool):
-        points_mode_active = points_mode_candidate
-    elif points_mode_candidate is not None:
-        points_mode_active = str(points_mode_candidate).strip().lower() in {"1", "true"}
+    points_mode_active = detect_points_mode_from_payload(best_tag)
 
     has_parts = "parts" in best_tag
     parts = best_tag.get("parts") if isinstance(best_tag.get("parts"), Mapping) else None
-    if not points_mode_active and isinstance(parts, Mapping):
-        for value in parts.values():
-            if isinstance(value, float) and not float(value).is_integer():
-                points_mode_active = True
-                break
-            if isinstance(value, str):
-                try:
-                    coerced_float = float(value)
-                except (TypeError, ValueError):
-                    continue
-                if not coerced_float.is_integer():
-                    points_mode_active = True
-                    break
 
     if has_parts:
+        normalized_parts = normalize_parts_for_serialization(
+            parts, points_mode=points_mode_active
+        )
+        identity_fields, debt_fields = resolve_identity_debt_fields()
         updates["identity_score"] = _sum_parts(
-            parts,
-            _IDENTITY_PART_FIELDS,
+            normalized_parts,
+            identity_fields,
             as_float=points_mode_active,
         )
         updates["debt_score"] = _sum_parts(
-            parts,
-            _DEBT_PART_FIELDS,
+            normalized_parts,
+            debt_fields,
             as_float=points_mode_active,
         )
 

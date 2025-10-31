@@ -1264,7 +1264,15 @@ _AMOUNT_CONFLICT_FIELDS = {
 }
 _TYPE_FIELDS = {"creditor_type", "account_type", "account_status"}
 
-_POINTS_MODE_FIELD_ALLOWLIST: Tuple[str, ...] = tuple(DEFAULT_FIELDS)
+_POINTS_MODE_FIELD_ALLOWLIST: Tuple[str, ...] = (
+    "account_number",
+    "date_opened",
+    "balance_owed",
+    "account_type",
+    "account_status",
+    "history_2y",
+    "history_7y",
+)
 
 _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK = 3
 _POINTS_MODE_DIAGNOSTICS_EMITTED = 0
@@ -1987,15 +1995,26 @@ def _score_pair_points_mode(
     for field in evaluated_fields:
         matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
         aux = dict(match_aux) if isinstance(match_aux, Mapping) else {}
-        raw_score = aux.get("match_score")
-        if raw_score is None:
-            raw_score = 1.0 if matched else 0.0
-        match_score = max(0.0, min(1.0, float(raw_score)))
-        weight = float(weights_map.get(field, 0.0))
-        contribution = match_score * weight
 
-        aux.setdefault("matched", bool(aux.get("matched", matched)))
-        aux.setdefault("matched_bool", bool(aux.get("matched_bool", matched)))
+        if "match_score" in aux:
+            try:
+                aux["raw_match_score"] = float(aux["match_score"])
+            except (TypeError, ValueError):
+                aux.pop("match_score", None)
+
+        weight = float(weights_map.get(field, 0.0))
+        matched_flag = bool(aux.get("matched_bool", aux.get("matched", matched)))
+
+        if field == "balance_owed":
+            exact_match = _points_mode_balance_has_exact_match(A_data, B_data)
+            aux["points_mode_exact_match"] = exact_match
+            matched_flag = bool(exact_match)
+
+        match_score = 1.0 if matched_flag else 0.0
+        contribution = weight if matched_flag else 0.0
+
+        aux["matched"] = matched_flag
+        aux["matched_bool"] = matched_flag
         aux["match_score"] = match_score
         aux["weight"] = weight
         aux["contribution"] = contribution
@@ -3125,8 +3144,13 @@ def _sanitize_parts(
                 f" field={field_name!s} value={numeric_value!r}"
             )
 
+    if resolved_points_mode:
+        field_iterable: Sequence[str] = _resolve_points_mode_allowlist(cfg)
+    else:
+        field_iterable = _field_sequence_from_cfg(cfg)
+
     values: Dict[str, Union[int, float]] = {}
-    for field in _field_sequence_from_cfg(cfg):
+    for field in field_iterable:
         if isinstance(parts, Mapping):
             raw_value = parts.get(field, 0)
         else:

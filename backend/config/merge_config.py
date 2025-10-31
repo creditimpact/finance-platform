@@ -412,7 +412,12 @@ def _build_merge_config() -> Dict[str, Any]:
 
         # Normalize *_json keys to expose cleaner dictionary names (e.g., weights).
         if short_key.endswith("_json"):
-            short_key = short_key[:-5]
+            trimmed_key = short_key[:-5]
+            # Preserve the original raw string under the normalized key so
+            # validation logic can surface accurate diagnostics when only the
+            # *_JSON variant is provided.
+            raw_values.setdefault(trimmed_key, raw_value)
+            short_key = trimmed_key
 
         # Update the runtime configuration using the normalized key.
         config[short_key] = parsed_value
@@ -488,6 +493,7 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
     override_field_set: Set[str] = (
         set(recognized_override_fields) if recognized_override_fields else set(fields)
     )
+    removed_weight_keys: Set[str] = set()
     if weights_candidate:
         extra_weight_keys = sorted(
             {str(key).strip() for key in weights_candidate.keys()} - override_field_set
@@ -497,6 +503,7 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
                 "MERGE_WEIGHTS_JSON provided weights for fields outside MERGE_FIELDS_OVERRIDE: %s"
                 % ", ".join(extra_weight_keys)
             )
+            removed_weight_keys.update(extra_weight_keys)
             for key in list(weights_candidate.keys()):
                 if str(key).strip() in extra_weight_keys:
                     weights_candidate.pop(key, None)
@@ -505,10 +512,11 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
         weights_candidate,
         valid_fields=recognized_override_fields or fields,
     )
-    if invalid_weight_keys:
+    dropped_weight_keys = set(invalid_weight_keys) | removed_weight_keys
+    if dropped_weight_keys:
         logger.warning(
             "[MERGE] Ignoring weights for non-configured fields: %s",
-            sorted({key for key in invalid_weight_keys}),
+            sorted(dropped_weight_keys),
         )
 
     weights_source: Dict[str, float] = {}

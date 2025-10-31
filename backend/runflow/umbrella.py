@@ -141,6 +141,46 @@ def _normalize_runs_root_arg(runs_root: Path | None) -> str | None:
         return str(runs_root)
 
 
+def schedule_merge_autosend(sid: str, *, run_dir: Path | str) -> None:
+    """Schedule merge autosend when stage automation is enabled."""
+
+    sid_text = str(sid or "").strip()
+    if not sid_text:
+        log.info("MERGE_AUTOSEND_STAGE_SKIP sid=%s reason=invalid_sid", sid)
+        return
+
+    run_dir_path = Path(run_dir)
+    if not _env_flag_enabled("MERGE_AUTOSEND", default=config.MERGE_AUTOSEND):
+        log.debug(
+            "MERGE_AUTOSEND_STAGE_SKIP sid=%s reason=autosend_disabled", sid_text
+        )
+        return
+
+    if not _env_flag_enabled(
+        "MERGE_STAGE_AUTORUN", default=config.MERGE_STAGE_AUTORUN
+    ):
+        log.debug(
+            "MERGE_AUTOSEND_STAGE_SKIP sid=%s reason=stage_autorun_disabled",
+            sid_text,
+        )
+        return
+
+    try:
+        from backend.ai.merge.sender import schedule_stage_autosend
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "MERGE_AUTOSEND_STAGE_IMPORT_FAILED sid=%s", sid_text, exc_info=True
+        )
+        return
+
+    try:
+        schedule_stage_autosend(sid_text, run_dir=run_dir_path)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "MERGE_AUTOSEND_STAGE_SCHEDULE_FAILED sid=%s", sid_text, exc_info=True
+        )
+
+
 def schedule_note_style_after_validation(
     sid: str,
     *,
@@ -283,12 +323,11 @@ def schedule_note_style_after_validation(
             terminal=terminal_total,
             view=view,
         )
-        return
 
     pending_total = len(view.pending_results)
     ready_total = len(view.ready_to_send)
 
-    if pending_total == 0 or view.is_terminal:
+    if view.has_expected and (pending_total == 0 or view.is_terminal):
         built_total, terminal_total = _metrics()
         _log_autosend_decision(
             sid=sid_text,
@@ -300,7 +339,7 @@ def schedule_note_style_after_validation(
         )
         return
 
-    if ready_total == 0:
+    if view.has_expected and ready_total == 0:
         built_total, terminal_total = _metrics()
         _log_autosend_decision(
             sid=sid_text,
@@ -409,4 +448,4 @@ def schedule_note_style_after_validation(
     )
 
 
-__all__ = ["schedule_note_style_after_validation"]
+__all__ = ["schedule_merge_autosend", "schedule_note_style_after_validation"]

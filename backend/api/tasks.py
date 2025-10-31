@@ -66,6 +66,7 @@ _sanitize_openai_env()
 app = Celery("tasks")
 
 # Ensure note_style Celery tasks are registered when the worker boots.
+import backend.ai.merge.tasks  # noqa: E402,F401
 import backend.ai.note_style.tasks  # noqa: E402,F401
 
 
@@ -127,6 +128,7 @@ _TARGETED_TASK_ROUTES = {
     "backend.ai.note_style.tasks.note_style_prepare_and_send_task": "note_style",
     "backend.ai.note_style.tasks.note_style_send_account_task": "note_style",
     "backend.ai.note_style.tasks.note_style_send_sid_task": "note_style",
+    "backend.ai.merge.tasks.send_merge_packs": "merge",
     "backend.pipeline.auto_ai_tasks.validation_send": "validation",
 }
 

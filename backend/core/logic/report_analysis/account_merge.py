@@ -3014,6 +3014,19 @@ def score_all_pairs_0_100(
 
     logger.info("CANDIDATE_LOOP_END sid=%s built_pairs=%s", sid, created_packs)
 
+    try:
+        from backend.ai.merge.sender import trigger_autosend_after_build
+
+        trigger_autosend_after_build(
+            sid,
+            runs_root=runs_root,
+            created=created_packs,
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "MERGE_AUTOSEND_TRIGGER_FAILED sid=%s", sid, exc_info=True
+        )
+
     return scores
 
 

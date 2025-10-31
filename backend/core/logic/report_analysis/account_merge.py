@@ -2066,7 +2066,7 @@ def score_pair_0_100(
     total = 0.0
     mid_sum = 0.0
     identity_sum = 0.0
-    parts: Dict[str, int] = {}
+    parts: Dict[str, Union[int, float]] = {}
     aux: Dict[str, Dict[str, Any]] = {}
     field_matches: Dict[str, bool] = {}
     legacy_defaults_allowed = bool(
@@ -2526,7 +2526,11 @@ def score_all_pairs_0_100(
         except (TypeError, ValueError):
             total_score_int = 0
 
-        sanitized_parts = _sanitize_parts(result.get("parts"), cfg)
+        sanitized_parts = _sanitize_parts(
+            result.get("parts"),
+            cfg,
+            points_mode=points_mode_active,
+        )
         aux_payload = _build_aux_payload(result.get("aux", {}), cfg=cfg)
 
         acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
@@ -3055,7 +3059,10 @@ def _build_ai_highlights(result: Mapping[str, Any] | None) -> Dict[str, Any]:
     else:
         conflicts = []
 
-    parts = _sanitize_parts(result_payload.get("parts"))
+    parts = _sanitize_parts(
+        result_payload.get("parts"),
+        points_mode=bool(result_payload.get("points_mode")),
+    )
     aux_payload = _build_aux_payload(result_payload.get("aux", {}))
 
     matched_fields_raw = aux_payload.get("matched_fields", {})
@@ -3079,14 +3086,38 @@ def _build_ai_highlights(result: Mapping[str, Any] | None) -> Dict[str, Any]:
 
 
 def _sanitize_parts(
-    parts: Optional[Mapping[str, Any]], cfg: Optional[MergeCfg] = None
-) -> Dict[str, int]:
-    values: Dict[str, int] = {}
+    parts: Optional[Mapping[str, Any]],
+    cfg: Optional[MergeCfg] = None,
+    *,
+    points_mode: Optional[bool] = None,
+) -> Dict[str, Union[int, float]]:
+    resolved_points_mode = points_mode
+    if resolved_points_mode is None and cfg is not None:
+        resolved_points_mode = bool(getattr(cfg, "points_mode", False))
+
+    if resolved_points_mode is None and isinstance(parts, Mapping):
+        for candidate in parts.values():
+            if isinstance(candidate, float) and not float(candidate).is_integer():
+                resolved_points_mode = True
+                break
+    if resolved_points_mode is None:
+        resolved_points_mode = False
+
+    values: Dict[str, Union[int, float]] = {}
     for field in _field_sequence_from_cfg(cfg):
-        value = 0
         if isinstance(parts, Mapping):
+            raw_value = parts.get(field, 0)
+        else:
+            raw_value = 0
+
+        if resolved_points_mode:
             try:
-                value = int(parts.get(field, 0) or 0)
+                value = float(raw_value or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+        else:
+            try:
+                value = int(raw_value or 0)
             except (TypeError, ValueError):
                 value = 0
         values[field] = value
@@ -3096,23 +3127,60 @@ def _sanitize_parts(
 def _build_pair_entry(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, Any]:
     """Build a stable payload describing the merge relationship with a partner."""
 
-    total = 0
-    mid_value = 0
+    total: Union[int, float] = 0
+    mid_value: Union[int, float] = 0
     dates_all = False
     triggers_raw: Iterable[Any] = []
     decision = "different"
     aux_payload: Mapping[str, Any] = {}
     parts_payload: Mapping[str, Any] = {}
+    points_mode_active = False
 
     if isinstance(result, Mapping):
-        try:
-            total = int(result.get("total", 0) or 0)
-        except (TypeError, ValueError):
-            total = 0
-        try:
-            mid_value = int(result.get("mid_sum", 0) or 0)
-        except (TypeError, ValueError):
-            mid_value = 0
+        points_mode_candidate = result.get("points_mode")
+        if isinstance(points_mode_candidate, bool):
+            points_mode_active = points_mode_candidate
+        elif points_mode_candidate is not None:
+            points_mode_active = (
+                str(points_mode_candidate).strip().lower() not in {"", "0", "false"}
+            )
+
+        if not points_mode_active:
+            parts_candidate = result.get("parts")
+            if isinstance(parts_candidate, Mapping):
+                for candidate in parts_candidate.values():
+                    if isinstance(candidate, float) and not float(candidate).is_integer():
+                        points_mode_active = True
+                        break
+                    if isinstance(candidate, str):
+                        try:
+                            candidate_float = float(candidate)
+                        except (TypeError, ValueError):
+                            continue
+                        if not candidate_float.is_integer():
+                            points_mode_active = True
+                            break
+
+        if points_mode_active:
+            score_value = result.get("score_points", result.get("total", 0.0))
+            mid_source = result.get("mid_sum", result.get("mid", 0.0))
+            try:
+                total = float(score_value or 0.0)
+            except (TypeError, ValueError):
+                total = 0.0
+            try:
+                mid_value = float(mid_source or 0.0)
+            except (TypeError, ValueError):
+                mid_value = 0.0
+        else:
+            try:
+                total = int(result.get("total", 0) or 0)
+            except (TypeError, ValueError):
+                total = 0
+            try:
+                mid_value = int(result.get("mid_sum", 0) or 0)
+            except (TypeError, ValueError):
+                mid_value = 0
         dates_all = bool(result.get("dates_all"))
         decision = str(result.get("decision", "different"))
         aux_candidate = result.get("aux")
@@ -3127,7 +3195,10 @@ def _build_pair_entry(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, 
 
     triggers = [str(trigger) for trigger in triggers_raw if trigger is not None]
     strong = any(trigger.startswith("strong:") for trigger in triggers)
-    sanitized_parts = _sanitize_parts(parts_payload)
+    sanitized_parts = _sanitize_parts(
+        parts_payload,
+        points_mode=points_mode_active,
+    )
     aux_slim = _build_aux_payload(aux_payload)
     acct_level = _sanitize_acct_level(aux_slim.get("acctnum_level"))
 
@@ -3901,7 +3972,11 @@ def _merge_tag_from_best(
     decision = str(best_result.get("decision", "different"))
     triggers = list(best_result.get("triggers", []))
     conflicts = list(best_result.get("conflicts", []))
-    parts = _sanitize_parts(best_result.get("parts"), cfg)
+    parts = _sanitize_parts(
+        best_result.get("parts"),
+        cfg,
+        points_mode=bool(getattr(cfg, "points_mode", False)),
+    )
     aux_payload = _build_aux_payload(best_result.get("aux", {}), cfg=cfg)
     acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
 

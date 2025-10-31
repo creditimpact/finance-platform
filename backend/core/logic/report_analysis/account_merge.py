@@ -2256,6 +2256,22 @@ def score_pair_0_100(
     else:
         weights_map = dict(getattr(cfg, "weights", {}) or {})
 
+    if bool(getattr(cfg, "points_mode", False)):
+        logger.debug(
+            "[MERGE] Points-mode scoring config %s",
+            {
+                "points_mode": True,
+                "fields": list(field_sequence),
+                "weights_map": dict(weights_map),
+                "ai_points_threshold": float(
+                    getattr(cfg, "ai_points_threshold", 3.0) or 0.0
+                ),
+                "direct_points_threshold": float(
+                    getattr(cfg, "direct_points_threshold", 5.0) or 0.0
+                ),
+            },
+        )
+
     return _score_pair_points_mode(
         A_data,
         B_data,

@@ -80,20 +80,38 @@ def _discover_account_indices(accounts_dir: Path) -> List[int]:
     return sorted(set(indices))
 
 
-def _format_top_parts(parts: Mapping[str, int], limit: int = 5) -> str:
+def _format_top_parts(
+    parts: Mapping[str, Union[int, float]],
+    limit: int = 5,
+    *,
+    points_mode: bool = False,
+) -> str:
     sortable = []
     for field in _field_sequence():
         try:
-            points = int(parts.get(field, 0) or 0)
-        except (TypeError, ValueError):
-            points = 0
+            raw_value = parts.get(field, 0.0 if points_mode else 0)
+        except AttributeError:
+            raw_value = 0.0 if points_mode else 0
+        if points_mode:
+            try:
+                points = float(raw_value or 0.0)
+            except (TypeError, ValueError):
+                points = 0.0
+        else:
+            try:
+                points = int(raw_value or 0)
+            except (TypeError, ValueError):
+                points = 0
         if points > 0:
             sortable.append((field, points))
     if not sortable:
         return "-"
 
     sortable.sort(key=lambda item: (-item[1], item[0]))
-    top = [f"{field}={points}" for field, points in sortable[:limit]]
+    if points_mode:
+        top = [f"{field}={points:g}" for field, points in sortable[:limit]]
+    else:
+        top = [f"{field}={points}" for field, points in sortable[:limit]]
     return ", ".join(top)
 
 
@@ -234,7 +252,7 @@ def _build_row(
         "acctnum_level": acctnum_level,
         "reasons": reasons,
         "parts": parts,
-        "parts_top": _format_top_parts(parts),
+        "parts_top": _format_top_parts(parts, points_mode=points_mode_active),
         "matched_pairs_map": matched_pairs_map,
         "matched_pairs_display": _format_matched_pairs(matched_pairs_map),
         "acctnum_digits_len_a": acct_digits_len_a,

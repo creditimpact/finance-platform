@@ -968,22 +968,25 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     )
 
     if not allow_optional_original_creditor:
-        points.pop("original_creditor", None)
         weights_map.pop("original_creditor", None)
-    if not allow_optional_creditor_name:
-        points.pop("creditor_name", None)
-        weights_map.pop("creditor_name", None)
-
-    if allow_optional_original_creditor and "original_creditor" not in points:
+        if not points_mode_active:
+            points.pop("original_creditor", None)
+    elif not points_mode_active and "original_creditor" not in points:
         # Optional field participates with zero points until weights are defined.
         points["original_creditor"] = 0
+        weights_map.setdefault("original_creditor", 1.0)
+
+    if not allow_optional_creditor_name:
+        weights_map.pop("creditor_name", None)
         if not points_mode_active:
-            weights_map.setdefault("original_creditor", 1.0)
-    if allow_optional_creditor_name and "creditor_name" not in points:
+            points.pop("creditor_name", None)
+    elif not points_mode_active and "creditor_name" not in points:
         # Optional field participates with zero points until weights are defined.
         points["creditor_name"] = 0
-        if not points_mode_active:
-            weights_map.setdefault("creditor_name", 1.0)
+        weights_map.setdefault("creditor_name", 1.0)
+
+    if points_mode_active:
+        points = {}
 
     def _with_optional_fields(sequence: Sequence[str]) -> Tuple[str, ...]:
         """Return ``sequence`` plus any optional fields toggled on via config."""

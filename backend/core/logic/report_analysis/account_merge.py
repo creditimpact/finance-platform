@@ -1940,6 +1940,103 @@ def _points_mode_collect_balance_cents(
     return tuple(pairs)
 
 
+def _log_points_mode_field_failure(
+    *,
+    field: str,
+    matched_flag: bool,
+    part_value: float,
+    parts_map: Mapping[str, float],
+    matched_map: Mapping[str, bool],
+    aux_entry: Any,
+    reason: str,
+) -> None:
+    """Emit a diagnostic entry before raising an invariant assertion."""
+
+    try:
+        aux_payload = dict(aux_entry) if isinstance(aux_entry, Mapping) else aux_entry
+    except Exception:  # pragma: no cover - defensive
+        aux_payload = aux_entry
+
+    logger.error(
+        "[MERGE] Points-mode invariant failure %s",
+        {
+            "field": field,
+            "matched": matched_flag,
+            "part": float(part_value),
+            "parts": {k: float(v) for k, v in dict(parts_map).items()},
+            "matched_flags": dict(matched_map),
+            "aux_entry": aux_payload,
+            "reason": reason,
+        },
+    )
+
+
+def _ensure_points_mode_field_invariants(
+    *,
+    field: str,
+    matched_flag: bool,
+    part_value: float,
+    parts_map: Mapping[str, float],
+    matched_map: Mapping[str, bool],
+    aux_entry: Any,
+) -> None:
+    """Validate per-field invariants and log rich context on failure."""
+
+    if not matched_flag and part_value > 0.0:
+        _log_points_mode_field_failure(
+            field=field,
+            matched_flag=matched_flag,
+            part_value=part_value,
+            parts_map=parts_map,
+            matched_map=matched_map,
+            aux_entry=aux_entry,
+            reason="positive_part_without_match",
+        )
+        assert matched_flag, f"points-mode mismatch: {field} part without matched flag"
+    elif not matched_flag and abs(part_value) >= 1e-9:
+        _log_points_mode_field_failure(
+            field=field,
+            matched_flag=matched_flag,
+            part_value=part_value,
+            parts_map=parts_map,
+            matched_map=matched_map,
+            aux_entry=aux_entry,
+            reason="part_without_match",
+        )
+        assert abs(part_value) < 1e-9, (
+            f"points-mode mismatch: {field} has part {part_value} without match"
+        )
+
+    if not isinstance(aux_entry, Mapping):
+        _log_points_mode_field_failure(
+            field=field,
+            matched_flag=matched_flag,
+            part_value=part_value,
+            parts_map=parts_map,
+            matched_map=matched_map,
+            aux_entry=aux_entry,
+            reason="aux_not_mapping",
+        )
+        assert isinstance(aux_entry, Mapping), (
+            f"points-mode aux missing mapping for {field}"
+        )
+
+    if bool(aux_entry.get("matched")) != matched_flag:
+        _log_points_mode_field_failure(
+            field=field,
+            matched_flag=matched_flag,
+            part_value=part_value,
+            parts_map=parts_map,
+            matched_map=matched_map,
+            aux_entry=aux_entry,
+            reason="aux_mismatch",
+        )
+        assert bool(aux_entry.get("matched")) == matched_flag, (
+            f"points-mode mismatch: {field} aux matched flag {aux_entry.get('matched')}"
+            f" != {matched_flag}"
+        )
+
+
 def _points_mode_match_field_any_bureau(
     field: str,
     left_bureaus: Mapping[str, Mapping[str, Any]],
@@ -2254,31 +2351,37 @@ def _score_pair_points_mode(
             )
         _POINTS_MODE_DIAGNOSTICS_EMITTED += 1
 
-    for field in evaluated_fields:
-        part = float(parts.get(field, 0.0))
-        matched_flag = bool(matched_bools.get(field, False))
-        if not matched_flag:
-            assert abs(part) < 1e-9, f"points-mode mismatch: {field} has part {part} without match"
-        if part > 0.0:
-            assert matched_flag, f"points-mode mismatch: {field} part without matched flag"
-        aux_entry = fields_aux.get(field, {})
-        assert isinstance(aux_entry, Mapping), f"points-mode aux missing mapping for {field}"
-        assert bool(aux_entry.get("matched")) == matched_flag, (
-            f"points-mode mismatch: {field} aux matched flag {aux_entry.get('matched')}"
-            f" != {matched_flag}"
-        )
-
     sum_parts = 0.0
     for field in evaluated_fields:
         try:
             part_value = float(parts.get(field, 0.0))
         except (TypeError, ValueError):
             part_value = 0.0
+        matched_flag = bool(matched_bools.get(field, False))
+        aux_entry = fields_aux.get(field, {})
+        _ensure_points_mode_field_invariants(
+            field=field,
+            matched_flag=matched_flag,
+            part_value=part_value,
+            parts_map=parts,
+            matched_map=matched_bools,
+            aux_entry=aux_entry,
+        )
         parts[field] = part_value
         sum_parts += part_value
 
     total_points = float(sum_parts)
 
+    if abs(total_points - sum_parts) >= 1e-6:
+        logger.error(
+            "[MERGE] Points-mode invariant failure %s",
+            {
+                "reason": "total_mismatch",
+                "total": float(total_points),
+                "sum_parts": float(sum_parts),
+                "parts": {k: float(v) for k, v in parts.items()},
+            },
+        )
     assert abs(total_points - sum_parts) < 1e-6
 
     return {
@@ -2428,14 +2531,15 @@ def score_all_pairs_0_100(
         {
             "points_mode": points_mode_flag,
             "fields": list(field_sequence),
+            "allowlist_fields": list(_resolve_points_mode_allowlist(cfg)),
             "weights_map": dict(weights_map) if isinstance(weights_map, Mapping) else {},
             "ai_points_threshold": float(getattr(cfg, "ai_points_threshold", 3.0) or 0.0),
             "direct_points_threshold": float(
                 getattr(cfg, "direct_points_threshold", 5.0) or 0.0
             ),
-            "MERGE_PACKS_DIR": app_config.MERGE_PACKS_DIR,
-            "MERGE_INDEX_PATH": app_config.MERGE_INDEX_PATH,
-            "MERGE_PACK_GLOB": app_config.MERGE_PACK_GLOB,
+            "MERGE_PACKS_DIR": str(app_config.MERGE_PACKS_DIR),
+            "MERGE_INDEX_PATH": str(app_config.MERGE_INDEX_PATH),
+            "MERGE_PACK_GLOB": str(app_config.MERGE_PACK_GLOB),
             "allowlist_enforce": bool(getattr(cfg, "allowlist_enforce", False)),
         },
     )
@@ -2690,6 +2794,20 @@ def score_all_pairs_0_100(
             long_debug = str(gate_detail.get("long", ""))
         if not why_debug and isinstance(gate_detail, Mapping):
             why_debug = str(gate_detail.get("why", ""))
+
+        pair_snapshot = _build_pair_logging_snapshot(
+            sid=sid,
+            left_index=left,
+            right_index=right,
+            total=float(total_score_value),
+            result=result,
+            parts=sanitized_parts,
+            aux_payload=aux_payload,
+            acctnum_level=level_value,
+            points_mode=points_mode_active,
+        )
+        logger.debug("MERGE_PAIR_SCORE %s", json.dumps(pair_snapshot, sort_keys=True))
+
         logger.info(
             "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s why=%s",
             sid,
@@ -2732,17 +2850,9 @@ def score_all_pairs_0_100(
             out={"other": str(left)},
         )
 
-        score_log = {
-            "sid": sid,
-            "i": left,
-            "j": right,
-            "total": total_score_value,
-            "parts": sanitized_parts,
-            "acctnum_level": acct_level,
-            "matched_pairs": aux_payload.get("by_field_pairs", {}),
-            "matched_fields": aux_payload.get("matched_fields", {}),
-        }
-        score_log["decision"] = str(result.get("decision", "different"))
+        score_log = dict(pair_snapshot)
+        score_log["score_points"] = float(total_score_value)
+        score_log["score_int"] = int(total_score_int)
         logger.info("MERGE_V2_SCORE %s", json.dumps(score_log, sort_keys=True))
 
         if points_mode_active:
@@ -3182,6 +3292,65 @@ def _build_aux_payload(
         payload["acctnum_digits_len_b"] = acct_digits_len_b
 
     return payload
+
+
+def _build_pair_logging_snapshot(
+    *,
+    sid: str,
+    left_index: int,
+    right_index: int,
+    total: float,
+    result: Mapping[str, Any] | None,
+    parts: Mapping[str, Union[int, float]],
+    aux_payload: Mapping[str, Any],
+    acctnum_level: str,
+    points_mode: bool,
+) -> Dict[str, Any]:
+    """Return a structured payload describing a scored merge pair."""
+
+    result_payload: Mapping[str, Any] = result if isinstance(result, Mapping) else {}
+    by_field_pairs: Mapping[str, Any] = (
+        aux_payload.get("by_field_pairs") if isinstance(aux_payload, Mapping) else {}
+    )
+    matched_fields_payload: Mapping[str, Any] = (
+        aux_payload.get("matched_fields") if isinstance(aux_payload, Mapping) else {}
+    )
+
+    def _coerce_pair(field_name: str) -> List[str]:
+        pair = by_field_pairs.get(field_name) if isinstance(by_field_pairs, Mapping) else []
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            return [str(pair[0]), str(pair[1])]
+        return []
+
+    parts_payload = {
+        str(field): float(value)
+        for field, value in (parts.items() if isinstance(parts, Mapping) else [])
+    }
+
+    matched_fields = {
+        str(field): bool(value)
+        for field, value in (matched_fields_payload.items() if isinstance(matched_fields_payload, Mapping) else [])
+    }
+
+    aux_pairs = {
+        "balance_owed": _coerce_pair("balance_owed"),
+        "date_opened": _coerce_pair("date_opened"),
+    }
+
+    return {
+        "sid": sid,
+        "i": int(left_index),
+        "j": int(right_index),
+        "points_mode": bool(points_mode),
+        "acctnum_level": str(acctnum_level or "none"),
+        "total": float(total),
+        "decision": result_payload.get("decision"),
+        "parts": parts_payload,
+        "matched_fields": matched_fields,
+        "aux_pairs": aux_pairs,
+        "conflicts": list(result_payload.get("conflicts", []) or []),
+        "triggers": list(result_payload.get("triggers", []) or []),
+    }
 
 
 def _build_ai_highlights(result: Mapping[str, Any] | None) -> Dict[str, Any]:

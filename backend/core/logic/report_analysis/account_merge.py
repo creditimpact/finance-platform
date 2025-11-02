@@ -1889,19 +1889,40 @@ def _points_mode_balance_has_exact_match(
 ) -> bool:
     """Return True when any bureau pair has an exact balance match."""
 
-    for _, _, _, _, left_raw, right_raw in _iter_bureau_field_pairs(
-        left_bureaus, right_bureaus, "balance_owed"
-    ):
-        left_cents = normalize_balance_owed_cents(left_raw)
-        right_cents = normalize_balance_owed_cents(right_raw)
+    left_pairs = _points_mode_collect_balance_cents(left_bureaus)
+    right_pairs = _points_mode_collect_balance_cents(right_bureaus)
 
-        if left_cents is None or right_cents is None:
+    for _, left_cents in left_pairs:
+        if left_cents is None or left_cents == 0:
             continue
-
-        if left_cents == right_cents:
-            return True
+        for _, right_cents in right_pairs:
+            if right_cents is None or right_cents == 0:
+                continue
+            if left_cents == right_cents:
+                return True
 
     return False
+
+
+def _points_mode_collect_balance_cents(
+    bureaus: Mapping[str, Mapping[str, Any]] | None,
+) -> Tuple[Tuple[str, Optional[int]], ...]:
+    """Return (bureau, cents) tuples with strict normalization for balances."""
+
+    if not isinstance(bureaus, Mapping):
+        return tuple()
+
+    pairs: List[Tuple[str, Optional[int]]] = []
+    for bureau in ("transunion", "experian", "equifax"):
+        cents: Optional[int] = None
+        branch = bureaus.get(bureau)
+        if isinstance(branch, Mapping):
+            raw_value = branch.get("balance_owed")
+            if not is_missing(raw_value):
+                cents = normalize_balance_owed_cents(raw_value)
+        pairs.append((bureau, cents))
+
+    return tuple(pairs)
 
 
 def _points_mode_match_field_any_bureau(

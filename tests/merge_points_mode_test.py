@@ -115,6 +115,62 @@ def test_balance_exact_match_any_bureau_unlocks_direct(points_cfg: account_merge
     assert scored["total"] == pytest.approx(expected_total)
 
 
+def test_balance_exact_match_handles_currency_format(points_cfg: account_merge.MergeCfg) -> None:
+    left_payload = _all_signals_payload(balance_owed="$10,000.00")
+    right_payload = _all_signals_payload(balance_owed="10000")
+
+    bureaus_a = _make_bureaus(transunion=left_payload)
+    bureaus_b = _make_bureaus(experian=right_payload)
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["parts"]["balance_owed"] == pytest.approx(points_cfg.weights["balance_owed"])
+    assert "amount_conflict:balance_owed" not in scored["conflicts"]
+    assert scored["decision"] == "auto"
+
+
+def test_balance_missing_counts_as_conflict(points_cfg: account_merge.MergeCfg) -> None:
+    left_payload = _all_signals_payload(balance_owed="2500")
+    right_payload = _all_signals_payload(balance_owed=None)
+
+    bureaus_a = _make_bureaus(transunion=left_payload)
+    bureaus_b = _make_bureaus(experian=right_payload)
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["parts"]["balance_owed"] == pytest.approx(0.0)
+    assert "amount_conflict:balance_owed" in scored["conflicts"]
+    assert scored["decision"] == "ai"
+
+
+def test_balance_close_values_still_conflict(points_cfg: account_merge.MergeCfg) -> None:
+    left_payload = _all_signals_payload(balance_owed="10000.00")
+    right_payload = _all_signals_payload(balance_owed="10000.01")
+
+    bureaus_a = _make_bureaus(experian=left_payload)
+    bureaus_b = _make_bureaus(equifax=right_payload)
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["parts"]["balance_owed"] == pytest.approx(0.0)
+    assert "amount_conflict:balance_owed" in scored["conflicts"]
+    assert scored["decision"] == "ai"
+
+
+def test_balance_zero_values_do_not_match(points_cfg: account_merge.MergeCfg) -> None:
+    left_payload = _all_signals_payload(balance_owed="0")
+    right_payload = _all_signals_payload(balance_owed="0.00")
+
+    bureaus_a = _make_bureaus(transunion=left_payload)
+    bureaus_b = _make_bureaus(experian=right_payload)
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["parts"]["balance_owed"] == pytest.approx(0.0)
+    assert "amount_conflict:balance_owed" in scored["conflicts"]
+    assert scored["decision"] == "ai"
+
+
 def test_points_mode_parts_pure_and_allowlisted(points_cfg: account_merge.MergeCfg) -> None:
     bureaus_a = _make_bureaus(transunion=_all_signals_payload())
     bureaus_b = _make_bureaus(experian=_all_signals_payload())

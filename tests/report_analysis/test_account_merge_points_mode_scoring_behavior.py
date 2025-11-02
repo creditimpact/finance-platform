@@ -237,6 +237,27 @@ def test_points_mode_serialization_preserves_float_parts(points_cfg) -> None:
     assert all(isinstance(value, float) for value in normalized.values())
 
 
+def test_points_mode_highlights_limit_matched_fields_allowlist() -> None:
+    result_payload = {
+        "points_mode": True,
+        "total": 0.0,
+        "aux": {
+            "account_number": {"acctnum_level": "none", "matched": False},
+            "date_opened": {"matched": True},
+            "balance_owed": {"matched": False},
+            "payment_amount": {"matched": True},
+        },
+        "parts": {field: 0.0 for field in account_merge._POINTS_MODE_FIELD_ALLOWLIST},
+    }
+
+    highlights = account_merge._build_ai_highlights(result_payload)
+
+    assert list(highlights["matched_fields"].keys()) == list(
+        account_merge._POINTS_MODE_FIELD_ALLOWLIST
+    )
+    assert "payment_amount" not in highlights["matched_fields"]
+
+
 def test_merge_pair_tag_serializes_points(points_cfg) -> None:
     bureaus_a = _make_bureaus(transunion={"account_number": "1234"})
     bureaus_b = _make_bureaus(experian={"account_number": "1234"})

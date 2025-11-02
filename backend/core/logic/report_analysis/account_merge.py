@@ -2052,7 +2052,7 @@ def _score_pair_points_mode(
     field_contributions: Dict[str, float] = {}
     field_weights: Dict[str, float] = {}
     field_breakdown: Dict[str, Dict[str, Any]] = {}
-    field_aux: Dict[str, Dict[str, Any]] = {}
+    fields_aux: Dict[str, Dict[str, Any]] = {}
     parts: Dict[str, float] = {}
     matched_bools: Dict[str, bool] = {}
     total_points = 0.0
@@ -2116,7 +2116,7 @@ def _score_pair_points_mode(
         field_matches[field] = match_score
         field_contributions[field] = contribution
         field_weights[field] = weight
-        field_aux[field] = aux
+        fields_aux[field] = aux
         field_breakdown[field] = {
             "match": match_score,
             "weight": weight,
@@ -2220,6 +2220,12 @@ def _score_pair_points_mode(
             assert abs(part) < 1e-9, f"points-mode mismatch: {field} has part {part} without match"
         if part > 0.0:
             assert matched_flag, f"points-mode mismatch: {field} part without matched flag"
+        aux_entry = fields_aux.get(field, {})
+        assert isinstance(aux_entry, Mapping), f"points-mode aux missing mapping for {field}"
+        assert bool(aux_entry.get("matched")) == matched_flag, (
+            f"points-mode mismatch: {field} aux matched flag {aux_entry.get('matched')}"
+            f" != {matched_flag}"
+        )
 
     assert abs(total_points - sum(parts.values())) < 1e-6
 
@@ -2233,7 +2239,8 @@ def _score_pair_points_mode(
         "field_contributions": field_contributions,
         "field_weights": {field: field_weights.get(field, 0.0) for field in evaluated_fields},
         "field_breakdown": field_breakdown,
-        "field_aux": field_aux,
+        "field_aux": fields_aux,
+        "aux": fields_aux,
         "allowlist_fields": allowlist_fields,
         "ignored_fields": tuple(ignored_fields),
         "parts": {field: parts.get(field, 0.0) for field in evaluated_fields},

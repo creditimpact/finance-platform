@@ -245,3 +245,66 @@ def test_points_mode_parts_follow_matched_flags(points_cfg: account_merge.MergeC
     for field in _ALLOWED_SIGNALS:
         expected = bool(scored["parts"][field] > 0.0)
         assert matched_fields[field] is expected
+
+
+def test_account_number_points_require_resolved_level(
+    monkeypatch: pytest.MonkeyPatch, points_cfg: account_merge.MergeCfg
+) -> None:
+    def fake_match_account_number_best_pair(*_: Any, **__: Any) -> tuple[bool, Dict[str, Any]]:
+        return True, {
+            "acctnum_level": "none",
+            "matched": True,
+            "matched_bool": True,
+            "match_score": 1.0,
+            "best_pair": ("transunion", "experian"),
+            "normalized_values": ("1111", "1111"),
+            "raw_values": {"a": "1111", "b": "1111"},
+        }
+
+    monkeypatch.setattr(
+        account_merge,
+        "_match_account_number_best_pair",
+        fake_match_account_number_best_pair,
+    )
+
+    bureaus_a = _make_bureaus(transunion=_all_signals_payload())
+    bureaus_b = _make_bureaus(experian=_all_signals_payload())
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["parts"]["account_number"] == pytest.approx(0.0)
+    account_aux = scored["aux"]["account_number"]
+    assert account_aux["points_mode_acctnum_level"] == "none"
+    assert account_aux["points_mode_matched_bool"] is False
+
+
+def test_account_number_points_accept_known_match(
+    monkeypatch: pytest.MonkeyPatch, points_cfg: account_merge.MergeCfg
+) -> None:
+    def fake_match_account_number_best_pair(*_: Any, **__: Any) -> tuple[bool, Dict[str, Any]]:
+        return True, {
+            "acctnum_level": "known_match",
+            "matched": True,
+            "matched_bool": True,
+            "match_score": 1.0,
+            "best_pair": ("transunion", "experian"),
+            "normalized_values": ("2222", "2222"),
+            "raw_values": {"a": "2222", "b": "2222"},
+        }
+
+    monkeypatch.setattr(
+        account_merge,
+        "_match_account_number_best_pair",
+        fake_match_account_number_best_pair,
+    )
+
+    bureaus_a = _make_bureaus(transunion=_all_signals_payload())
+    bureaus_b = _make_bureaus(experian=_all_signals_payload())
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    expected_weight = points_cfg.weights["account_number"]
+    assert scored["parts"]["account_number"] == pytest.approx(expected_weight)
+    account_aux = scored["aux"]["account_number"]
+    assert account_aux["points_mode_acctnum_level"] == "known_match"
+    assert account_aux["points_mode_matched_bool"] is True

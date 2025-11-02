@@ -172,14 +172,20 @@ def test_points_mode_parts_follow_matched_flags(points_cfg: account_merge.MergeC
 
     scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
 
-    account_type_aux = scored["field_aux"]["account_type"]
+    account_type_aux = scored["aux"]["account_type"]
     assert account_type_aux["points_mode_matched_bool"] is False
     assert scored["parts"]["account_type"] == pytest.approx(0.0)
 
-    account_number_aux = scored["field_aux"]["account_number"]
+    account_number_aux = scored["aux"]["account_number"]
     assert account_number_aux.get("acctnum_level") == "none"
     assert account_number_aux["points_mode_matched_bool"] is False
     assert scored["parts"]["account_number"] == pytest.approx(0.0)
 
     total_from_parts = sum(scored["parts"].values())
     assert scored["total"] == pytest.approx(total_from_parts)
+
+    aux_payload = account_merge._build_aux_payload(scored["aux"], cfg=points_cfg)
+    matched_fields = aux_payload["matched_fields"]
+    for field in _ALLOWED_SIGNALS:
+        expected = bool(scored["parts"][field] > 0.0)
+        assert matched_fields[field] is expected

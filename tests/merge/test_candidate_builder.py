@@ -37,9 +37,24 @@ def test_hard_pairs_bypass_per_account_caps(tmp_path, monkeypatch) -> None:
     sid = "SID-HARD"
     accounts_root = tmp_path / sid / "cases" / "accounts"
 
-    bureaus_28 = {"transunion": {"account_number_display": "349992*****"}}
-    bureaus_29 = {"experian": {"account_number_display": "3499921234567"}}
-    bureaus_39 = {"equifax": {"account_number_display": "3499921234567"}}
+    bureaus_28 = {
+        "transunion": {
+            "account_number_display": "349992*****",
+            "balance_owed": "0",
+        }
+    }
+    bureaus_29 = {
+        "experian": {
+            "account_number_display": "3499921234567",
+            "balance_owed": "0",
+        }
+    }
+    bureaus_39 = {
+        "equifax": {
+            "account_number_display": "3499921234567",
+            "balance_owed": "0",
+        }
+    }
 
     _write_account_payload(accounts_root, 28, bureaus_28)
     _write_account_payload(accounts_root, 29, bureaus_29)
@@ -57,7 +72,7 @@ def test_hard_pairs_bypass_per_account_caps(tmp_path, monkeypatch) -> None:
 
     for left, right in built_pairs:
         result = scores[left][right]
-        acct_aux = result["field_aux"]["account_number"]
+        acct_aux = result["aux"]["account_number"]
         assert acct_aux["acctnum_level"] == "exact_or_known_match"
         assert result["field_contributions"]["account_number"] == acct_weight
 
@@ -68,8 +83,18 @@ def test_account_number_points_open_score_gate(tmp_path, monkeypatch) -> None:
     sid = "SID-THRESHOLD"
     accounts_root = tmp_path / sid / "cases" / "accounts"
 
-    bureaus_a = {"transunion": {"account_number_display": "123456789"}}
-    bureaus_b = {"experian": {"account_number_display": "123456789"}}
+    bureaus_a = {
+        "transunion": {
+            "account_number_display": "123456789",
+            "balance_owed": "0",
+        }
+    }
+    bureaus_b = {
+        "experian": {
+            "account_number_display": "123456789",
+            "balance_owed": "0",
+        }
+    }
 
     _write_account_payload(accounts_root, 0, bureaus_a)
     _write_account_payload(accounts_root, 1, bureaus_b)
@@ -77,13 +102,14 @@ def test_account_number_points_open_score_gate(tmp_path, monkeypatch) -> None:
     scores = account_merge.score_all_pairs_0_100(sid, [0, 1], runs_root=tmp_path)
 
     result = scores[0][1]
-    acct_aux = result["field_aux"]["account_number"]
+    acct_aux = result["aux"]["account_number"]
 
     cfg = account_merge.get_merge_cfg()
-    acct_weight = pytest.approx(
-        getattr(cfg, "MERGE_WEIGHTS", {}).get("account_number", 0.0)
-    )
+    acct_weight_value = getattr(cfg, "MERGE_WEIGHTS", {}).get("account_number", 0.0)
+    balance_weight_value = getattr(cfg, "MERGE_WEIGHTS", {}).get("balance_owed", 0.0)
 
-    assert result["total"] == acct_weight
+    expected_total = acct_weight_value + balance_weight_value
+
+    assert result["total"] == pytest.approx(expected_total)
     assert acct_aux["acctnum_level"] == "exact_or_known_match"
     assert result["triggers"] == []

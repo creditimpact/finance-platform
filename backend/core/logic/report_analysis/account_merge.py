@@ -2644,7 +2644,9 @@ def score_all_pairs_0_100(
             cfg,
             points_mode=points_mode_active,
         )
-        aux_payload = _build_aux_payload(result.get("aux", {}), cfg=cfg)
+        aux_payload = _build_aux_payload(
+            result.get("aux", {}), cfg=cfg, points_mode=points_mode_active
+        )
 
         acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
         raw_aux = result.get("aux") if isinstance(result.get("aux"), Mapping) else {}
@@ -3100,11 +3102,24 @@ def choose_best_partner(
 
 
 def _build_aux_payload(
-    aux: Mapping[str, Any], *, cfg: Optional[MergeCfg] = None
+    aux: Mapping[str, Any], *, cfg: Optional[MergeCfg] = None, points_mode: Optional[bool] = None
 ) -> Dict[str, Any]:
     acct_level = _sanitize_acct_level(None)
     by_field_pairs: Dict[str, List[str]] = {}
-    matched_fields: Dict[str, bool] = {"account_number": False}
+    resolved_points_mode = points_mode
+    if resolved_points_mode is None and cfg is not None:
+        resolved_points_mode = bool(getattr(cfg, "points_mode", False))
+    if resolved_points_mode is None:
+        resolved_points_mode = False
+
+    if resolved_points_mode:
+        field_sequence = _resolve_points_mode_allowlist(cfg)
+        matched_fields: Dict[str, bool] = {field: False for field in field_sequence}
+        if "account_number" not in matched_fields:
+            matched_fields["account_number"] = False
+    else:
+        field_sequence = _field_sequence_from_cfg(cfg)
+        matched_fields = {"account_number": False}
     account_number_matched = False
     acct_digits_len_a: Optional[int] = None
     acct_digits_len_b: Optional[int] = None
@@ -3130,7 +3145,7 @@ def _build_aux_payload(
             except (TypeError, ValueError):
                 acct_digits_len_b = acct_digits_len_b
 
-        for field in _field_sequence_from_cfg(cfg):
+        for field in field_sequence:
             field_aux = aux.get(field) if isinstance(aux, Mapping) else None
             if not isinstance(field_aux, Mapping):
                 continue
@@ -3190,7 +3205,9 @@ def _build_ai_highlights(result: Mapping[str, Any] | None) -> Dict[str, Any]:
         result_payload.get("parts"),
         points_mode=bool(result_payload.get("points_mode")),
     )
-    aux_payload = _build_aux_payload(result_payload.get("aux", {}))
+    aux_payload = _build_aux_payload(
+        result_payload.get("aux", {}), points_mode=points_mode_active
+    )
 
     matched_fields_raw = aux_payload.get("matched_fields", {})
     if isinstance(matched_fields_raw, Mapping):
@@ -3393,7 +3410,9 @@ def _build_pair_entry(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, 
         parts_payload,
         points_mode=points_mode_active,
     )
-    aux_slim = _build_aux_payload(aux_payload)
+    aux_slim = _build_aux_payload(
+        aux_payload, points_mode=points_mode_active
+    )
     acct_level = _sanitize_acct_level(aux_slim.get("acctnum_level"))
 
     entry: Dict[str, Any] = {
@@ -3440,7 +3459,9 @@ def _build_best_match_entry(
         if isinstance(result_payload, Mapping):
             total_value, points_mode_active = _extract_total_from_result(result_payload)
             decision = str(result_payload.get("decision", "different"))
-            aux_payload = _build_aux_payload(result_payload.get("aux", {}))
+            aux_payload = _build_aux_payload(
+                result_payload.get("aux", {}), points_mode=points_mode_active
+            )
             acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level", acct_level))
         else:
             total_value = 0.0
@@ -4253,7 +4274,9 @@ def _merge_tag_from_best(
         cfg,
         points_mode=points_mode_active,
     )
-    aux_payload = _build_aux_payload(best_result.get("aux", {}), cfg=cfg)
+    aux_payload = _build_aux_payload(
+        best_result.get("aux", {}), cfg=cfg, points_mode=points_mode_active
+    )
     acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
 
     score_entries = _build_score_entries(partner_scores, best_partner)

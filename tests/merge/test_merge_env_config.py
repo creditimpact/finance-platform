@@ -8,12 +8,13 @@ from typing import Iterator
 
 import pytest
 
-from backend.config.merge_config import reset_merge_config_cache
+from backend.config.merge_config import DEFAULT_FIELDS, reset_merge_config_cache
 from backend.core.logic.report_analysis.account_merge import (
-    _FIELD_SEQUENCE,
     _field_sequence_from_cfg,
     get_merge_cfg,
 )
+
+_DEFAULT_FIELD_SEQUENCE = tuple(DEFAULT_FIELDS)
 
 
 @pytest.fixture(autouse=True)
@@ -91,7 +92,7 @@ def test_disabled_merge_preserves_legacy_defaults(monkeypatch: pytest.MonkeyPatc
 
     cfg = get_merge_cfg()
 
-    assert cfg.fields == _FIELD_SEQUENCE
+    assert cfg.fields == _DEFAULT_FIELD_SEQUENCE
     assert cfg.MERGE_ALLOWLIST_ENFORCE is False
 
 
@@ -122,7 +123,7 @@ def test_default_flags_match_legacy_behaviour() -> None:
 
     cfg = get_merge_cfg()
 
-    assert cfg.fields == _FIELD_SEQUENCE
+    assert cfg.fields == _DEFAULT_FIELD_SEQUENCE
     assert cfg.use_custom_weights is False
     assert cfg.MERGE_ALLOWLIST_ENFORCE is False
 
@@ -184,6 +185,23 @@ def test_allowlist_enforcement_uses_env_fields(monkeypatch: pytest.MonkeyPatch) 
 
     assert cfg.MERGE_ALLOWLIST_ENFORCE is True
     assert _field_sequence_from_cfg(cfg) == override_fields
+
+
+def test_points_mode_cfg_strips_legacy_points(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy points tables should never leak into a points-mode configuration."""
+
+    monkeypatch.setenv("MERGE_POINTS_MODE", "true")
+    monkeypatch.setenv("MERGE_ALLOWLIST_ENFORCE", "true")
+    monkeypatch.setenv("MERGE_USE_ORIGINAL_CREDITOR", "true")
+    monkeypatch.setenv("MERGE_USE_CREDITOR_NAME", "true")
+    monkeypatch.setenv(
+        "MERGE_FIELDS_OVERRIDE_JSON", json.dumps(list(_DEFAULT_FIELD_SEQUENCE))
+    )
+
+    cfg = get_merge_cfg()
+
+    assert cfg.points_mode is True
+    assert cfg.points == {}
 
 
 def test_optional_fields_require_allowlist_and_toggle(

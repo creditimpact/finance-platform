@@ -200,6 +200,27 @@ def test_points_mode_parts_pure_and_allowlisted(points_cfg: account_merge.MergeC
     assert scored["total"] == pytest.approx(sum(scored["parts"].values()))
 
 
+def test_points_mode_ignores_legacy_point_bonuses(
+    points_cfg: account_merge.MergeCfg,
+) -> None:
+    # Populate the legacy points table with values that should be ignored by points-mode.
+    points_cfg.points = {
+        "identity_group_bonus": 99,
+        "mid_group_bonus": 77,
+        "account_number": 42,
+    }
+
+    bureaus_a = _make_bureaus(transunion=_all_signals_payload())
+    bureaus_b = _make_bureaus(experian=_all_signals_payload())
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    expected_total = sum(points_cfg.weights[field] for field in _ALLOWED_SIGNALS)
+    assert scored["total"] == pytest.approx(expected_total)
+    assert "identity_group_bonus" not in scored["parts"]
+    assert "mid_group_bonus" not in scored["parts"]
+
+
 def test_ai_threshold_never_yields_direct(points_cfg: account_merge.MergeCfg) -> None:
     left_payload = _all_signals_payload(history_2y=None, history_7y=None)
     right_payload = _all_signals_payload(

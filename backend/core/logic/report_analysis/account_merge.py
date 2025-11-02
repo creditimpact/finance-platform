@@ -1635,7 +1635,9 @@ def _match_field_values(
     aux: Dict[str, Any] = {}
 
     def _finalize(match: bool, score: float) -> Tuple[float, Dict[str, Any]]:
-        aux["matched_bool"] = bool(match)
+        matched_flag = bool(match)
+        aux["matched_bool"] = matched_flag
+        aux["matched"] = matched_flag
         return max(0.0, min(1.0, float(score))), aux
 
     if field == "balance_owed":

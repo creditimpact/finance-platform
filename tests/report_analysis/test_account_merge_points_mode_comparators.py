@@ -126,6 +126,34 @@ def test_date_opened_uses_day_tolerance(
     assert scored["field_contributions"]["date_opened"] == pytest.approx(expected)
 
 
+def test_date_opened_matched_fields_align(make_points_cfg) -> None:
+    cfg = make_points_cfg(MERGE_TOL_DATE_DAYS=5)
+
+    bureaus_a = _make_bureaus(transunion={"date_opened": "2020-01-01"})
+    bureaus_b = _make_bureaus(experian={"date_opened": "2020-01-03"})
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, cfg)
+    assert scored["parts"]["date_opened"] == pytest.approx(cfg.weights["date_opened"])
+    assert scored["aux"]["date_opened"]["matched"] is True
+
+    aux_payload = account_merge._build_aux_payload(scored["aux"], cfg=cfg)
+    assert aux_payload["matched_fields"]["date_opened"] is True
+
+
+def test_date_opened_matched_fields_align_when_unmatched(make_points_cfg) -> None:
+    cfg = make_points_cfg(MERGE_TOL_DATE_DAYS=5)
+
+    bureaus_a = _make_bureaus(transunion={"date_opened": "2020-01-01"})
+    bureaus_b = _make_bureaus(experian={"date_opened": "2020-02-01"})
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, cfg)
+    assert scored["parts"]["date_opened"] == pytest.approx(0.0)
+    assert scored["aux"]["date_opened"]["matched"] is False
+
+    aux_payload = account_merge._build_aux_payload(scored["aux"], cfg=cfg)
+    assert aux_payload["matched_fields"]["date_opened"] is False
+
+
 @pytest.mark.parametrize(
     "left,right,tol_abs,tol_ratio,expected",
     [

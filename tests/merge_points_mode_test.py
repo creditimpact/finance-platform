@@ -143,6 +143,23 @@ def test_balance_missing_counts_as_conflict(points_cfg: account_merge.MergeCfg) 
     assert scored["decision"] == "ai"
 
 
+def test_balance_missing_on_all_bureaus_conflicts(points_cfg: account_merge.MergeCfg) -> None:
+    bureaus_a = _make_bureaus(
+        transunion=_all_signals_payload(balance_owed=None),
+        experian=_all_signals_payload(balance_owed=None),
+    )
+    bureaus_b = _make_bureaus(
+        equifax=_all_signals_payload(balance_owed=None),
+        experian=_all_signals_payload(balance_owed=None),
+    )
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["parts"]["balance_owed"] == pytest.approx(0.0)
+    assert "amount_conflict:balance_owed" in scored["conflicts"]
+    assert scored["decision"] != "auto"
+
+
 def test_balance_close_values_still_conflict(points_cfg: account_merge.MergeCfg) -> None:
     left_payload = _all_signals_payload(balance_owed="10000.00")
     right_payload = _all_signals_payload(balance_owed="10000.01")
@@ -343,3 +360,130 @@ def test_account_number_points_accept_known_match(
     account_aux = scored["aux"]["account_number"]
     assert account_aux["points_mode_acctnum_level"] == "known_match"
     assert account_aux["points_mode_matched_bool"] is True
+
+
+def test_balance_mismatch_all_bureaus_produces_conflict(
+    points_cfg: account_merge.MergeCfg,
+) -> None:
+    bureaus_a = _make_bureaus(
+        transunion=_all_signals_payload(balance_owed="1000"),
+        experian=_all_signals_payload(balance_owed="2000"),
+        equifax=_all_signals_payload(balance_owed="3000"),
+    )
+    bureaus_b = _make_bureaus(
+        transunion=_all_signals_payload(balance_owed="4000"),
+        experian=_all_signals_payload(balance_owed="5000"),
+        equifax=_all_signals_payload(balance_owed="6000"),
+    )
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["parts"]["balance_owed"] == pytest.approx(0.0)
+    assert "amount_conflict:balance_owed" in scored["conflicts"]
+    assert scored["decision"] != "auto"
+
+
+def test_date_opened_parts_align_with_matched_fields(
+    points_cfg: account_merge.MergeCfg,
+) -> None:
+    bureaus_a = _make_bureaus(
+        transunion=_all_signals_payload(date_opened="2020-01-01"),
+        experian=_all_signals_payload(date_opened="2019-02-02"),
+    )
+    bureaus_b = _make_bureaus(
+        equifax=_all_signals_payload(date_opened="2020-01-01"),
+        experian=_all_signals_payload(date_opened="2022-03-03"),
+    )
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+    aux_payload = account_merge._build_aux_payload(scored["aux"], cfg=points_cfg)
+    matched_fields = aux_payload["matched_fields"]
+
+    part_value = scored["parts"]["date_opened"]
+    assert bool(part_value > 0.0) is matched_fields["date_opened"]
+
+
+@pytest.mark.parametrize(
+    "bureaus_a,bureaus_b",
+    [
+        (
+            _make_bureaus(transunion=_all_signals_payload()),
+            _make_bureaus(experian=_all_signals_payload()),
+        ),
+        (
+            _make_bureaus(transunion=_all_signals_payload(balance_owed="999")),
+            _make_bureaus(experian=_all_signals_payload(balance_owed="123")),
+        ),
+        (
+            _make_bureaus(transunion=_all_signals_payload(account_type="revolving")),
+            _make_bureaus(experian=_all_signals_payload(account_type="installment")),
+        ),
+    ],
+)
+def test_points_mode_totals_match_sum_of_parts(
+    bureaus_a: Mapping[str, Mapping[str, Any]],
+    bureaus_b: Mapping[str, Mapping[str, Any]],
+    points_cfg: account_merge.MergeCfg,
+) -> None:
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    total_from_parts = sum(scored["parts"].values())
+    assert scored["total"] == pytest.approx(total_from_parts)
+
+
+def test_decision_gates_cover_all_thresholds(points_cfg: account_merge.MergeCfg) -> None:
+    all_match = account_merge.score_pair_0_100(
+        _make_bureaus(transunion=_all_signals_payload()),
+        _make_bureaus(experian=_all_signals_payload()),
+        points_cfg,
+    )
+    assert all_match["decision"] == "auto"
+    assert all_match["total"] >= points_cfg.direct_points_threshold
+    assert "amount_conflict:balance_owed" not in all_match["conflicts"]
+
+    ai_only = account_merge.score_pair_0_100(
+        _make_bureaus(
+            transunion=_all_signals_payload(history_2y=None, history_7y=None)
+        ),
+        _make_bureaus(
+            experian=_all_signals_payload(
+                history_2y=None,
+                history_7y=None,
+                date_opened="2022-01-01",
+                account_type="revolving",
+                account_status="closed",
+            )
+        ),
+        points_cfg,
+    )
+    assert ai_only["decision"] == "ai"
+    assert ai_only["total"] >= points_cfg.ai_points_threshold
+    assert ai_only["total"] < points_cfg.direct_points_threshold
+
+    different = account_merge.score_pair_0_100(
+        _make_bureaus(
+            transunion=_all_signals_payload(
+                account_number="AAAA1111",
+                date_opened="2010-01-01",
+                balance_owed="5000",
+                account_type="installment",
+                account_status="open",
+                history_2y="OK OK",
+                history_7y="OK OK",
+            )
+        ),
+        _make_bureaus(
+            experian=_all_signals_payload(
+                account_number="BBBB2222",
+                date_opened="2009-12-31",
+                balance_owed="6000",
+                account_type="revolving",
+                account_status="closed",
+                history_2y="LATE LATE",
+                history_7y="LATE LATE",
+            )
+        ),
+        points_cfg,
+    )
+    assert different["decision"] == "different"
+    assert different["total"] < points_cfg.ai_points_threshold

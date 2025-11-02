@@ -154,6 +154,35 @@ def test_points_mode_ai_and_direct_thresholds(points_cfg, make_points_accounts) 
     assert "points:direct" in auto_result["triggers"]
 
 
+
+def test_points_mode_direct_requires_balance_and_no_conflicts(
+    points_cfg, make_points_accounts
+) -> None:
+    bureaus_a, bureaus_b = make_points_accounts(
+        right_override={"balance_owed": "110"}
+    )
+
+    result = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert result["total"] == pytest.approx(5.0)
+    assert result["decision"] == "ai"
+    assert "points:direct" not in result["triggers"]
+    assert "points:ai" in result["triggers"]
+    assert "amount_conflict:balance_owed" in result["conflicts"]
+
+    tag = account_merge.build_merge_pair_tag(1, result)
+
+    assert tag["decision"] == "ai"
+
+    parts = tag["parts"]
+    matched_fields = tag["aux"]["matched_fields"]
+
+    for field in account_merge._POINTS_MODE_FIELD_ALLOWLIST:
+        assert (parts[field] > 0.0) == matched_fields[field]
+
+    assert matched_fields["balance_owed"] is False
+
+
 def test_points_mode_emits_balance_conflict_without_exact_match(points_cfg) -> None:
     bureaus_a = _make_bureaus(transunion={"balance_owed": "100"})
     bureaus_b = _make_bureaus(experian={"balance_owed": "103"})

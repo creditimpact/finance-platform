@@ -2207,7 +2207,7 @@ def _score_pair_points_mode(
     decision = "different"
 
     if (
-        total_points >= direct_threshold > 0
+        total_points >= direct_threshold
         and not has_conflict
         and balance_exact_match
     ):
@@ -2222,7 +2222,7 @@ def _score_pair_points_mode(
                 },
             }
         )
-    elif total_points >= ai_threshold > 0:
+    elif total_points >= ai_threshold:
         decision = "ai"
         triggers.append("points:ai")
         trigger_events.append(

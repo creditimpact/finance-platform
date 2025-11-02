@@ -1079,6 +1079,9 @@ _ACCOUNT_LEVEL_PRIORITY = {
     "none": 0,
     "exact_or_known_match": 1,
 }
+_POINTS_MODE_ACCOUNT_NUMBER_MATCH_LEVELS = frozenset(
+    {"exact", "known_match", "exact_or_known_match"}
+)
 
 _IDENTITY_FIELD_SET = {
     "account_number",
@@ -1111,6 +1114,16 @@ _POINTS_MODE_DEBT_FIELDS: Tuple[str, ...] = (
     "history_2y",
     "history_7y",
 )
+
+
+def _normalize_points_mode_acct_level(value: Any) -> str:
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in _POINTS_MODE_ACCOUNT_NUMBER_MATCH_LEVELS:
+            return candidate
+        if candidate in {"none", "unknown", "partial", "masked_match", "visible_digits_conflict"}:
+            return "none"
+    return "none"
 
 
 def normalize_acctnum(raw: str | None) -> Dict[str, object]:
@@ -2114,6 +2127,11 @@ def _score_pair_points_mode(
 
         weight = float(weights_map.get(field, 0.0))
         matched_flag = bool(aux.get("matched_bool", aux.get("matched", matched)))
+
+        if field == "account_number":
+            resolved_level = _normalize_points_mode_acct_level(aux.get("acctnum_level"))
+            aux["points_mode_acctnum_level"] = resolved_level
+            matched_flag = resolved_level in _POINTS_MODE_ACCOUNT_NUMBER_MATCH_LEVELS
 
         if field == "balance_owed":
             aux["points_mode_exact_match"] = bool(balance_exact_match)

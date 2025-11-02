@@ -2053,6 +2053,8 @@ def _score_pair_points_mode(
     field_weights: Dict[str, float] = {}
     field_breakdown: Dict[str, Dict[str, Any]] = {}
     field_aux: Dict[str, Dict[str, Any]] = {}
+    parts: Dict[str, float] = {}
+    matched_bools: Dict[str, bool] = {}
     total_points = 0.0
     diagnostics_entries: List[Tuple[str, float, float, float, float]] = []
 
@@ -2077,6 +2079,7 @@ def _score_pair_points_mode(
         balance_exact_match = _points_mode_balance_has_exact_match(A_data, B_data)
 
     for field in evaluated_fields:
+        parts[field] = 0.0
         matched, match_aux = _points_mode_match_field_any_bureau(
             field, A_data, B_data, cfg
         )
@@ -2097,9 +2100,15 @@ def _score_pair_points_mode(
 
         match_score = 1.0 if matched_flag else 0.0
         contribution = weight if matched_flag else 0.0
+        if matched_flag:
+            parts[field] = weight
+        else:
+            parts[field] = 0.0
+        matched_bools[field] = matched_flag
 
         aux["matched"] = matched_flag
         aux["matched_bool"] = matched_flag
+        aux["points_mode_matched_bool"] = matched_flag
         aux["match_score"] = match_score
         aux["weight"] = weight
         aux["contribution"] = contribution
@@ -2112,7 +2121,7 @@ def _score_pair_points_mode(
             "match": match_score,
             "weight": weight,
             "contribution": contribution,
-            "matched": bool(aux.get("matched_bool", matched)),
+            "matched": matched_flag,
         }
 
         current_total = total_points + contribution
@@ -2204,6 +2213,16 @@ def _score_pair_points_mode(
             )
         _POINTS_MODE_DIAGNOSTICS_EMITTED += 1
 
+    for field in evaluated_fields:
+        part = float(parts.get(field, 0.0))
+        matched_flag = bool(matched_bools.get(field, False))
+        if not matched_flag:
+            assert abs(part) < 1e-9, f"points-mode mismatch: {field} has part {part} without match"
+        if part > 0.0:
+            assert matched_flag, f"points-mode mismatch: {field} part without matched flag"
+
+    assert abs(total_points - sum(parts.values())) < 1e-6
+
     return {
         "total": float(total_points),
         "score_points": float(total_points),
@@ -2217,7 +2236,7 @@ def _score_pair_points_mode(
         "field_aux": field_aux,
         "allowlist_fields": allowlist_fields,
         "ignored_fields": tuple(ignored_fields),
-        "parts": {field: field_contributions.get(field, 0.0) for field in evaluated_fields},
+        "parts": {field: parts.get(field, 0.0) for field in evaluated_fields},
         "conflicts": conflicts,
         "triggers": triggers,
         "decision": decision,

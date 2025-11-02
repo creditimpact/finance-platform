@@ -152,3 +152,34 @@ def test_ai_threshold_never_yields_direct(points_cfg: account_merge.MergeCfg) ->
     assert "points:direct" not in scored["triggers"]
     assert "points:ai" in scored["triggers"]
     assert "amount_conflict:balance_owed" not in scored["conflicts"]
+
+
+def test_points_mode_parts_follow_matched_flags(points_cfg: account_merge.MergeCfg) -> None:
+    left_payload = _all_signals_payload(
+        account_type="installment",
+        account_status="open",
+        account_number="111122223333",
+    )
+    right_payload = _all_signals_payload(
+        account_type="revolving",
+        account_status="closed",
+        account_number="999900001111",
+    )
+    right_payload["balance_owed"] = left_payload["balance_owed"]
+
+    bureaus_a = _make_bureaus(transunion=left_payload)
+    bureaus_b = _make_bureaus(experian=right_payload)
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    account_type_aux = scored["field_aux"]["account_type"]
+    assert account_type_aux["points_mode_matched_bool"] is False
+    assert scored["parts"]["account_type"] == pytest.approx(0.0)
+
+    account_number_aux = scored["field_aux"]["account_number"]
+    assert account_number_aux.get("acctnum_level") == "none"
+    assert account_number_aux["points_mode_matched_bool"] is False
+    assert scored["parts"]["account_number"] == pytest.approx(0.0)
+
+    total_from_parts = sum(scored["parts"].values())
+    assert scored["total"] == pytest.approx(total_from_parts)

@@ -247,6 +247,41 @@ def test_points_mode_parts_follow_matched_flags(points_cfg: account_merge.MergeC
         assert matched_fields[field] is expected
 
 
+def test_points_mode_total_not_clamped_to_threshold(
+    points_cfg: account_merge.MergeCfg,
+) -> None:
+    left_payload = _all_signals_payload()
+    right_payload = _all_signals_payload(
+        account_number="99990000",
+        date_opened="2019-12-12",
+        balance_owed="25000",
+        history_2y="LATE LATE",
+        history_7y="LATE LATE",
+    )
+
+    bureaus_a = _make_bureaus(transunion=left_payload)
+    bureaus_b = _make_bureaus(experian=right_payload)
+
+    scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
+
+    assert scored["parts"]["account_type"] == pytest.approx(
+        points_cfg.weights["account_type"]
+    )
+    assert scored["parts"]["account_status"] == pytest.approx(
+        points_cfg.weights["account_status"]
+    )
+    for field in _ALLOWED_SIGNALS:
+        if field in {"account_type", "account_status"}:
+            continue
+        assert scored["parts"][field] == pytest.approx(0.0)
+
+    expected_total = (
+        points_cfg.weights["account_type"] + points_cfg.weights["account_status"]
+    )
+    assert scored["total"] == pytest.approx(expected_total)
+    assert scored["total"] < points_cfg.ai_points_threshold
+
+
 def test_account_number_points_require_resolved_level(
     monkeypatch: pytest.MonkeyPatch, points_cfg: account_merge.MergeCfg
 ) -> None:

@@ -2268,7 +2268,18 @@ def _score_pair_points_mode(
             f" != {matched_flag}"
         )
 
-    assert abs(total_points - sum(parts.values())) < 1e-6
+    sum_parts = 0.0
+    for field in evaluated_fields:
+        try:
+            part_value = float(parts.get(field, 0.0))
+        except (TypeError, ValueError):
+            part_value = 0.0
+        parts[field] = part_value
+        sum_parts += part_value
+
+    total_points = float(sum_parts)
+
+    assert abs(total_points - sum_parts) < 1e-6
 
     return {
         "total": float(total_points),

@@ -1,6 +1,8 @@
 import json
 import logging
 from pathlib import Path
+import sys
+import types
 
 import pytest
 
@@ -472,3 +474,68 @@ def test_build_ai_merge_packs_cli_updates_manifest(
     assert packs_info["index"] == str(index_path.resolve())
     assert packs_info["pairs"] == 1
     assert status_info["built"] is True
+
+
+def test_build_ai_merge_packs_cli_triggers_autosend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    sid = "autosend-sid"
+    runs_root = tmp_path / "runs"
+    accounts_root = runs_root / sid / "cases" / "accounts"
+
+    account_a_dir = accounts_root / "21"
+    account_b_dir = accounts_root / "22"
+
+    _write_raw_lines(
+        account_a_dir / "raw_lines.json",
+        [
+            "BANK A",
+            "Account # 1111",
+        ],
+    )
+
+    _write_raw_lines(
+        account_b_dir / "raw_lines.json",
+        [
+            "BANK B",
+            "Account # 1111",
+        ],
+    )
+
+    _write_json(account_a_dir / "tags.json", [_merge_pair_tag(22), _merge_best_tag(22)])
+    _write_json(account_b_dir / "tags.json", [_merge_best_tag(21)])
+
+    autosend_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def _fake_trigger(*args: object, **kwargs: object) -> None:
+        autosend_calls.append((args, kwargs))
+
+    try:
+        import backend.ai.merge.sender as merge_sender
+    except ModuleNotFoundError:
+        merge_sender = types.SimpleNamespace()
+        monkeypatch.setitem(sys.modules, "backend.ai.merge.sender", merge_sender)
+
+    monkeypatch.setattr(
+        merge_sender, "trigger_autosend_after_build", _fake_trigger, raising=False
+    )
+
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="scripts.build_ai_merge_packs"):
+        build_packs_main(
+            [
+                "--sid",
+                sid,
+                "--runs-root",
+                str(runs_root),
+                "--max-lines-per-side",
+                "5",
+            ]
+        )
+
+    assert len(autosend_calls) == 1
+    args, kwargs = autosend_calls[0]
+    assert args == (sid,)
+    assert kwargs == {"runs_root": runs_root, "created": 1}

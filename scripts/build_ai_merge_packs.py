@@ -301,6 +301,24 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     print(f"[BUILD] wrote {len(index_entries)} packs to {packs_dir}")
 
+    try:
+        from backend.ai.merge.sender import trigger_autosend_after_build
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "MERGE_AUTOSEND_TRIGGER_IMPORT_FAILED sid=%s", sid, exc_info=True
+        )
+    else:
+        try:
+            trigger_autosend_after_build(
+                sid,
+                runs_root=runs_root,
+                created=pairs_count,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "MERGE_AUTOSEND_TRIGGER_FAILED sid=%s", sid, exc_info=True
+            )
+
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     main()

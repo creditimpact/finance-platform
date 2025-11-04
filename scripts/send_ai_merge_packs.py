@@ -437,6 +437,90 @@ def _append_log(path: Path, line: str) -> None:
         fh.write(line)
 
 
+def _build_pack_skip_signature(
+    a_idx: object,
+    b_idx: object,
+    *,
+    pack_sha: str | None,
+    reason: str,
+    pack_file: str | None,
+) -> tuple[int, int, str, str, str] | None:
+    try:
+        a_val = int(a_idx) if a_idx is not None else None
+        b_val = int(b_idx) if b_idx is not None else None
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
+    if a_val is None or b_val is None:
+        return None
+    first, second = sorted((a_val, b_val))
+    return (
+        first,
+        second,
+        str(reason or ""),
+        str(pack_sha or ""),
+        str(pack_file or ""),
+    )
+
+
+def _load_existing_pack_skip_signatures(
+    path: Path,
+) -> set[tuple[int, int, str, str, str]]:
+    signatures: set[tuple[int, int, str, str, str]] = set()
+    if not path.exists():
+        return signatures
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                if not raw_line.strip():
+                    continue
+                parts = raw_line.rstrip("\n").split(" ", 2)
+                if len(parts) < 3:
+                    continue
+                event = parts[1]
+                if event != "AI_ADJUDICATOR_PACK_SKIP":
+                    continue
+                payload_raw = parts[2]
+                try:
+                    payload = json.loads(payload_raw)
+                except Exception:
+                    continue
+                if not isinstance(payload, MappingABC):
+                    continue
+                reason = str(payload.get("reason") or "")
+                if reason != "result_present":
+                    continue
+                pair_value = payload.get("pair")
+                normalized_pair = None
+                if isinstance(pair_value, (MappingABC, Sequence)):
+                    normalized_pair = _normalize_pair(pair_value)
+                if normalized_pair is None:
+                    a_candidate = payload.get("a")
+                    b_candidate = payload.get("b")
+                    if a_candidate is not None and b_candidate is not None:
+                        normalized_pair = _normalize_pair((a_candidate, b_candidate))
+                if normalized_pair is None:
+                    continue
+                pack_file = payload.get("pack_file")
+                debug_payload = payload.get("debug")
+                pack_sha = None
+                if isinstance(debug_payload, MappingABC):
+                    sha_candidate = debug_payload.get("pack_sha256")
+                    if isinstance(sha_candidate, str):
+                        pack_sha = sha_candidate
+                signature = _build_pack_skip_signature(
+                    normalized_pair[0],
+                    normalized_pair[1],
+                    pack_sha=pack_sha,
+                    reason=reason,
+                    pack_file=str(pack_file) if pack_file is not None else None,
+                )
+                if signature is not None:
+                    signatures.add(signature)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning("AI_PACK_SKIP_HISTORY_READ_FAILED path=%s", path, exc_info=True)
+    return signatures
+
+
 def _load_summary(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
@@ -854,6 +938,7 @@ def _write_decision_tags_resolved(
         pair_tag_kind or "none",
     )
 
+
 def _write_error_tags(
     run_dir: Path,
     a_idx: int,
@@ -1002,6 +1087,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     results_dir.mkdir(parents=True, exist_ok=True)
     logs_path.parent.mkdir(parents=True, exist_ok=True)
 
+    existing_skip_signatures = _load_existing_pack_skip_signatures(logs_path)
+
     run_dir = manifest.path.parent
 
     index_data, index_entries = _load_index_payload(index_read_path)
@@ -1088,10 +1175,29 @@ def main(argv: Sequence[str] | None = None) -> None:
             if legacy_result_found and a_int is not None and b_int is not None:
                 result_path = pair_result_path(merge_paths, a_int, b_int)
                 _write_result(result_path, result_payload_existing)
-            pack_log(
-                "PACK_SKIP",
-                {"reason": "result_present", "debug": debug_payload},
+            signature = _build_pack_skip_signature(
+                a_idx,
+                b_idx,
+                pack_sha=pack_sha256,
+                reason="result_present",
+                pack_file=pack_path.name,
             )
+            if signature is None or signature not in existing_skip_signatures:
+                pack_log(
+                    "PACK_SKIP",
+                    {"reason": "result_present", "debug": debug_payload},
+                )
+                if signature is not None:
+                    existing_skip_signatures.add(signature)
+            else:
+                log.debug(
+                    "AI_PACK_SKIP_SUPPRESS sid=%s a=%s b=%s pack=%s reason=%s",
+                    sid,
+                    a_idx,
+                    b_idx,
+                    pack_path.name,
+                    "result_present",
+                )
             successes += 1
             continue
 

@@ -44,6 +44,7 @@ from backend.core.runflow_spans import end_span, span_step, start_span
 from backend.config.merge_config import (
     DEFAULT_FIELDS,
     POINTS_MODE_DEFAULT_WEIGHTS,
+    MergeConfig,
     get_merge_config,
 )
 # NOTE: do not import validation_builder at module import-time.
@@ -54,6 +55,7 @@ from backend.core.logic.validation_requirements import (
     build_summary_payload as build_validation_summary_payload,
     build_validation_requirements,
     sync_validation_tag,
+    _redact_account_number_raw,
 )
 __all__ = [
     "load_bureaus",
@@ -352,6 +354,95 @@ def load_bureaus(
     return result
 
 
+def _load_case_meta(meta_path: Path) -> Dict[str, Any]:
+    """Return parsed meta.json payload when available."""
+
+    try:
+        with meta_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError):
+        logger.debug("MERGE_META_LOAD_FAILED path=%s", meta_path, exc_info=True)
+        return {}
+
+    return data if isinstance(data, Mapping) else {}
+
+
+def _load_case_history_maps(bureaus_path: Path) -> Tuple[Dict[str, Sequence[Any]], Dict[str, Mapping[str, Any]]]:
+    """Return two-year and seven-year history maps from bureaus.json."""
+
+    try:
+        with bureaus_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        return {}, {}
+    except (OSError, json.JSONDecodeError):
+        logger.debug("MERGE_HISTORY_LOAD_FAILED path=%s", bureaus_path, exc_info=True)
+        return {}, {}
+
+    if not isinstance(payload, Mapping):
+        return {}, {}
+
+    history_2y_raw = payload.get("two_year_payment_history")
+    history_7y_raw = payload.get("seven_year_history")
+
+    history_2y: Dict[str, Sequence[Any]] = {}
+    if isinstance(history_2y_raw, Mapping):
+        for bureau, entries in history_2y_raw.items():
+            if isinstance(entries, Sequence):
+                history_2y[str(bureau)] = list(entries)
+
+    history_7y: Dict[str, Mapping[str, Any]] = {}
+    if isinstance(history_7y_raw, Mapping):
+        for bureau, entry in history_7y_raw.items():
+            if isinstance(entry, Mapping):
+                history_7y[str(bureau)] = dict(entry)
+
+    return history_2y, history_7y
+
+
+def _has_original_creditor(bureaus: Mapping[str, Mapping[str, Any]]) -> bool:
+    """Return True when any bureau branch provides an original creditor value."""
+
+    if not isinstance(bureaus, Mapping):
+        return False
+
+    for branch in bureaus.values():
+        if not isinstance(branch, Mapping):
+            continue
+        value = branch.get("original_creditor")
+        if not is_missing(value):
+            return True
+    return False
+
+
+def _pair_has_original_creditor(
+    left_bureaus: Mapping[str, Mapping[str, Any]],
+    right_bureaus: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """Return True when either side includes a usable original creditor value."""
+
+    return _has_original_creditor(left_bureaus) or _has_original_creditor(right_bureaus)
+
+
+def _ai_pack_gate_allows(
+    cfg: MergeCfg,
+    left_bureaus: Mapping[str, Mapping[str, Any]],
+    right_bureaus: Mapping[str, Mapping[str, Any]],
+) -> Tuple[bool, str]:
+    """Apply AI pack gating derived from configuration flags."""
+
+    require_original = bool(getattr(cfg, "require_original_creditor_for_ai", False))
+    if not require_original:
+        return True, ""
+
+    if _pair_has_original_creditor(left_bureaus, right_bureaus):
+        return True, ""
+
+    return False, "missing_original_creditor"
+
+
 @dataclass
 class MergeCfg:
     """Centralized configuration for deterministic account merging."""
@@ -370,6 +461,11 @@ class MergeCfg:
     use_custom_weights: bool = False
     use_original_creditor: bool = False
     use_creditor_name: bool = False
+    use_account_label: bool = False
+    require_original_creditor_for_ai: bool = False
+    points_diagnostics: bool = False
+    account_label_source: str = ""
+    account_label_normalize: bool = True
     debug: bool = False  # Runtime toggle controlling verbose merge logging.
     log_every: int = 0  # Optional cadence controlling how often debug logs fire.
 
@@ -441,6 +537,12 @@ class MergeCfg:
         """Expose optional-field toggle mirroring the MERGE_* env flag."""
 
         return bool(self.use_creditor_name)
+
+    @property
+    def MERGE_REQUIRE_ORIGINAL_CREDITOR_FOR_AI(self) -> bool:
+        """Return whether AI packs demand the original creditor field."""
+
+        return bool(self.require_original_creditor_for_ai)
 
     @property
     def MERGE_DEBUG(self) -> bool:
@@ -598,25 +700,15 @@ def _sanitize_tolerance_mapping(candidate: Any) -> Dict[str, Union[int, float]]:
     return sanitized
 
 
-def _coerce_env_bool(value: Any) -> bool:
-    """Return ``True`` when the provided env-style value is truthy."""
+def _coerce_env_bool(value: Any, default: bool = False) -> bool:
+    """Coerce env-like values to bool with a safe default."""
 
-    # Explicit booleans remain untouched so existing call sites keep behaviour.
+    if value is None:
+        return default
     if isinstance(value, bool):
         return value
-    # Integers are interpreted using non-zero semantics to support ``0``/``1`` flags.
-    if isinstance(value, int):
-        return value != 0
-    if isinstance(value, float):
-        return value != 0.0
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-    # Fallback matches the legacy default (disabled) when the flag is absent.
-    return False
+    s = str(value).strip().lower()
+    return s in {"1", "true", "yes", "y", "on"}
 
 
 def _coerce_env_int(value: Any, default: int = 0) -> int:
@@ -717,6 +809,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     allowlist_enforce = False
     legacy_defaults_allowed = False
     points_mode_locked = False
+    points_diagnostics_enabled = False
 
     points: Dict[str, int] = {}
     # Default weights act as neutral multipliers until custom overrides are enabled.
@@ -724,11 +817,17 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     custom_weights_enabled = False
     merge_use_original_creditor = False
     merge_use_creditor_name = False
+    merge_use_account_label = False
+    require_original_creditor_for_ai = False
+    account_label_source = ""
+    account_label_normalize = True
     merge_debug_enabled = False
     merge_log_every = 0
     ai_points_threshold = 3.0
     direct_points_threshold = 5.0
     points_diagnostics_limit = _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
+    points_persist_breakdown_enabled = False
+    points_diag_dir_setting = "ai_packs/merge/diagnostics"
 
     threshold_keys = ("AI_THRESHOLD", "AUTO_MERGE_THRESHOLD", "MERGE_SCORE_THRESHOLD")
     thresholds = {
@@ -796,6 +895,40 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         merge_use_creditor_name = _coerce_env_bool(
             merge_env_cfg.get("use_creditor_name")
         )  # controlled by MERGE_USE_CREDITOR_NAME
+        merge_use_account_label = _coerce_env_bool(
+            merge_env_cfg.get("use_account_label"), False
+        )  # controlled by MERGE_USE_ACCOUNT_LABEL
+        require_original_creditor_for_ai = _coerce_env_bool(
+            merge_env_cfg.get("require_original_creditor_for_ai"), False
+        )
+        points_diagnostics_enabled = _coerce_env_bool(
+            merge_env_cfg.get("points_diagnostics"), False
+        )
+        points_persist_breakdown_enabled = _coerce_env_bool(
+            merge_env_cfg.get("points_persist_breakdown"), False
+        )
+        raw_points_diag_dir = getattr(
+            merge_env_cfg,
+            "points_diag_dir",
+            "ai_packs/merge/diagnostics",
+        )
+        points_diag_dir_setting = str(raw_points_diag_dir).strip() or "ai_packs/merge/diagnostics"
+        raw_account_label_source = merge_env_cfg.get(
+            "account_label_source", "meta.heading_guess"
+        )
+        if isinstance(raw_account_label_source, str):
+            account_label_source = (
+                raw_account_label_source.strip() or "meta.heading_guess"
+            )
+        elif raw_account_label_source is None:
+            account_label_source = "meta.heading_guess"
+        else:
+            account_label_source = (
+                str(raw_account_label_source).strip() or "meta.heading_guess"
+            )
+        account_label_normalize = _coerce_env_bool(
+            merge_env_cfg.get("account_label_normalize"), True
+        )
         merge_debug_enabled = _coerce_env_bool(
             merge_env_cfg.get("debug")
         )  # controlled by MERGE_DEBUG
@@ -935,6 +1068,34 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             "MERGE_USE_CREDITOR_NAME",
             False,
         )
+        merge_use_account_label = _read_env_flag(
+            env_mapping,
+            "MERGE_USE_ACCOUNT_LABEL",
+            False,
+        )
+        require_original_creditor_for_ai = _read_env_flag(
+            env_mapping,
+            "MERGE_REQUIRE_ORIGINAL_CREDITOR_FOR_AI",
+            False,
+        )
+        raw_account_label_source = env_mapping.get(
+            "MERGE_ACCOUNT_LABEL_SOURCE", "meta.heading_guess"
+        )
+        if isinstance(raw_account_label_source, str):
+            account_label_source = (
+                raw_account_label_source.strip() or "meta.heading_guess"
+            )
+        elif raw_account_label_source is None:
+            account_label_source = "meta.heading_guess"
+        else:
+            account_label_source = (
+                str(raw_account_label_source).strip() or "meta.heading_guess"
+            )
+        account_label_normalize = _read_env_flag(
+            env_mapping,
+            "MERGE_ACCOUNT_LABEL_NORMALIZE",
+            True,
+        )
         merge_debug_enabled = _read_env_flag(
             env_mapping,
             "MERGE_DEBUG",
@@ -946,6 +1107,26 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
             "MERGE_POINTS_DIAGNOSTICS_LIMIT",
             _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK,
         )
+        points_diagnostics_enabled = _read_env_flag(
+            env_mapping,
+            "MERGE_POINTS_DIAGNOSTICS",
+            False,
+        )
+        points_persist_breakdown_enabled = _read_env_flag(
+            env_mapping,
+            "MERGE_POINTS_PERSIST_BREAKDOWN",
+            False,
+        )
+        raw_points_diag_dir = env_mapping.get(
+            "MERGE_POINTS_DIAGNOSTICS_DIR",
+            "ai_packs/merge/diagnostics",
+        )
+        if isinstance(raw_points_diag_dir, str):
+            points_diag_dir_setting = raw_points_diag_dir.strip() or "ai_packs/merge/diagnostics"
+        elif raw_points_diag_dir is None:
+            points_diag_dir_setting = "ai_packs/merge/diagnostics"
+        else:
+            points_diag_dir_setting = str(raw_points_diag_dir).strip() or "ai_packs/merge/diagnostics"
 
     fields_override = tuple(fields_override)
     allowlist_fields = tuple(allowlist_fields)
@@ -966,6 +1147,12 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         and "creditor_name" in allowlist_lookup
         and "creditor_name" in override_lookup
     )
+    allow_optional_account_label = bool(merge_use_account_label)
+    if allow_optional_account_label:
+        if "account_label" not in allowlist_lookup:
+            allow_optional_account_label = False
+        elif override_lookup and "account_label" not in override_lookup:
+            allow_optional_account_label = False
 
     if not allow_optional_original_creditor:
         weights_map.pop("original_creditor", None)
@@ -985,6 +1172,18 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         points["creditor_name"] = 0
         weights_map.setdefault("creditor_name", 1.0)
 
+    if not allow_optional_account_label:
+        weights_map.pop("account_label", None)
+        if not points_mode_active:
+            points.pop("account_label", None)
+    else:
+        if not points_mode_active and "account_label" not in points:
+            points["account_label"] = 0
+        if "account_label" not in weights_map:
+            weights_map["account_label"] = float(
+                POINTS_MODE_DEFAULT_WEIGHTS.get("account_label", 1.0)
+            )
+
     if points_mode_active:
         points = {}
 
@@ -998,6 +1197,7 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
                 item == "original_creditor" and not allow_optional_original_creditor
             )
             and not (item == "creditor_name" and not allow_optional_creditor_name)
+            and not (item == "account_label" and not allow_optional_account_label)
         ]
         if allow_optional_original_creditor and "original_creditor" not in items:
             # Future toggle makes ``original_creditor`` opt-in without code churn.
@@ -1005,6 +1205,8 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         if allow_optional_creditor_name and "creditor_name" not in items:
             # Future toggle makes ``creditor_name`` opt-in without code churn.
             items.append("creditor_name")
+        if allow_optional_account_label and "account_label" not in items:
+            items.append("account_label")
         return tuple(items)
 
     config_fields = _with_optional_fields(config_fields)
@@ -1028,6 +1230,12 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     config_fields = tuple(config_fields)
     allowlist_fields = tuple(allowlist_fields)
 
+    effective_use_account_label = bool(allow_optional_account_label)
+    account_label_runtime_source = (
+        account_label_source if effective_use_account_label else ""
+    )
+    account_label_runtime_normalize = bool(account_label_normalize)
+
     cfg_obj = MergeCfg(
         points=points,
         weights=weights_map,
@@ -1041,6 +1249,10 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         use_custom_weights=custom_weights_enabled,
         use_original_creditor=merge_use_original_creditor,
         use_creditor_name=merge_use_creditor_name,
+        use_account_label=effective_use_account_label,
+        require_original_creditor_for_ai=bool(require_original_creditor_for_ai),
+        account_label_source=account_label_runtime_source,
+        account_label_normalize=account_label_runtime_normalize,
         debug=merge_debug_enabled,
         log_every=merge_log_every,
     )
@@ -1053,6 +1265,9 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         "points_diagnostics_limit",
         int(max(points_diagnostics_limit or 0, 0)),
     )
+    setattr(cfg_obj, "points_diagnostics", bool(points_diagnostics_enabled))
+    setattr(cfg_obj, "points_persist_breakdown", bool(points_persist_breakdown_enabled))
+    setattr(cfg_obj, "points_diag_dir", str(points_diag_dir_setting))
 
     active_field_sequence = (
         allowlist_fields if (allowlist_enforce or points_mode_locked) else config_fields
@@ -1096,6 +1311,7 @@ _IDENTITY_FIELD_SET = {
     "last_verified",
     "account_type",
     "account_status",
+    "account_label",
 }
 
 _DEBT_FIELD_SET = {
@@ -1110,6 +1326,7 @@ _POINTS_MODE_IDENTITY_FIELDS: Tuple[str, ...] = (
     "date_opened",
     "account_type",
     "account_status",
+    "account_label",
 )
 
 _POINTS_MODE_DEBT_FIELDS: Tuple[str, ...] = (
@@ -1292,6 +1509,7 @@ _POINTS_MODE_FIELD_ALLOWLIST: Tuple[str, ...] = (
     "account_status",
     "history_2y",
     "history_7y",
+    "account_label",
 )
 
 _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK = 3
@@ -1425,14 +1643,48 @@ def _match_account_number_best_pair(
     best_any_aux: Dict[str, Any] | None = None
     best_any_rank = -1
     first_aux: Dict[str, Any] | None = None
+    candidate_entries: List[Dict[str, Any]] = []
 
     for left in bureaus:
         left_norm = normalized_a[left]
-        if not left_norm.has_digits:
-            continue
         for right in bureaus:
             right_norm = normalized_b[right]
-            if not right_norm.has_digits:
+
+            reasons: List[str] = []
+            left_has_digits = bool(left_norm.has_digits)
+            right_has_digits = bool(right_norm.has_digits)
+
+            candidate_entry: Dict[str, Any] = {
+                "left_bureau": left,
+                "right_bureau": right,
+                "normalized_values": {
+                    "a": left_norm.digits if left_has_digits else "",
+                    "b": right_norm.digits if right_has_digits else "",
+                },
+                "raw_values": {
+                    "a": left_norm.raw,
+                    "b": right_norm.raw,
+                },
+                "visible_digits": {
+                    "a": left_norm.visible_digits,
+                    "b": right_norm.visible_digits,
+                },
+                "hard_match_enabled": bool(hard_enabled),
+                "evaluated": False,
+                "matched": False,
+                "match_score": 0.0,
+                "min_length_met": False,
+            }
+
+            if not left_has_digits:
+                reasons.append("missing_left_digits")
+            if not right_has_digits:
+                reasons.append("missing_right_digits")
+
+            if not (left_has_digits and right_has_digits):
+                if reasons:
+                    candidate_entry["reasons"] = reasons
+                candidate_entries.append(candidate_entry)
                 continue
 
             level_value, level_debug = acctnum_match_level(
@@ -1462,6 +1714,31 @@ def _match_account_number_best_pair(
                 "min_length_met": min_length_met,
                 "acctnum_debug": level_debug,
             }
+
+            reasons_list: List[str] = []
+            if not min_length_met:
+                reasons_list.append("min_length_not_met")
+            if not matched:
+                reasons_list.append(f"level:{level}")
+                if not hard_enabled:
+                    reasons_list.append("hard_match_disabled")
+
+            candidate_entry.update(
+                {
+                    "acctnum_level": level,
+                    "min_length_met": bool(min_length_met),
+                    "evaluated": True,
+                    "match_score": 1.0 if matched and min_length_met else 0.0,
+                    "matched": bool(matched and min_length_met),
+                    "reasons": reasons_list,
+                }
+            )
+            if isinstance(level_debug, Mapping):
+                candidate_entry["debug"] = {
+                    key: str(value)
+                    for key, value in level_debug.items()
+                }
+            candidate_entries.append(candidate_entry)
 
             if first_aux is None:
                 first_aux = dict(result_aux)
@@ -1499,24 +1776,30 @@ def _match_account_number_best_pair(
                 best_match_rank = level_rank
 
     if best_match_aux is not None:
-        best_match_aux["matched"] = True
-        best_match_aux["matched_bool"] = True
-        best_match_aux["match_score"] = 1.0
-        return True, best_match_aux
+        best_payload = dict(best_match_aux)
+        best_payload["matched"] = True
+        best_payload["matched_bool"] = True
+        best_payload["match_score"] = 1.0
+        best_payload["candidate_pairs"] = list(candidate_entries)
+        return True, best_payload
 
     if best_any_aux is not None:
-        best_any_aux["matched"] = False
-        best_any_aux["matched_bool"] = False
-        best_any_aux["match_score"] = 0.0
-        return False, best_any_aux
+        best_any_payload = dict(best_any_aux)
+        best_any_payload["matched"] = False
+        best_any_payload["matched_bool"] = False
+        best_any_payload["match_score"] = 0.0
+        best_any_payload["candidate_pairs"] = list(candidate_entries)
+        return False, best_any_payload
 
     if first_aux is not None:
-        first_aux["matched"] = False
-        first_aux["matched_bool"] = False
-        first_aux["match_score"] = 0.0
-        return False, first_aux
+        first_payload = dict(first_aux)
+        first_payload["matched"] = False
+        first_payload["matched_bool"] = False
+        first_payload["match_score"] = 0.0
+        first_payload["candidate_pairs"] = list(candidate_entries)
+        return False, first_payload
 
-    return False, {}
+    return False, {"candidate_pairs": list(candidate_entries)}
 
 
 def soft_acct_suspicious(a_display: str, b_display: str) -> bool:
@@ -1943,6 +2226,1111 @@ def _points_mode_collect_balance_cents(
     return tuple(pairs)
 
 
+_BUREAU_ABBREVIATIONS = {
+    "transunion": "TU",
+    "experian": "EX",
+    "equifax": "EQ",
+}
+
+
+def _points_mode_diagnostics_enabled(cfg: MergeCfg) -> bool:
+    """Return True when verbose points diagnostics are enabled."""
+
+    return bool(getattr(cfg, "points_diagnostics", False))
+
+
+def _format_bureau_pair_label(left: str, right: str) -> str:
+    left_code = _BUREAU_ABBREVIATIONS.get(str(left).lower(), str(left).upper())
+    right_code = _BUREAU_ABBREVIATIONS.get(str(right).lower(), str(right).upper())
+    return f"{left_code}~{right_code}"
+
+
+def _sanitize_account_number_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(_redact_account_number_raw(str(value)))
+
+
+def _sanitize_field_value_for_log(field: str, value: Any) -> str:
+    if value is None:
+        return ""
+    if field == "account_number":
+        return _sanitize_account_number_value(value)
+    return str(value)
+
+
+def _sanitize_normalized_value_for_log(field: str, value: Any) -> Any:
+    sanitized = _serialize_normalized_value(value)
+    if sanitized is None:
+        return ""
+    if field == "account_number":
+        return _sanitize_account_number_value(sanitized)
+    return sanitized
+
+
+def _sanitize_candidate_entries(
+    field: str,
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    preferred_pair: Optional[Tuple[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Return sanitized candidate diagnostics focused on cross-bureau pairs."""
+
+    pair_lookup: Dict[Tuple[str, str], Mapping[str, Any]] = {}
+    for candidate in candidates or []:
+        pair_raw = candidate.get("pair") if isinstance(candidate, Mapping) else None
+        if isinstance(pair_raw, (list, tuple)) and len(pair_raw) == 2:
+            left = str(pair_raw[0])
+            right = str(pair_raw[1])
+        else:
+            left = str(candidate.get("left_bureau", ""))
+            right = str(candidate.get("right_bureau", ""))
+        if not left or not right:
+            continue
+        pair_lookup[(left, right)] = candidate
+
+    ordered_pairs = [
+        ("transunion", "experian"),
+        ("transunion", "equifax"),
+        ("experian", "equifax"),
+    ]
+
+    sanitized: List[Dict[str, Any]] = []
+    for pair in ordered_pairs:
+        candidate = pair_lookup.get(pair)
+        if candidate is None:
+            # fall back to reverse orientation if available
+            candidate = pair_lookup.get((pair[1], pair[0]))
+        if candidate is None:
+            continue
+
+        raw_values = candidate.get("raw_values") if isinstance(candidate, Mapping) else {}
+        normalized_values = candidate.get("normalized_values") if isinstance(candidate, Mapping) else {}
+
+        entry: Dict[str, Any] = {
+            "pair": _format_bureau_pair_label(pair[0], pair[1]),
+            "evaluated": bool(candidate.get("evaluated")),
+            "matched": bool(candidate.get("matched")),
+            "pass": bool(candidate.get("evaluated") and candidate.get("matched")),
+            "match_score": float(candidate.get("match_score", 0.0) or 0.0),
+            "reasons": list(candidate.get("reasons", [])) if isinstance(candidate.get("reasons"), (list, tuple)) else [],
+        }
+
+        raw_left = raw_values.get("a") if isinstance(raw_values, Mapping) else None
+        raw_right = raw_values.get("b") if isinstance(raw_values, Mapping) else None
+        norm_left = normalized_values.get("a") if isinstance(normalized_values, Mapping) else None
+        norm_right = normalized_values.get("b") if isinstance(normalized_values, Mapping) else None
+
+        entry["raw_left"] = _sanitize_field_value_for_log(field, raw_left)
+        entry["raw_right"] = _sanitize_field_value_for_log(field, raw_right)
+        entry["norm_left"] = _sanitize_normalized_value_for_log(field, norm_left)
+        entry["norm_right"] = _sanitize_normalized_value_for_log(field, norm_right)
+
+        tolerance = candidate.get("tolerance") if isinstance(candidate, Mapping) else None
+        if isinstance(tolerance, Mapping):
+            entry["tolerance"] = {
+                key: float(value) if isinstance(value, (int, float)) else value
+                for key, value in tolerance.items()
+            }
+
+        if "similarity" in candidate:
+            try:
+                entry["similarity"] = float(candidate.get("similarity"))
+            except (TypeError, ValueError):
+                entry["similarity"] = candidate.get("similarity")
+        if "threshold" in candidate:
+            try:
+                entry["threshold"] = float(candidate.get("threshold"))
+            except (TypeError, ValueError):
+                entry["threshold"] = candidate.get("threshold")
+
+        visible_digits = candidate.get("visible_digits") if isinstance(candidate, Mapping) else None
+        if isinstance(visible_digits, Mapping):
+            entry["visible_digits"] = {
+                side: int(value) if isinstance(value, (int, float)) else 0
+                for side, value in visible_digits.items()
+            }
+        if "hard_match_enabled" in candidate:
+            entry["hard_match"] = bool(candidate.get("hard_match_enabled"))
+        if "acctnum_level" in candidate:
+            entry["acctnum_level"] = str(candidate.get("acctnum_level"))
+        if "min_length_met" in candidate:
+            entry["min_length_met"] = bool(candidate.get("min_length_met"))
+        entry["selected"] = bool(candidate.get("selected"))
+
+        sanitized.append(entry)
+
+    if not sanitized:
+        return []
+
+    # Ensure the preferred pair, when supplied, preserves the 'selected' flag even if orientation differs.
+    if preferred_pair is not None:
+        preferred_label = _format_bureau_pair_label(preferred_pair[0], preferred_pair[1])
+        for entry in sanitized:
+            if entry["pair"] == preferred_label:
+                entry["selected"] = True
+                break
+
+    return sanitized
+
+
+def _format_points_float(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    text = f"{number:.3f}"
+    text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _format_points_pair_snippet(pair_entry: Mapping[str, Any]) -> str:
+    label = str(pair_entry.get("bureaus") or "")
+    if not label:
+        label = "?"
+    if pair_entry.get("pass"):
+        status = "pass"
+    elif not pair_entry.get("evaluated"):
+        status = "skip"
+    else:
+        status = "fail"
+
+    segments: List[str] = [f"{label}:{status}"]
+
+    raw_left = str(pair_entry.get("raw_left") or "")
+    raw_right = str(pair_entry.get("raw_right") or "")
+    if raw_left or raw_right:
+        segments.append(f"raw={raw_left}~{raw_right}")
+
+    norm_left = str(pair_entry.get("normalized_left") or "")
+    norm_right = str(pair_entry.get("normalized_right") or "")
+    if norm_left or norm_right:
+        segments.append(f"norm={norm_left}~{norm_right}")
+
+    tolerance = pair_entry.get("tolerance")
+    tol_bits: List[str] = []
+    if isinstance(tolerance, Mapping):
+        abs_tol = tolerance.get("abs")
+        ratio_tol = tolerance.get("ratio")
+        days_tol = tolerance.get("days")
+        if abs_tol not in (None, ""):
+            tol_bits.append(f"abs<={_format_points_float(abs_tol)}")
+        if ratio_tol not in (None, ""):
+            tol_bits.append(f"ratio<={_format_points_float(ratio_tol)}")
+        if days_tol not in (None, ""):
+            tol_bits.append(f"days<={_format_points_float(days_tol)}")
+    if tol_bits:
+        segments.append("tol=" + " ".join(tol_bits))
+
+    similarity = pair_entry.get("similarity")
+    threshold = pair_entry.get("threshold")
+    if similarity not in (None, "") and threshold not in (None, ""):
+        try:
+            sim_val = float(similarity)
+            thr_val = float(threshold)
+        except (TypeError, ValueError):
+            segments.append(f"sim={similarity} thr={threshold}")
+        else:
+            comparator = "≥" if sim_val >= thr_val else "<"
+            segments.append(f"sim={_format_points_float(sim_val)}{comparator}{_format_points_float(thr_val)}")
+
+    reasons = pair_entry.get("reasons")
+    if isinstance(reasons, (list, tuple)) and reasons:
+        segments.append("reasons=" + ",".join(str(r) for r in reasons))
+
+    return " ".join(segments)
+
+
+def _format_points_field_line(
+    field: str,
+    pair_label: str,
+    field_payload: Mapping[str, Any],
+) -> str:
+    matched = "true" if field_payload.get("matched") else "false"
+    points_value = _format_points_float(
+        field_payload.get("points_awarded", field_payload.get("awarded", 0.0))
+    )
+    reason = str(field_payload.get("reason") or "n/a")
+    pairs_data = field_payload.get("pairs")
+    if isinstance(pairs_data, (list, tuple)):
+        pairs_iter = [str(item) for item in pairs_data if item]
+    else:
+        pairs_iter = []
+    pairs_text = ", ".join(pairs_iter)
+    line = (
+        f"FIELDS {pair_label} {field.upper()} matched={matched} "
+        f"points={points_value} reason={reason} "
+        f"pairs={ '[' + pairs_text + ']' if pairs_text else '[]' }"
+    )
+    skip_reasons = field_payload.get("skip_reasons")
+    if isinstance(skip_reasons, (list, tuple)) and skip_reasons:
+        skip_text = ", ".join(str(item) for item in skip_reasons if item)
+        if skip_text:
+            line += f" skip_reasons=[{skip_text}]"
+    return line
+
+
+def _format_points_oc_gate_line(pair_label: str, oc_gate: Mapping[str, Any]) -> str:
+    required = "true" if oc_gate.get("required") else "false"
+    present_a = "true" if oc_gate.get("present_a") else "false"
+    present_b = "true" if oc_gate.get("present_b") else "false"
+    action = str(oc_gate.get("action") or "pass")
+    reason = oc_gate.get("reason")
+    parts = [
+        "OC_GATE" if not pair_label else f"OC_GATE {pair_label}",
+        f"required={required}",
+        f"present_a={present_a}",
+        f"present_b={present_b}",
+        f"action={action}",
+    ]
+    if reason:
+        parts.append(f"reason={reason}")
+    return " ".join(parts)
+
+
+def _candidate_pair_identifier(entry: Mapping[str, Any]) -> str:
+    pair = entry.get("pair")
+    if isinstance(pair, (list, tuple)) and len(pair) == 2:
+        left, right = pair
+        label = f"{left}-{right}"
+    elif isinstance(pair, str):
+        label = pair
+    else:
+        label = "unknown"
+    return str(label).replace("~", "-").lower()
+
+
+def _points_pair_entry_from_candidate(field: str, entry: Mapping[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "pair": _candidate_pair_identifier(entry),
+        "matched": bool(entry.get("matched")),
+        "pass": bool(entry.get("pass")),
+        "evaluated": bool(entry.get("evaluated")),
+        "match_score": float(entry.get("match_score", 0.0) or 0.0),
+        "selected": bool(entry.get("selected")),
+        "reasons": list(entry.get("reasons", []))
+        if isinstance(entry.get("reasons"), (list, tuple))
+        else [],
+        "raw_values": {
+            "a": entry.get("raw_left", ""),
+            "b": entry.get("raw_right", ""),
+        },
+        "normalized_values": {
+            "a": entry.get("norm_left", ""),
+            "b": entry.get("norm_right", ""),
+        },
+    }
+
+    tolerance = entry.get("tolerance")
+    if isinstance(tolerance, Mapping):
+        payload["tolerance"] = {
+            key: float(value) if isinstance(value, (int, float)) else value
+            for key, value in tolerance.items()
+        }
+
+    for optional_key in ("similarity", "threshold", "acctnum_level", "min_length_met"):
+        if optional_key in entry:
+            payload[optional_key] = entry[optional_key]
+    if "visible_digits" in entry and isinstance(entry["visible_digits"], Mapping):
+        payload["visible_digits"] = {
+            key: int(value) if isinstance(value, (int, float)) else 0
+            for key, value in entry["visible_digits"].items()
+        }
+    if "hard_match" in entry:
+        payload["hard_match"] = bool(entry.get("hard_match"))
+
+    return payload
+
+
+def _build_points_field_reason(
+    field: str,
+    *,
+    matched: bool,
+    aux_entry: Mapping[str, Any],
+    skip_reasons: Sequence[str],
+    cfg: MergeConfig,
+) -> str:
+    if matched:
+        if field == "account_number":
+            acct_level = aux_entry.get("points_mode_acctnum_level")
+            if acct_level:
+                return f"digits_match(level={acct_level})"
+            min_len = _account_number_min_length(cfg)
+            return f"digits_match(minlen>={min_len})" if min_len else "digits_match"
+        if field in {"account_type", "account_status"}:
+            return "equal"
+        if field == "account_label":
+            return "normalized_match"
+        if field == "date_opened":
+            tolerance_days = aux_entry.get("tolerance_days")
+            if isinstance(tolerance_days, (int, float)):
+                return f"within_days({int(tolerance_days)})"
+            return "equal"
+        if field == "balance_owed":
+            if aux_entry.get("points_mode_exact_match"):
+                return "exact_match"
+            tolerance = aux_entry.get("tolerance")
+            fragments: List[str] = []
+            if isinstance(tolerance, Mapping):
+                abs_tol = tolerance.get("abs")
+                if isinstance(abs_tol, (int, float)):
+                    fragments.append(f"abs<={_format_points_float(abs_tol)}")
+                ratio_tol = tolerance.get("ratio")
+                if isinstance(ratio_tol, (int, float)):
+                    fragments.append(f"ratio<={_format_points_float(ratio_tol)}")
+            return "within_tolerance" + (f"({', '.join(fragments)})" if fragments else "")
+        if field in {"history_2y", "history_7y"}:
+            threshold = aux_entry.get("threshold")
+            if isinstance(threshold, (int, float)):
+                return f"similarity>={_format_points_float(threshold)}"
+            return "similarity_match"
+        return "match"
+
+    skip_set = set(skip_reasons or [])
+    if "outside_tolerance_days" in skip_set:
+        tolerance_days = aux_entry.get("tolerance_days")
+        if isinstance(tolerance_days, (int, float)):
+            return f"diff_days>{int(tolerance_days)}"
+        return "diff_days>tolerance"
+    if "outside_tolerance" in skip_set:
+        tolerance = aux_entry.get("tolerance")
+        descriptors: List[str] = []
+        if isinstance(tolerance, Mapping):
+            abs_tol = tolerance.get("abs")
+            if isinstance(abs_tol, (int, float)):
+                descriptors.append(f"abs>{_format_points_float(abs_tol)}")
+            ratio_tol = tolerance.get("ratio")
+            if isinstance(ratio_tol, (int, float)):
+                descriptors.append(f"ratio>{_format_points_float(ratio_tol)}")
+        return "delta>tolerance" + (f"({', '.join(descriptors)})" if descriptors else "")
+    if "below_threshold" in skip_set:
+        threshold = aux_entry.get("threshold")
+        if isinstance(threshold, (int, float)):
+            return f"similarity<{_format_points_float(threshold)}"
+        return "similarity<threshold"
+    if "no_matching_pair" in skip_set:
+        return "no_pair_available"
+    return "no_match"
+
+
+_DUPLICATE_THRESHOLD_FALLBACK = 7.0
+
+
+def _resolve_duplicate_points_threshold(cfg: MergeConfig) -> float:
+    thresholds = getattr(cfg, "thresholds", None)
+    candidate: Any = None
+    if isinstance(thresholds, Mapping):
+        for key in (
+            "MERGE_DUPLICATE_POINTS_THRESHOLD",
+            "duplicate_points_threshold",
+            "MERGE_POINTS_DUPLICATE_THRESHOLD",
+        ):
+            value = thresholds.get(key)
+            if value not in (None, ""):
+                candidate = value
+                break
+    if candidate is None:
+        candidate = getattr(cfg, "duplicate_points_threshold", None)
+    try:
+        return float(candidate)
+    except (TypeError, ValueError):
+        return float(_DUPLICATE_THRESHOLD_FALLBACK)
+
+
+_DEFAULT_HISTORY_BUREAU_PAIRS: Tuple[Tuple[str, str], ...] = (
+    ("transunion", "experian"),
+    ("transunion", "equifax"),
+    ("experian", "equifax"),
+)
+
+_ACCOUNT_LABEL_SYNONYMS: Dict[str, str] = {
+    "NELNET": "NELNET",
+    "NELNETSERVICING": "NELNET",
+    "NELNETINC": "NELNET",
+}
+
+
+def _apply_account_label_synonym(value: str) -> str:
+    return _ACCOUNT_LABEL_SYNONYMS.get(value, value)
+
+
+def _normalize_account_label_value(value: Any, *, normalize: bool = True) -> Optional[str]:
+    if is_missing(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if not normalize:
+        return text.upper()
+    upper = text.upper()
+    collapsed = re.sub(r"[\s\-_]+", " ", upper)
+    stripped = re.sub(r"[^A-Z0-9]", "", collapsed)
+    if not stripped:
+        return None
+    return _apply_account_label_synonym(stripped)
+
+
+def _load_points_mode_artifacts(case_root: Optional[Path]) -> Dict[str, Any]:
+    artifacts: Dict[str, Any] = {
+        "heading_guess": None,
+        "history_2y": {},
+        "history_7y": {},
+        "meta": {},
+    }
+    if case_root is None:
+        return artifacts
+
+    case_path = Path(case_root)
+    artifacts["case_root"] = str(case_path)
+
+    meta_path = case_path / "meta.json"
+    artifacts["meta_path"] = str(meta_path)
+    if meta_path.exists():
+        try:
+            with meta_path.open("r", encoding="utf-8") as handle:
+                meta_payload = json.load(handle)
+            if isinstance(meta_payload, Mapping):
+                artifacts["meta"] = dict(meta_payload)
+                heading_guess = meta_payload.get("heading_guess")
+                if not is_missing(heading_guess):
+                    artifacts["heading_guess"] = heading_guess
+        except Exception:
+            logger.debug(
+                "MERGE_POINTS_ARTIFACTS_META_LOAD_FAILED case_root=%s",
+                case_path,
+                exc_info=True,
+            )
+
+    bureaus_path = case_path / "bureaus.json"
+    artifacts["bureaus_path"] = str(bureaus_path)
+    if bureaus_path.exists():
+        try:
+            with bureaus_path.open("r", encoding="utf-8") as handle:
+                bureaus_payload = json.load(handle)
+            if isinstance(bureaus_payload, Mapping):
+                history_2y_raw = bureaus_payload.get("two_year_payment_history")
+                if isinstance(history_2y_raw, Mapping):
+                    artifacts["history_2y"] = {
+                        str(bureau): list(values)
+                        for bureau, values in history_2y_raw.items()
+                        if isinstance(values, (list, tuple))
+                    }
+                history_7y_raw = bureaus_payload.get("seven_year_history")
+                if isinstance(history_7y_raw, Mapping):
+                    artifacts["history_7y"] = {
+                        str(bureau): {
+                            "late30": _safe_int(branch.get("late30")),
+                            "late60": _safe_int(branch.get("late60")),
+                            "late90": _safe_int(branch.get("late90")),
+                        }
+                        for bureau, branch in history_7y_raw.items()
+                        if isinstance(branch, Mapping)
+                    }
+        except Exception:
+            logger.debug(
+                "MERGE_POINTS_ARTIFACTS_BUREAUS_LOAD_FAILED case_root=%s",
+                case_path,
+                exc_info=True,
+            )
+
+    return artifacts
+
+
+def _resolve_account_artifacts(
+    artifacts: Optional[Mapping[str, Any]],
+    case_root: Optional[Path],
+) -> Dict[str, Any]:
+    resolved: Dict[str, Any] = {}
+    if isinstance(artifacts, Mapping):
+        resolved.update(artifacts)
+
+    needs_load = False
+    if case_root is not None:
+        for key in ("heading_guess", "history_2y", "history_7y", "meta"):
+            if key not in resolved:
+                needs_load = True
+                break
+    if needs_load:
+        disk_artifacts = _load_points_mode_artifacts(case_root)
+        for key, value in disk_artifacts.items():
+            resolved.setdefault(key, value)
+
+    meta_payload = resolved.get("meta")
+    if not isinstance(meta_payload, Mapping):
+        meta_payload = {}
+        resolved["meta"] = meta_payload
+
+    if "heading_guess" not in resolved or is_missing(resolved.get("heading_guess")):
+        heading_guess = meta_payload.get("heading_guess") if isinstance(meta_payload, Mapping) else None
+        if not is_missing(heading_guess):
+            resolved["heading_guess"] = heading_guess
+        else:
+            resolved.setdefault("heading_guess", None)
+
+    history_2y_payload = resolved.get("history_2y")
+    if not isinstance(history_2y_payload, Mapping):
+        resolved["history_2y"] = {}
+
+    history_7y_payload = resolved.get("history_7y")
+    if not isinstance(history_7y_payload, Mapping):
+        resolved["history_7y"] = {}
+
+    if case_root is not None:
+        resolved.setdefault("case_root", str(Path(case_root)))
+
+    return resolved
+
+
+def _build_inline_points_mode_context(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Extract points-mode context data embedded in a bureaus payload."""
+
+    context: Dict[str, Any] = {}
+    if not isinstance(payload, Mapping):
+        return context
+
+    meta_payload = payload.get("meta")
+    if isinstance(meta_payload, Mapping):
+        context["meta"] = dict(meta_payload)
+        heading_guess = meta_payload.get("heading_guess")
+        if not is_missing(heading_guess):
+            context["heading_guess"] = heading_guess
+
+    heading_inline = payload.get("heading_guess")
+    if not is_missing(heading_inline):
+        context.setdefault("heading_guess", heading_inline)
+
+    def _coerce_history_2y(raw_map: Mapping[str, Any]) -> Dict[str, List[Any]]:
+        coerced: Dict[str, List[Any]] = {}
+        for bureau, entries in raw_map.items():
+            if isinstance(entries, Sequence) and not isinstance(entries, (str, bytes)):
+                coerced[str(bureau)] = [item for item in entries]
+        return coerced
+
+    def _coerce_history_7y(raw_map: Mapping[str, Any]) -> Dict[str, Dict[str, int]]:
+        coerced: Dict[str, Dict[str, int]] = {}
+        for bureau, branch in raw_map.items():
+            if not isinstance(branch, Mapping):
+                continue
+            coerced[str(bureau)] = {
+                "late30": _safe_int(branch.get("late30")),
+                "late60": _safe_int(branch.get("late60")),
+                "late90": _safe_int(branch.get("late90")),
+            }
+        return coerced
+
+    history_2y_payload = payload.get("history_2y")
+    if isinstance(history_2y_payload, Mapping):
+        context["history_2y"] = _coerce_history_2y(history_2y_payload)
+    else:
+        history_2y_fallback = payload.get("two_year_payment_history")
+        if isinstance(history_2y_fallback, Mapping):
+            context["history_2y"] = _coerce_history_2y(history_2y_fallback)
+
+    history_7y_payload = payload.get("history_7y")
+    if isinstance(history_7y_payload, Mapping):
+        context["history_7y"] = _coerce_history_7y(history_7y_payload)
+    else:
+        history_7y_fallback = payload.get("seven_year_history")
+        if isinstance(history_7y_fallback, Mapping):
+            context["history_7y"] = _coerce_history_7y(history_7y_fallback)
+
+    meta_path_value = payload.get("meta_path")
+    if isinstance(meta_path_value, str):
+        context["meta_path"] = Path(meta_path_value)
+    elif isinstance(meta_path_value, Path):
+        context["meta_path"] = meta_path_value
+
+    bureaus_path_value = payload.get("bureaus_path")
+    if isinstance(bureaus_path_value, str):
+        context["history_source_path"] = Path(bureaus_path_value)
+    elif isinstance(bureaus_path_value, Path):
+        context["history_source_path"] = bureaus_path_value
+
+    inline_context = payload.get("points_mode_context")
+    if isinstance(inline_context, Mapping):
+        _merge_points_mode_context(context, inline_context)
+
+    return context
+
+
+def _merge_points_mode_context(
+    target: Dict[str, Any],
+    source: Optional[Mapping[str, Any]],
+) -> None:
+    """Merge ``source`` context data into ``target`` without losing detail."""
+
+    if not isinstance(source, Mapping):
+        return
+
+    for key, value in source.items():
+        if key in {"history_2y", "history_7y"} and isinstance(value, Mapping):
+            existing = target.get(key)
+            merged: Dict[str, Any] = {}
+            if isinstance(existing, Mapping):
+                merged.update({str(k): v for k, v in existing.items()})
+            for bureau, branch in value.items():
+                merged[str(bureau)] = branch
+            target[key] = merged
+            continue
+
+        if key == "meta" and isinstance(value, Mapping):
+            existing_meta = target.get("meta")
+            merged_meta: Dict[str, Any] = {}
+            if isinstance(existing_meta, Mapping):
+                merged_meta.update(existing_meta)
+            for meta_key, meta_value in value.items():
+                if meta_key not in merged_meta or is_missing(merged_meta[meta_key]):
+                    merged_meta[meta_key] = meta_value
+            target["meta"] = merged_meta
+            continue
+
+        if key == "heading_guess":
+            if key not in target or is_missing(target.get(key)):
+                target[key] = value
+            continue
+
+        if key in {"meta_path", "history_source_path"} and isinstance(value, str):
+            target[key] = Path(value)
+            continue
+
+        if key not in target or target.get(key) is None:
+            target[key] = value
+
+def _resolve_account_label_value(
+    source: str,
+    context: Mapping[str, Any],
+    bureaus_map: Mapping[str, Mapping[str, Any]],
+) -> Optional[str]:
+    source_key = str(source or "").strip().lower()
+    if not source_key or source_key == "bureaus":
+        for bureau in ("transunion", "experian", "equifax"):
+            branch = bureaus_map.get(bureau)
+            if not isinstance(branch, Mapping):
+                continue
+            candidate = branch.get("account_label")
+            if not is_missing(candidate):
+                return str(candidate)
+        return None
+
+    if source_key in {"heading_guess", "meta.heading_guess"}:
+        heading_candidate = context.get("heading_guess")
+        if not is_missing(heading_candidate):
+            return str(heading_candidate)
+        meta_payload = context.get("meta")
+        if isinstance(meta_payload, Mapping):
+            heading_candidate = meta_payload.get("heading_guess")
+            if not is_missing(heading_candidate):
+                return str(heading_candidate)
+        return None
+
+    if source_key.startswith("meta."):
+        meta_key = source_key.split(".", 1)[1] or "heading_guess"
+        meta_payload = context.get("meta")
+        if isinstance(meta_payload, Mapping):
+            candidate = meta_payload.get(meta_key)
+            if not is_missing(candidate):
+                return str(candidate)
+        return None
+
+    if source_key.startswith("bureaus."):
+        branch_key = source_key.split(".", 1)[1] or "account_label"
+        for bureau in ("transunion", "experian", "equifax"):
+            branch = bureaus_map.get(bureau)
+            if not isinstance(branch, Mapping):
+                continue
+            candidate = branch.get(branch_key)
+            if not is_missing(candidate):
+                return str(candidate)
+        return None
+
+    direct_candidate = context.get(source_key)
+    if not is_missing(direct_candidate):
+        return str(direct_candidate)
+    meta_payload = context.get("meta")
+    if isinstance(meta_payload, Mapping):
+        direct_candidate = meta_payload.get(source_key)
+        if not is_missing(direct_candidate):
+            return str(direct_candidate)
+    return None
+
+
+def _points_mode_compare_account_label(
+    left_context: Mapping[str, Any],
+    right_context: Mapping[str, Any],
+    *,
+    left_bureaus: Mapping[str, Mapping[str, Any]],
+    right_bureaus: Mapping[str, Mapping[str, Any]],
+    cfg: MergeCfg,
+) -> Tuple[bool, Dict[str, Any]]:
+    source = getattr(cfg, "account_label_source", "meta.heading_guess")
+    normalize_flag = bool(getattr(cfg, "account_label_normalize", True))
+
+    raw_left = _resolve_account_label_value(source, left_context, left_bureaus)
+    raw_right = _resolve_account_label_value(source, right_context, right_bureaus)
+
+    norm_left = _normalize_account_label_value(raw_left, normalize=normalize_flag)
+    norm_right = _normalize_account_label_value(raw_right, normalize=normalize_flag)
+
+    have_left = norm_left is not None
+    have_right = norm_right is not None
+    matched = bool(have_left and have_right and norm_left == norm_right)
+
+    if matched:
+        reason = "normalized_label_equal"
+    elif not have_left or not have_right:
+        reason = "label_missing"
+    else:
+        reason = "normalized_label_diff"
+
+    candidate_entries: List[Dict[str, Any]] = []
+    for left_bureau, right_bureau in _DEFAULT_HISTORY_BUREAU_PAIRS:
+        entry: Dict[str, Any] = {
+            "pair": (left_bureau, right_bureau),
+            "raw_values": {"a": raw_left, "b": raw_right},
+            "normalized_values": {"a": norm_left, "b": norm_right},
+        }
+        if not have_left or not have_right:
+            entry["evaluated"] = False
+            entry["matched"] = False
+            entry["match_score"] = 0.0
+            reasons: List[str] = []
+            if not have_left:
+                reasons.append("left_missing_value")
+            if not have_right:
+                reasons.append("right_missing_value")
+            entry["reasons"] = reasons
+        else:
+            entry["evaluated"] = True
+            entry["matched"] = matched
+            entry["match_score"] = 1.0 if matched else 0.0
+            entry["reasons"] = [] if matched else ["normalized_label_diff"]
+        candidate_entries.append(entry)
+
+    aux: Dict[str, Any] = {
+        "matched": matched,
+        "matched_bool": matched,
+        "match_score": 1.0 if matched else 0.0,
+        "reason": reason,
+        "normalized_values": (norm_left, norm_right),
+        "raw_values": {"a": raw_left, "b": raw_right},
+        "candidate_pairs": candidate_entries,
+    }
+    if candidate_entries:
+        best_pair = candidate_entries[0]["pair"]
+        aux["best_pair"] = best_pair
+        aux["best_pair_label"] = _format_bureau_pair_label(best_pair[0], best_pair[1])
+
+    return matched, aux
+
+
+def _points_mode_compare_history_2y(
+    left_context: Mapping[str, Any],
+    right_context: Mapping[str, Any],
+    *,
+    threshold: float,
+) -> Tuple[bool, Dict[str, Any]]:
+    left_history = (
+        left_context.get("history_2y")
+        if isinstance(left_context.get("history_2y"), Mapping)
+        else {}
+    )
+    right_history = (
+        right_context.get("history_2y")
+        if isinstance(right_context.get("history_2y"), Mapping)
+        else {}
+    )
+
+    candidate_entries: List[Dict[str, Any]] = []
+    best_info: Optional[Dict[str, Any]] = None
+    best_similarity = -1.0
+    best_match_info: Optional[Dict[str, Any]] = None
+    best_match_similarity = -1.0
+
+    for left_bureau, right_bureau in _DEFAULT_HISTORY_BUREAU_PAIRS:
+        left_raw = left_history.get(left_bureau)
+        right_raw = right_history.get(right_bureau)
+
+        entry: Dict[str, Any] = {
+            "pair": (left_bureau, right_bureau),
+            "raw_values": {
+                "a": list(left_raw) if isinstance(left_raw, (list, tuple)) else left_raw,
+                "b": list(right_raw) if isinstance(right_raw, (list, tuple)) else right_raw,
+            },
+        }
+
+        if not isinstance(left_raw, (list, tuple)) or not left_raw:
+            entry.update(
+                {
+                    "evaluated": False,
+                    "matched": False,
+                    "match_score": 0.0,
+                    "reasons": ["left_missing_value"],
+                }
+            )
+            candidate_entries.append(entry)
+            continue
+        if not isinstance(right_raw, (list, tuple)) or not right_raw:
+            entry.update(
+                {
+                    "evaluated": False,
+                    "matched": False,
+                    "match_score": 0.0,
+                    "reasons": ["right_missing_value"],
+                }
+            )
+            candidate_entries.append(entry)
+            continue
+
+        left_norm = [str(item).strip().upper() for item in left_raw if str(item).strip()]
+        right_norm = [str(item).strip().upper() for item in right_raw if str(item).strip()]
+
+        if not left_norm:
+            entry.update(
+                {
+                    "evaluated": False,
+                    "matched": False,
+                    "match_score": 0.0,
+                    "reasons": ["left_missing_value"],
+                }
+            )
+            candidate_entries.append(entry)
+            continue
+        if not right_norm:
+            entry.update(
+                {
+                    "evaluated": False,
+                    "matched": False,
+                    "match_score": 0.0,
+                    "reasons": ["right_missing_value"],
+                }
+            )
+            candidate_entries.append(entry)
+            continue
+
+        compared_len = min(len(left_norm), len(right_norm))
+        matches = sum(
+            1
+            for a_val, b_val in zip(reversed(left_norm), reversed(right_norm))
+            if a_val == b_val
+        )
+        similarity = matches / compared_len if compared_len else 0.0
+        matched = similarity >= threshold and compared_len > 0
+
+        reason = ""
+        if matched:
+            reason = "similarity_match"
+        elif compared_len == 0:
+            reason = "no_overlap"
+        else:
+            reason = "below_threshold"
+
+        entry.update(
+            {
+                "evaluated": compared_len > 0,
+                "matched": matched,
+                "match_score": float(similarity),
+                "similarity": float(similarity),
+                "threshold": float(threshold),
+                "compared": int(compared_len),
+                "matches": int(matches),
+                "normalized_values": {
+                    "a": " ".join(left_norm),
+                    "b": " ".join(right_norm),
+                },
+                "reasons": [] if matched else ([reason] if reason else []),
+            }
+        )
+
+        candidate_entries.append(entry)
+
+        info_payload = {
+            "best_pair": (left_bureau, right_bureau),
+            "best_pair_label": _format_bureau_pair_label(left_bureau, right_bureau),
+            "matched": matched,
+            "matched_bool": matched,
+            "match_score": float(similarity),
+            "similarity": float(similarity),
+            "threshold": float(threshold),
+            "compared": int(compared_len),
+            "matches": int(matches),
+            "normalized_values": (" ".join(left_norm), " ".join(right_norm)),
+            "raw_values": {
+                "a": " ".join(str(item) for item in left_raw),
+                "b": " ".join(str(item) for item in right_raw),
+            },
+            "reason": reason,
+        }
+
+        if matched and similarity > best_match_similarity:
+            best_match_similarity = similarity
+            best_match_info = info_payload
+
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_info = info_payload
+
+    selected = best_match_info or best_info
+    if not selected:
+        return False, {"candidate_pairs": candidate_entries}
+
+    aux = dict(selected)
+    aux["candidate_pairs"] = candidate_entries
+    return bool(aux.get("matched")), aux
+
+
+def _points_mode_compare_history_7y(
+    left_context: Mapping[str, Any],
+    right_context: Mapping[str, Any],
+    *,
+    threshold: float,
+) -> Tuple[bool, Dict[str, Any]]:
+    left_history = (
+        left_context.get("history_7y")
+        if isinstance(left_context.get("history_7y"), Mapping)
+        else {}
+    )
+    right_history = (
+        right_context.get("history_7y")
+        if isinstance(right_context.get("history_7y"), Mapping)
+        else {}
+    )
+
+    def _coerce_branch(payload: Any) -> Optional[Dict[str, int]]:
+        if not isinstance(payload, Mapping):
+            return None
+        return {
+            "late30": _safe_int(payload.get("late30")),
+            "late60": _safe_int(payload.get("late60")),
+            "late90": _safe_int(payload.get("late90")),
+        }
+
+    candidate_entries: List[Dict[str, Any]] = []
+    best_info: Optional[Dict[str, Any]] = None
+    best_similarity = -1.0
+    best_match_info: Optional[Dict[str, Any]] = None
+    best_match_similarity = -1.0
+
+    for left_bureau, right_bureau in _DEFAULT_HISTORY_BUREAU_PAIRS:
+        left_branch = _coerce_branch(left_history.get(left_bureau))
+        right_branch = _coerce_branch(right_history.get(right_bureau))
+
+        entry: Dict[str, Any] = {
+            "pair": (left_bureau, right_bureau),
+        }
+
+        if left_branch is None:
+            entry.update(
+                {
+                    "evaluated": False,
+                    "matched": False,
+                    "match_score": 0.0,
+                    "reasons": ["left_missing_value"],
+                }
+            )
+            candidate_entries.append(entry)
+            continue
+        if right_branch is None:
+            entry.update(
+                {
+                    "evaluated": False,
+                    "matched": False,
+                    "match_score": 0.0,
+                    "reasons": ["right_missing_value"],
+                }
+            )
+            candidate_entries.append(entry)
+            continue
+
+        sum_left = sum(max(0, _safe_int(left_branch.get(key))) for key in ("late30", "late60", "late90"))
+        sum_right = sum(max(0, _safe_int(right_branch.get(key))) for key in ("late30", "late60", "late90"))
+        total = sum_left + sum_right
+        diff_sum = sum(
+            abs(_safe_int(left_branch.get(key)) - _safe_int(right_branch.get(key)))
+            for key in ("late30", "late60", "late90")
+        )
+
+        if total == 0:
+            similarity = 1.0
+        else:
+            similarity = max(0.0, 1.0 - (diff_sum / float(total)))
+
+        matched = similarity >= threshold
+
+        entry.update(
+            {
+                "evaluated": True,
+                "matched": matched,
+                "match_score": float(similarity),
+                "similarity": float(similarity),
+                "threshold": float(threshold),
+                "diff_sum": int(diff_sum),
+                "total": int(total),
+                "normalized_values": {
+                    "a": {
+                        "late30": _safe_int(left_branch.get("late30")),
+                        "late60": _safe_int(left_branch.get("late60")),
+                        "late90": _safe_int(left_branch.get("late90")),
+                    },
+                    "b": {
+                        "late30": _safe_int(right_branch.get("late30")),
+                        "late60": _safe_int(right_branch.get("late60")),
+                        "late90": _safe_int(right_branch.get("late90")),
+                    },
+                },
+                "raw_values": {
+                    "a": left_branch,
+                    "b": right_branch,
+                },
+                "reasons": [] if matched else ["below_threshold"],
+            }
+        )
+
+        candidate_entries.append(entry)
+
+        info_payload = {
+            "best_pair": (left_bureau, right_bureau),
+            "best_pair_label": _format_bureau_pair_label(left_bureau, right_bureau),
+            "matched": matched,
+            "matched_bool": matched,
+            "match_score": float(similarity),
+            "similarity": float(similarity),
+            "threshold": float(threshold),
+            "diff_sum": int(diff_sum),
+            "total": int(total),
+            "normalized_values": (
+                {
+                    "late30": _safe_int(left_branch.get("late30")),
+                    "late60": _safe_int(left_branch.get("late60")),
+                    "late90": _safe_int(left_branch.get("late90")),
+                },
+                {
+                    "late30": _safe_int(right_branch.get("late30")),
+                    "late60": _safe_int(right_branch.get("late60")),
+                    "late90": _safe_int(right_branch.get("late90")),
+                },
+            ),
+            "raw_values": {
+                "a": left_branch,
+                "b": right_branch,
+            },
+        }
+
+        if matched and similarity > best_match_similarity:
+            best_match_similarity = similarity
+            best_match_info = dict(info_payload)
+
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_info = dict(info_payload)
+
+    selected = best_match_info or best_info
+    if not selected:
+        return False, {"candidate_pairs": candidate_entries}
+
+    aux = dict(selected)
+    aux["candidate_pairs"] = candidate_entries
+    return bool(aux.get("matched")), aux
+
 def _log_points_mode_field_failure(
     *,
     field: str,
@@ -2052,45 +3440,149 @@ def _points_mode_match_field_any_bureau(
         matched, aux = _match_account_number_best_pair(left_bureaus, right_bureaus, cfg)
         return matched, dict(aux)
 
-    bureau_positions = {name: idx for idx, name in enumerate(("transunion", "experian", "equifax"))}
+    bureaus = ("transunion", "experian", "equifax")
+    bureau_positions = {name: idx for idx, name in enumerate(bureaus)}
     best_aux: Dict[str, Any] | None = None
     best_rank: Tuple[int, int] | None = None
     first_aux: Dict[str, Any] | None = None
+    candidate_entries: List[Dict[str, Any]] = []
 
-    for left_key, right_key, left_norm, right_norm, left_raw, right_raw in _iter_bureau_field_pairs(
-        left_bureaus, right_bureaus, field
-    ):
-        match_score, aux = _match_field_values(
-            field,
-            left_norm,
-            right_norm,
-            left_raw,
-            right_raw,
-            cfg,
-        )
-        matched = bool(aux.get("matched_bool", match_score >= 1.0))
+    def _normalize_branch(
+        bureaus_map: Mapping[str, Mapping[str, Any]],
+        bureau: str,
+    ) -> Tuple[bool, Any, Any, str]:
+        if not isinstance(bureaus_map, Mapping):
+            return False, None, None, "missing_branch"
+        branch = bureaus_map.get(bureau)
+        if not isinstance(branch, Mapping):
+            return False, None, None, "missing_branch"
+        raw_value = branch.get(field)
+        if is_missing(raw_value):
+            return False, raw_value, None, "missing_value"
+        normalized = _normalize_field_value(field, raw_value)
+        if normalized is None:
+            return False, raw_value, None, "normalize_failed"
+        return True, raw_value, normalized, ""
 
-        result_aux: Dict[str, Any] = {
-            "best_pair": (left_key, right_key),
-            "normalized_values": _serialize_normalized_pair(left_norm, right_norm),
-            "match_score": match_score,
-        }
-        result_aux.update(aux)
+    left_cache = {
+        bureau: _normalize_branch(left_bureaus, bureau)
+        for bureau in bureaus
+    }
+    right_cache = {
+        bureau: _normalize_branch(right_bureaus, bureau)
+        for bureau in bureaus
+    }
 
-        if first_aux is None:
-            first_aux = dict(result_aux)
+    for left_key in bureaus:
+        left_valid, left_raw, left_norm, left_reason = left_cache[left_key]
+        for right_key in bureaus:
+            right_valid, right_raw, right_norm, right_reason = right_cache[right_key]
 
-        if matched:
-            pair_rank = (bureau_positions[left_key], bureau_positions[right_key])
-            if best_aux is None or best_rank is None or pair_rank < best_rank:
-                best_aux = dict(result_aux)
-                best_rank = pair_rank
+            candidate_entry: Dict[str, Any] = {
+                "left_bureau": left_key,
+                "right_bureau": right_key,
+                "raw_values": {
+                    "a": left_raw,
+                    "b": right_raw,
+                },
+                "normalized_values": {
+                    "a": _serialize_normalized_value(left_norm),
+                    "b": _serialize_normalized_value(right_norm),
+                },
+                "evaluated": False,
+                "matched": False,
+                "match_score": 0.0,
+                "reasons": [],
+            }
+
+            evaluated = bool(left_valid and right_valid)
+            if not evaluated:
+                reasons: List[str] = []
+                if not left_valid and left_reason:
+                    reasons.append(f"left_{left_reason}")
+                if not right_valid and right_reason:
+                    reasons.append(f"right_{right_reason}")
+                candidate_entry["reasons"] = reasons
+                candidate_entries.append(candidate_entry)
+                continue
+
+            match_score, aux = _match_field_values(
+                field,
+                left_norm,
+                right_norm,
+                left_raw,
+                right_raw,
+                cfg,
+            )
+            matched = bool(aux.get("matched_bool", match_score >= 1.0))
+
+            result_aux: Dict[str, Any] = {
+                "best_pair": (left_key, right_key),
+                "normalized_values": _serialize_normalized_pair(left_norm, right_norm),
+                "match_score": match_score,
+            }
+            result_aux.update(aux)
+
+            reasons_list: List[str] = []
+            if not matched:
+                reasons_list.append("no_match")
+                if "threshold" in aux:
+                    reasons_list.append("below_threshold")
+                if "tolerance" in aux:
+                    reasons_list.append("outside_tolerance")
+                if "tolerance_days" in aux:
+                    reasons_list.append("outside_tolerance_days")
+
+            candidate_entry.update(
+                {
+                    "evaluated": True,
+                    "matched": matched,
+                    "match_score": float(match_score),
+                    "reasons": reasons_list,
+                }
+            )
+
+            if "similarity" in aux:
+                try:
+                    candidate_entry["similarity"] = float(aux["similarity"])
+                except (TypeError, ValueError):
+                    candidate_entry["similarity"] = aux["similarity"]
+            if "threshold" in aux:
+                try:
+                    candidate_entry["threshold"] = float(aux["threshold"])
+                except (TypeError, ValueError):
+                    candidate_entry["threshold"] = aux["threshold"]
+            if "tolerance" in aux and isinstance(aux.get("tolerance"), Mapping):
+                tolerance_map = aux.get("tolerance")
+                candidate_entry["tolerance"] = {
+                    key: float(value)
+                    if isinstance(value, (int, float))
+                    else value
+                    for key, value in dict(tolerance_map).items()
+                }
+
+            candidate_entries.append(candidate_entry)
+
+            if first_aux is None:
+                first_aux = dict(result_aux)
+
+            if matched:
+                pair_rank = (bureau_positions[left_key], bureau_positions[right_key])
+                if best_aux is None or best_rank is None or pair_rank < best_rank:
+                    best_aux = dict(result_aux)
+                    best_rank = pair_rank
 
     if best_aux is not None:
-        return True, best_aux
+        best_payload = dict(best_aux)
+        best_payload["candidate_pairs"] = list(candidate_entries)
+        return True, best_payload
     if first_aux is not None:
-        return False, first_aux
-    return False, {}
+        first_payload = dict(first_aux)
+        first_payload["candidate_pairs"] = list(candidate_entries)
+        return False, first_payload
+    return False, {"candidate_pairs": list(candidate_entries)}
+
+
 
 
 def _detect_amount_conflicts(
@@ -2178,6 +3670,8 @@ def _score_pair_points_mode(
     field_sequence: Sequence[str],
     weights_map: Mapping[str, float],
     debug_enabled: bool,
+    left_context: Optional[Mapping[str, Any]] = None,
+    right_context: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compute the allow-listed weighted score for points mode."""
 
@@ -2193,22 +3687,19 @@ def _score_pair_points_mode(
     matched_bools: Dict[str, bool] = {}
     total_points = 0.0
     diagnostics_entries: List[Tuple[str, float, float, float, float]] = []
+    points_breakdown_fields: Dict[str, Dict[str, Any]] = {}
+    points_breakdown: Optional[Dict[str, Any]] = None
 
-    diagnostics_limit_raw = getattr(cfg, "points_diagnostics_limit", None)
-    try:
-        diagnostics_limit = int(diagnostics_limit_raw)
-    except (TypeError, ValueError):
-        diagnostics_limit = _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
-    if diagnostics_limit is None:
-        diagnostics_limit = _POINTS_MODE_DIAGNOSTICS_LIMIT_FALLBACK
-    diagnostics_limit = max(int(diagnostics_limit), 0)
+    left_context_map: Dict[str, Any] = {}
+    right_context_map: Dict[str, Any] = {}
 
-    emit_diagnostics = False
-    diagnostics_pair_index = 0
+    _merge_points_mode_context(left_context_map, left_context)
+    _merge_points_mode_context(left_context_map, _build_inline_points_mode_context(A_data))
+    _merge_points_mode_context(right_context_map, right_context)
+    _merge_points_mode_context(right_context_map, _build_inline_points_mode_context(B_data))
+
     global _POINTS_MODE_DIAGNOSTICS_EMITTED
-    if diagnostics_limit > 0 and _POINTS_MODE_DIAGNOSTICS_EMITTED < diagnostics_limit:
-        emit_diagnostics = True
-        diagnostics_pair_index = _POINTS_MODE_DIAGNOSTICS_EMITTED + 1
+    diagnostics_pair_index = _POINTS_MODE_DIAGNOSTICS_EMITTED + 1
 
     balance_exact_match = False
     if "balance_owed" in allowlist_set:
@@ -2216,9 +3707,40 @@ def _score_pair_points_mode(
 
     for field in evaluated_fields:
         parts[field] = 0.0
-        matched, match_aux = _points_mode_match_field_any_bureau(
-            field, A_data, B_data, cfg
-        )
+        if field == "account_label":
+            matched, match_aux = _points_mode_compare_account_label(
+                left_context_map,
+                right_context_map,
+                left_bureaus=A_data,
+                right_bureaus=B_data,
+                cfg=cfg,
+            )
+        elif field == "history_2y":
+            history_threshold = _resolve_tolerance_float(
+                cfg,
+                "MERGE_HISTORY_SIMILARITY_THRESHOLD",
+                1.0,
+            )
+            matched, match_aux = _points_mode_compare_history_2y(
+                left_context_map,
+                right_context_map,
+                threshold=history_threshold,
+            )
+        elif field == "history_7y":
+            history_threshold = _resolve_tolerance_float(
+                cfg,
+                "MERGE_HISTORY_SIMILARITY_THRESHOLD",
+                1.0,
+            )
+            matched, match_aux = _points_mode_compare_history_7y(
+                left_context_map,
+                right_context_map,
+                threshold=history_threshold,
+            )
+        else:
+            matched, match_aux = _points_mode_match_field_any_bureau(
+                field, A_data, B_data, cfg
+            )
         aux = dict(match_aux) if isinstance(match_aux, Mapping) else {}
 
         if "match_score" in aux:
@@ -2267,16 +3789,15 @@ def _score_pair_points_mode(
 
         current_total = total_points + contribution
 
-        if emit_diagnostics:
-            diagnostics_entries.append(
-                (
-                    field,
-                    match_score,
-                    weight,
-                    contribution,
-                    current_total,
-                )
+        diagnostics_entries.append(
+            (
+                field,
+                match_score,
+                weight,
+                contribution,
+                current_total,
             )
+        )
 
         total_points = current_total
 
@@ -2335,24 +3856,299 @@ def _score_pair_points_mode(
             }
         )
 
-    if emit_diagnostics:
-        logger.info(
-            "[MERGE] Points-mode diagnostics pair=%s total_points=%.3f ai_threshold=%.3f direct_threshold=%.3f",
-            diagnostics_pair_index,
-            float(total_points),
-            float(ai_threshold),
-            float(direct_threshold),
+    diagnostics_entry_map: Dict[str, Tuple[float, float, float, float]] = {
+        field_name: (
+            float(match_score),
+            float(weight_entry),
+            float(contribution_entry),
+            float(running_total),
         )
-        for field_name, match_score, weight, contribution, running_total in diagnostics_entries:
-            logger.info(
-                "[MERGE] Points-mode field=%s match=%.3f weight=%.3f field_points=%.3f sum_points=%.3f",
-                field_name,
-                match_score,
-                weight,
-                contribution,
-                running_total,
-            )
-        _POINTS_MODE_DIAGNOSTICS_EMITTED += 1
+        for field_name, match_score, weight_entry, contribution_entry, running_total in diagnostics_entries
+    }
+
+    diagnostics_fields_verbose: List[Dict[str, Any]] = []
+    for field in evaluated_fields:
+        aux_entry = fields_aux.get(field, {})
+        best_pair_raw = aux_entry.get("best_pair") if isinstance(aux_entry, Mapping) else None
+        best_pair_tuple: Tuple[str, str] | None = None
+        if isinstance(best_pair_raw, (list, tuple)) and len(best_pair_raw) == 2:
+            best_pair_tuple = (str(best_pair_raw[0]), str(best_pair_raw[1]))
+        best_pair_label = (
+            _format_bureau_pair_label(best_pair_tuple[0], best_pair_tuple[1])
+            if best_pair_tuple is not None
+            else None
+        )
+
+        entry_info = diagnostics_entry_map.get(field)
+        weight_value = float(field_weights.get(field, 0.0))
+        match_score_value = float(entry_info[0]) if entry_info else float(field_matches.get(field, 0.0))
+        running_total_value = float(entry_info[3]) if entry_info else float(total_points)
+        matched_flag = bool(matched_bools.get(field, False))
+        contribution_value = float(field_contributions.get(field, 0.0))
+
+        candidate_payloads: List[Dict[str, Any]] = []
+        raw_candidates = aux_entry.get("candidate_pairs") if isinstance(aux_entry, Mapping) else None
+        if isinstance(raw_candidates, list):
+            for candidate in raw_candidates:
+                if not isinstance(candidate, Mapping):
+                    continue
+                left_bureau = str(candidate.get("left_bureau") or "")
+                right_bureau = str(candidate.get("right_bureau") or "")
+                raw_values_map = candidate.get("raw_values") if isinstance(candidate.get("raw_values"), Mapping) else {}
+                normalized_values_raw = candidate.get("normalized_values")
+                if isinstance(normalized_values_raw, Mapping):
+                    normalized_values_iter = normalized_values_raw.items()
+                elif isinstance(normalized_values_raw, (list, tuple)) and len(normalized_values_raw) == 2:
+                    normalized_values_iter = (("a", normalized_values_raw[0]), ("b", normalized_values_raw[1]))
+                else:
+                    normalized_values_iter = (())
+                normalized_values_sanitized = {
+                    key: _sanitize_normalized_value_for_log(field, value)
+                    for key, value in normalized_values_iter
+                }
+                if "a" not in normalized_values_sanitized:
+                    normalized_values_sanitized["a"] = _sanitize_normalized_value_for_log(field, None)
+                if "b" not in normalized_values_sanitized:
+                    normalized_values_sanitized["b"] = _sanitize_normalized_value_for_log(field, None)
+
+                reasons_raw = candidate.get("reasons")
+                if isinstance(reasons_raw, (list, tuple)):
+                    reasons_list = [str(reason) for reason in reasons_raw if reason not in {None, ""}]
+                elif isinstance(reasons_raw, str) and reasons_raw:
+                    reasons_list = [reasons_raw]
+                else:
+                    reasons_list = []
+
+                candidate_payload = {
+                    "pair": [left_bureau, right_bureau],
+                    "matched": bool(candidate.get("matched")),
+                    "evaluated": bool(candidate.get("evaluated")),
+                    "match_score": float(candidate.get("match_score", 0.0) or 0.0),
+                    "raw_values": {
+                        "a": _sanitize_field_value_for_log(field, raw_values_map.get("a")),
+                        "b": _sanitize_field_value_for_log(field, raw_values_map.get("b")),
+                    },
+                    "normalized_values": normalized_values_sanitized,
+                    "reasons": tuple(sorted(set(reasons_list))),
+                }
+
+                if "similarity" in candidate:
+                    try:
+                        candidate_payload["similarity"] = float(candidate.get("similarity"))
+                    except (TypeError, ValueError):
+                        candidate_payload["similarity"] = candidate.get("similarity")
+                if "threshold" in candidate:
+                    try:
+                        candidate_payload["threshold"] = float(candidate.get("threshold"))
+                    except (TypeError, ValueError):
+                        candidate_payload["threshold"] = candidate.get("threshold")
+                if "tolerance" in candidate and isinstance(candidate.get("tolerance"), Mapping):
+                    tolerance_map = candidate.get("tolerance")
+                    candidate_payload["tolerance"] = {
+                        key: float(value)
+                        if isinstance(value, (int, float))
+                        else value
+                        for key, value in dict(tolerance_map).items()
+                    }
+                if "min_length_met" in candidate:
+                    candidate_payload["min_length_met"] = bool(candidate.get("min_length_met"))
+                if "acctnum_level" in candidate:
+                    candidate_payload["acctnum_level"] = str(candidate.get("acctnum_level"))
+                if "visible_digits" in candidate and isinstance(candidate.get("visible_digits"), Mapping):
+                    visible_map = candidate.get("visible_digits")
+                    candidate_payload["visible_digits"] = {
+                        key: int(value)
+                        if isinstance(value, (int, float))
+                        else 0
+                        for key, value in dict(visible_map).items()
+                    }
+                if "hard_match_enabled" in candidate:
+                    candidate_payload["hard_match_enabled"] = bool(candidate.get("hard_match_enabled"))
+
+                candidate_payload["selected"] = bool(
+                    matched_flag
+                    and best_pair_tuple is not None
+                    and (left_bureau, right_bureau) == best_pair_tuple
+                    and candidate_payload["evaluated"]
+                    and candidate_payload["matched"]
+                )
+
+                candidate_payloads.append(candidate_payload)
+
+        skip_reasons: List[str] = []
+        if not matched_flag:
+            aggregated: set[str] = set()
+            evaluated_candidates = [c for c in candidate_payloads if c.get("evaluated")]
+            if evaluated_candidates:
+                matched_candidates = [c for c in evaluated_candidates if c.get("matched")]
+                if not matched_candidates:
+                    for candidate in evaluated_candidates:
+                        reasons = candidate.get("reasons")
+                        if isinstance(reasons, (list, tuple)):
+                            aggregated.update(str(reason) for reason in reasons if reason)
+            else:
+                for candidate in candidate_payloads:
+                    reasons = candidate.get("reasons")
+                    if isinstance(reasons, (list, tuple)):
+                        aggregated.update(str(reason) for reason in reasons if reason)
+            if not aggregated:
+                aggregated.add("no_matching_pair")
+            skip_reasons = sorted(aggregated)
+
+        sanitized_candidates: List[Dict[str, Any]] = _sanitize_candidate_entries(
+            field,
+            candidate_payloads,
+            preferred_pair=best_pair_tuple,
+        )
+        pairs_verbose: List[Dict[str, Any]] = [
+            _points_pair_entry_from_candidate(field, candidate)
+            for candidate in sanitized_candidates
+        ]
+        pair_labels: List[str] = [
+            entry.get("pair", "unknown")
+            for entry in pairs_verbose
+        ]
+
+        field_entry: Dict[str, Any] = {
+            "field": field,
+            "weight": weight_value,
+            "match_score": match_score_value,
+            "matched": matched_flag,
+            "contribution": contribution_value,
+            "weight_counted": matched_flag,
+            "running_total": running_total_value,
+            "candidates": sanitized_candidates,
+        }
+        if not matched_flag and skip_reasons:
+            field_entry["skip_reasons"] = list(skip_reasons)
+
+        diagnostics_fields_verbose.append(field_entry)
+
+        reason_text = _build_points_field_reason(
+            field,
+            matched=matched_flag,
+            aux_entry=aux_entry,
+            skip_reasons=skip_reasons,
+            cfg=cfg,
+        )
+
+        breakdown_field: Dict[str, Any] = {
+            "matched": matched_flag,
+            "points_awarded": float(contribution_value),
+            "weight": float(weight_value),
+            "weight_counted": matched_flag,
+            "match_score": float(match_score_value),
+            "reason": reason_text,
+            "pairs": pair_labels,
+            "pairs_verbose": pairs_verbose,
+        }
+        if best_pair_label:
+            breakdown_field["best_pair"] = str(best_pair_label).replace("~", "-").lower()
+        if skip_reasons:
+            breakdown_field["skip_reasons"] = list(skip_reasons)
+
+        tolerance = aux_entry.get("tolerance") if isinstance(aux_entry, Mapping) else None
+        if isinstance(tolerance, Mapping):
+            tol_payload: Dict[str, Any] = {}
+            if "abs" in tolerance and isinstance(tolerance["abs"], (int, float)):
+                tol_payload["abs"] = float(tolerance["abs"])
+            if "ratio" in tolerance and isinstance(tolerance["ratio"], (int, float)):
+                tol_payload["ratio"] = float(tolerance["ratio"])
+            if tol_payload:
+                breakdown_field["tolerance"] = tol_payload
+
+        tol_days = aux_entry.get("tolerance_days") if isinstance(aux_entry, Mapping) else None
+        if isinstance(tol_days, (int, float)):
+            breakdown_field["tolerance_days"] = int(tol_days)
+
+        if isinstance(aux_entry, Mapping) and "similarity" in aux_entry:
+            try:
+                breakdown_field["similarity"] = float(aux_entry.get("similarity"))
+            except (TypeError, ValueError):
+                breakdown_field["similarity"] = aux_entry.get("similarity")
+        if isinstance(aux_entry, Mapping) and "threshold" in aux_entry:
+            try:
+                breakdown_field["threshold"] = float(aux_entry.get("threshold"))
+            except (TypeError, ValueError):
+                breakdown_field["threshold"] = aux_entry.get("threshold")
+
+        if field == "account_label":
+            breakdown_field["allowlist"] = bool(getattr(cfg, "use_account_label", False))
+            breakdown_field["normalize"] = bool(getattr(cfg, "account_label_normalize", True))
+            breakdown_field["source"] = str(getattr(cfg, "account_label_source", "")) or ""
+            normalized_values_entry = aux_entry.get("normalized_values")
+            if isinstance(normalized_values_entry, (list, tuple)):
+                breakdown_field["values"] = [
+                    _sanitize_normalized_value_for_log(field, value)
+                    for value in normalized_values_entry
+                ]
+            elif isinstance(normalized_values_entry, Mapping):
+                breakdown_field["values"] = {
+                    key: _sanitize_normalized_value_for_log(field, value)
+                    for key, value in normalized_values_entry.items()
+                }
+
+        if field == "account_number":
+            acct_level = aux_entry.get("points_mode_acctnum_level")
+            if acct_level:
+                breakdown_field["acctnum_level"] = str(acct_level)
+
+        points_breakdown_fields[field] = breakdown_field
+
+    ordered_field_breakdown: Dict[str, Dict[str, Any]] = {}
+    for field in evaluated_fields:
+        field_payload = dict(points_breakdown_fields.get(field, {}))
+        field_payload.setdefault("matched", bool(matched_bools.get(field, False)))
+        field_payload.setdefault("weight", float(field_weights.get(field, 0.0)))
+        field_payload.setdefault("points_awarded", float(field_contributions.get(field, 0.0)))
+        field_payload.setdefault("weight_counted", bool(matched_bools.get(field, False)))
+        field_payload.setdefault("pairs", [])
+        field_payload.setdefault("pairs_verbose", [])
+        ordered_field_breakdown[field] = field_payload
+
+    thresholds_payload = {
+        "ai": float(ai_threshold),
+        "direct": float(direct_threshold),
+        "duplicate": float(_resolve_duplicate_points_threshold(cfg)),
+    }
+
+    points_breakdown = {
+        "pair_index": diagnostics_pair_index,
+        "pair": {"lo": None, "hi": None},
+        "total_points": float(total_points),
+        "decision": decision,
+        "thresholds": thresholds_payload,
+        "allowlist_fields": list(allowlist_fields),
+        "ignored_fields": list(ignored_fields),
+        "triggers": list(triggers),
+        "conflicts": list(conflicts),
+        "balance_exact_match": bool(balance_exact_match),
+        "field_order": list(evaluated_fields),
+        "fields": ordered_field_breakdown,
+        "weights": {
+            field: float(field_weights.get(field, 0.0))
+            for field in evaluated_fields
+        },
+        "verbose": diagnostics_fields_verbose,
+    }
+
+    diagnostics_block = {
+        "pair_index": diagnostics_pair_index,
+        "pair": points_breakdown["pair"],
+        "total_points": float(total_points),
+        "decision": decision,
+        "thresholds": thresholds_payload,
+        "fields": ordered_field_breakdown,
+        "ignored_fields": list(ignored_fields),
+        "triggers": list(triggers),
+        "conflicts": list(conflicts),
+        "balance_exact_match": bool(balance_exact_match),
+    }
+    logger.info(
+        "[MERGE] Points-mode diagnostics %s",
+        json.dumps(diagnostics_block, sort_keys=True),
+    )
+    _POINTS_MODE_DIAGNOSTICS_EMITTED += 1
 
     sum_parts = 0.0
     for field in evaluated_fields:
@@ -2387,6 +4183,27 @@ def _score_pair_points_mode(
         )
     assert abs(total_points - sum_parts) < 1e-6
 
+    diagnostics_payload: List[Dict[str, Any]] = []
+    for (
+        field_name,
+        match_score_entry,
+        weight_entry,
+        contribution_entry,
+        running_total,
+    ) in diagnostics_entries:
+        diagnostics_payload.append(
+            {
+                "field": str(field_name),
+                "match_score": float(match_score_entry),
+                "weight": float(weight_entry),
+                "contribution": float(contribution_entry),
+                "running_total": float(running_total),
+                "matched": bool(
+                    matched_bools.get(field_name, match_score_entry >= 1.0)
+                ),
+            }
+        )
+
     return {
         "total": float(total_points),
         "score_points": float(total_points),
@@ -2410,6 +4227,8 @@ def _score_pair_points_mode(
         "mid_sum": 0.0,
         "identity_sum": 0.0,
         "identity_score": 0.0,
+        "points_diagnostics": tuple(diagnostics_payload),
+        "points_breakdown": points_breakdown,
     }
 
 
@@ -2492,6 +4311,10 @@ def score_all_pairs_0_100(
         return {}
 
     runs_root = Path(runs_root)
+    try:
+        run_base_dir = (runs_root / sid).resolve(strict=False)
+    except TypeError:  # pragma: no cover - fallback for older Python
+        run_base_dir = (runs_root / sid)
     merge_paths = get_merge_paths(runs_root, sid, create=True)
     packs_dir = merge_paths.packs_dir
     log_file = merge_paths.log_file
@@ -2508,6 +4331,9 @@ def score_all_pairs_0_100(
             except (TypeError, ValueError):
                 continue
     points_mode_flag = bool(getattr(cfg, "points_mode", False))
+    persist_breakdown_enabled = bool(getattr(cfg, "points_persist_breakdown", False))
+    diag_dir_setting_raw = getattr(cfg, "points_diag_dir", "ai_packs/merge/diagnostics")
+    diag_dir_setting = str(diag_dir_setting_raw or "ai_packs/merge/diagnostics")
     if points_mode_flag:
         try:
             ai_points_threshold_value = float(
@@ -2617,6 +4443,7 @@ def score_all_pairs_0_100(
     logger.debug("MERGE_PAIR_OVERVIEW %s", json.dumps(overview_log, sort_keys=True))
 
     bureaus_by_idx: Dict[int, Dict[str, Dict[str, Any]]] = {}
+    points_context_by_idx: Dict[int, Dict[str, Any]] = {}
     normalized_accounts = 0
     for idx in indices:
         try:
@@ -2632,6 +4459,8 @@ def score_all_pairs_0_100(
             )
             bureaus = {}
         bureaus_by_idx[idx] = bureaus
+        case_root = runs_root / sid / "cases" / "accounts" / str(idx)
+        points_context_by_idx[idx] = _resolve_account_artifacts(None, case_root)
         for branch in bureaus.values():
             normalized = _normalize_account_display(branch)
             if normalized.has_digits or normalized.canon_mask:
@@ -2713,6 +4542,8 @@ def score_all_pairs_0_100(
                 field_sequence=field_sequence,
                 weights_map=weights_map,
                 debug_enabled=debug_enabled,
+                left_context=points_context_by_idx.get(left),
+                right_context=points_context_by_idx.get(right),
             )
         else:
             if should_debug_pair:
@@ -2903,6 +4734,145 @@ def score_all_pairs_0_100(
         else:
             allowed = total_score_int >= ai_threshold
 
+        oc_required = bool(getattr(cfg, "require_original_creditor_for_ai", False))
+        oc_present_left = _has_original_creditor(left_bureaus)
+        oc_present_right = _has_original_creditor(right_bureaus)
+
+        pack_eligible = bool(allowed)
+        pack_skip_reason = "no_candidates"
+        pack_gate_reason = ""
+        if allowed:
+            gate_allowed, gate_reason = _ai_pack_gate_allows(
+                cfg,
+                left_bureaus,
+                right_bureaus,
+            )
+            if not gate_allowed:
+                allowed = False
+                pack_gate_reason = gate_reason or "missing_original_creditor"
+                pack_skip_reason = pack_gate_reason
+                logger.info(
+                    "MERGE_V2_PACK_GATE sid=%s i=%s j=%s reason=%s",
+                    sid,
+                    left,
+                    right,
+                    pack_gate_reason,
+                )
+
+        breakdown_payload = result.get("points_breakdown")
+        diagnostics_path: Optional[Path] = None
+        if isinstance(breakdown_payload, Mapping):
+            breakdown_copy = dict(breakdown_payload)
+            oc_gate_payload: Dict[str, Any] = {
+                "required": oc_required,
+                "present_left": oc_present_left,
+                "present_right": oc_present_right,
+                "score_allowed": bool(pack_eligible),
+                "final_allowed": bool(allowed),
+            }
+            if pack_eligible:
+                oc_gate_payload["gate_passed"] = bool(allowed)
+            if not oc_required:
+                action = "pass"
+            elif oc_present_left or oc_present_right:
+                action = "pass"
+            else:
+                action = "skip"
+            oc_gate_payload["action"] = action
+            if pack_gate_reason:
+                oc_gate_payload["reason"] = str(pack_gate_reason)
+            elif pack_skip_reason and pack_skip_reason != "no_candidates" and action != "pass":
+                oc_gate_payload["reason"] = str(pack_skip_reason)
+            if "reason" in oc_gate_payload:
+                oc_gate_payload["gate_reason"] = oc_gate_payload["reason"]
+
+            def _safe_index(value: Any) -> int:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    try:
+                        return int(str(value))
+                    except (TypeError, ValueError):
+                        return 0
+
+            left_idx_int = _safe_index(left)
+            right_idx_int = _safe_index(right)
+            lo_idx, hi_idx = sorted((left_idx_int, right_idx_int))
+
+            pair_meta = {
+                "sid": sid,
+                "a": left_idx_int,
+                "b": right_idx_int,
+                "left": left_idx_int,
+                "right": right_idx_int,
+                "lo": lo_idx,
+                "hi": hi_idx,
+            }
+            breakdown_copy["pair"] = pair_meta
+            breakdown_copy.setdefault("total_score", float(total_score_value))
+            breakdown_copy.setdefault("score_points", float(total_score_value))
+            breakdown_copy.setdefault("decision", str(result.get("decision", "different")))
+            breakdown_copy["oc_gate"] = oc_gate_payload
+
+            result["points_breakdown"] = breakdown_copy
+
+            if points_mode_active:
+                if persist_breakdown_enabled:
+                    diagnostics_dir = Path(diag_dir_setting)
+                    if not diagnostics_dir.is_absolute():
+                        diagnostics_dir = (run_base_dir / diagnostics_dir).resolve()
+                    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+                    diag_filename = f"points_breakdown_{lo_idx}_{hi_idx}.json"
+                    diagnostics_path = diagnostics_dir / diag_filename
+                    try:
+                        persisted_payload = json.loads(
+                            json.dumps(breakdown_copy, ensure_ascii=False)
+                        )
+                    except TypeError:
+                        persisted_payload = breakdown_copy
+                    try:
+                        _atomic_write_json(diagnostics_path, persisted_payload)
+                    except Exception:
+                        logger.exception(
+                            "MERGE_V2_POINTS_DIAGNOSTICS_WRITE_FAILED sid=%s i=%s j=%s path=%s",
+                            sid,
+                            left,
+                            right,
+                            diagnostics_path,
+                        )
+                    else:
+                        result["points_breakdown_path"] = str(diagnostics_path)
+                else:
+                    result.pop("points_breakdown_path", None)
+
+        if points_mode_active and isinstance(result.get("points_breakdown"), Mapping):
+            breakdown_for_log = result.get("points_breakdown", {})
+            pair_meta = breakdown_for_log.get("pair") if isinstance(breakdown_for_log, Mapping) else None
+            if isinstance(pair_meta, Mapping):
+                lo_idx = pair_meta.get("lo", left)
+                hi_idx = pair_meta.get("hi", right)
+            else:
+                lo_idx, hi_idx = left, right
+            pair_label = f"{lo_idx}-{hi_idx}"
+            fields_map = breakdown_for_log.get("fields")
+            field_order = breakdown_for_log.get("field_order")
+            if not isinstance(field_order, (list, tuple)) and isinstance(fields_map, Mapping):
+                field_order = list(fields_map.keys())
+            if isinstance(fields_map, Mapping):
+                for field_name in field_order or []:
+                    entry = fields_map.get(field_name)
+                    if not isinstance(entry, Mapping):
+                        continue
+                    formatted_line = _format_points_field_line(field_name, pair_label, entry)
+                    logger.info(formatted_line)
+                    _candidate_logger.info(formatted_line)
+            oc_gate_line = _format_points_oc_gate_line(
+                pair_label,
+                result["points_breakdown"].get("oc_gate", {}),
+            )
+            logger.info(oc_gate_line)
+            _candidate_logger.info(oc_gate_line)
+
         if level_value in _STRONG_MATCH_LEVELS:
             matches_strong += 1
         elif level_value in _WEAK_MATCH_LEVELS:
@@ -2927,6 +4897,7 @@ def score_all_pairs_0_100(
                     "short": short_debug,
                     "long": long_debug,
                     "why": why_debug,
+                    **({"gate_reason": pack_gate_reason} if pack_gate_reason else {}),
                 },
             }
         )
@@ -2987,7 +4958,8 @@ def score_all_pairs_0_100(
                 out=pack_out,
             )
         else:
-            pack_skipped_message = f"PACK_SKIPPED {left}-{right}"
+            reason_suffix = f" reason={pack_skip_reason}" if pack_skip_reason else ""
+            pack_skipped_message = f"PACK_SKIPPED {left}-{right}{reason_suffix}"
             logger.info(pack_skipped_message)
             _candidate_logger.info(pack_skipped_message)
 
@@ -2997,7 +4969,7 @@ def score_all_pairs_0_100(
                 "pack_skip",
                 parent_span_id=merge_scoring_span,
                 account=f"{left}-{right}",
-                out={"reason": "no_candidates"},
+                out={"reason": pack_skip_reason},
             )
             if result.get("conflicts"):
                 scores[left].pop(right, None)
@@ -4545,6 +6517,7 @@ def persist_merge_tags(
         }
 
         merge_kinds = {"merge_pair", "merge_best"}
+        bureaus_cache: Dict[int, Mapping[str, Mapping[str, Any]]] = {}
         for idx, path in tag_paths.items():
             existing_tags = read_tags(path)
             filtered = [tag for tag in existing_tags if tag.get("kind") not in merge_kinds]
@@ -4592,6 +6565,58 @@ def persist_merge_tags(
                         upsert_tag(right_path, right_tag, unique_keys=("kind", "with"))
 
                 if left_tag.get("decision") == "ai":
+                    gate_allowed = True
+                    pack_skip_reason = ""
+                    if bool(getattr(cfg, "require_original_creditor_for_ai", False)):
+                        try:
+                            left_bureaus = bureaus_cache[left]
+                        except KeyError:
+                            try:
+                                left_bureaus = load_bureaus(sid, left, runs_root=runs_root)
+                            except FileNotFoundError:
+                                left_bureaus = {}
+                            except Exception:
+                                logger.exception(
+                                    "MERGE_V2_BUREAUS_LOAD_FAILED sid=%s idx=%s", sid, left
+                                )
+                                left_bureaus = {}
+                            bureaus_cache[left] = left_bureaus
+                        try:
+                            right_bureaus = bureaus_cache[right]
+                        except KeyError:
+                            try:
+                                right_bureaus = load_bureaus(sid, right, runs_root=runs_root)
+                            except FileNotFoundError:
+                                right_bureaus = {}
+                            except Exception:
+                                logger.exception(
+                                    "MERGE_V2_BUREAUS_LOAD_FAILED sid=%s idx=%s", sid, right
+                                )
+                                right_bureaus = {}
+                            bureaus_cache[right] = right_bureaus
+
+                        gate_allowed, pack_skip_reason = _ai_pack_gate_allows(
+                            cfg,
+                            left_bureaus,
+                            right_bureaus,
+                        )
+                        if not pack_skip_reason:
+                            pack_skip_reason = "missing_original_creditor"
+
+                    if not gate_allowed:
+                        reason_suffix = f" reason={pack_skip_reason}" if pack_skip_reason else ""
+                        skip_message = f"PACK_SKIPPED {left}-{right}{reason_suffix}"
+                        logger.info(skip_message)
+                        _candidate_logger.info(skip_message)
+                        runflow_event(
+                            sid,
+                            "merge",
+                            "pack_skip",
+                            account=f"{left}-{right}",
+                            out={"reason": pack_skip_reason or "missing_original_creditor"},
+                        )
+                        continue
+
                     highlights_from_pair = _build_ai_highlights(result)
                     pack_payload = build_ai_pack_for_pair(
                         sid,

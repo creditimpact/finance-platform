@@ -130,9 +130,31 @@ referenced result paths.
 | `MERGE_OVERRIDES_JSON` | `{}` | Supplies explicit rule overrides for bespoke scenarios. |
 | `MERGE_DEBUG` | `false` | Enables verbose merge scoring logs. Combine with `MERGE_LOG_EVERY` to throttle sampling. |
 | `MERGE_LOG_EVERY` | `0` | Optional cadence controlling debug sampling frequency. |
+| `MERGE_REQUIRE_ORIGINAL_CREDITOR_FOR_AI` | `false` | When enabled, AI merge packs are only built if either account supplies an `original_creditor` value. |
+| `MERGE_POINTS_DIAGNOSTICS` | `false` | Legacy toggle retained for backwards compatibility. Diagnostics sampling is controlled via `MERGE_POINTS_PERSIST_BREAKDOWN`. |
+| `MERGE_POINTS_DIAGNOSTICS_LIMIT` | `3` | Legacy limit retained for backwards compatibility. |
+| `MERGE_POINTS_PERSIST_BREAKDOWN` | `false` | When `true`, persist `points_breakdown_{lo}_{hi}.json` payloads to disk and expose their paths in results. |
+| `MERGE_POINTS_DIAGNOSTICS_DIR` | `ai_packs/merge/diagnostics` | Destination (absolute or relative to the run root) for persisted points-mode diagnostics files. |
 
 The configuration loader normalizes booleans, numbers, and JSON payloads so the
 runtime merge configuration can be tuned entirely via environment variables.
+
+### Points-mode diagnostics payload
+
+- When `MERGE_POINTS_PERSIST_BREAKDOWN=1`, each scored pair emits a
+  `points_breakdown_{lo}_{hi}.json` sidecar under `MERGE_POINTS_DIAGNOSTICS_DIR`
+  (relative paths are resolved within the run directory) and matching `FIELDS`
+  log lines. When disabled, results omit the diagnostics path and no files are
+  written.
+- The persisted document includes a `pair` object with `lo`/`hi` indexes, the
+  original `a`/`b` members, and the current `sid`. Thresholds are grouped under
+  `thresholds.ai`, `thresholds.direct`, and `thresholds.duplicate`.
+- Each field entry contains a compact `pairs` list (just bureau identifiers) and
+  a verbose `pairs_verbose` list with sanitized `raw_values`, `normalized_values`,
+  and the reason codes considered while matching.
+- Log entries follow the shape
+  `FIELDS lo-hi FIELD_NAME matched=true points=... reason=... pairs=[...]` to
+  mirror the JSON payload and surface skip reasons.
 
 ## Account number validation (deterministic comparator)
 

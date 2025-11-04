@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -10,6 +11,10 @@ from typing import Iterable, Mapping
 from backend.core.ai.paths import ensure_merge_paths, pair_pack_path
 
 from . import config as merge_config
+
+
+logger = logging.getLogger(__name__)
+_candidate_logger = logging.getLogger("ai_packs")
 
 WANTED_CONTEXT_KEYS: list[str] = [
     "Account #",
@@ -638,6 +643,77 @@ def build_ai_pack_for_pair(
     first_idx, second_idx = sorted((account_a, account_b))
     pack_path = pair_pack_path(merge_paths, first_idx, second_idx)
     payload: dict
+
+    gate_cfg = None
+    gate_allowed = True
+    gate_reason = ""
+    merge_logic = None
+    try:  # pragma: no cover - defensive
+        from backend.core.logic.report_analysis import account_merge as merge_logic  # type: ignore
+    except Exception:
+        merge_logic = None
+
+    if merge_logic is not None:
+        try:
+            gate_cfg = merge_logic.get_merge_cfg()
+        except Exception:  # pragma: no cover - defensive
+            gate_cfg = None
+
+    require_original_creditor = bool(
+        getattr(gate_cfg, "require_original_creditor_for_ai", False)
+    )
+
+    if require_original_creditor and merge_logic is not None:
+        def _safe_load_bureaus(index: int) -> Mapping[str, Mapping[str, object]]:
+            try:
+                return merge_logic.load_bureaus(sid_str, index, runs_root=runs_root_path)
+            except FileNotFoundError:
+                return {}
+            except Exception:
+                logger.exception(
+                    "MERGE_V2_BUREAUS_LOAD_FAILED sid=%s idx=%s", sid_str, index
+                )
+                return {}
+
+        bureaus_a = _safe_load_bureaus(account_a)
+        bureaus_b = _safe_load_bureaus(account_b)
+        gate_allowed, gate_reason = merge_logic._ai_pack_gate_allows(  # type: ignore[attr-defined]
+            gate_cfg,
+            bureaus_a,
+            bureaus_b,
+        )
+        if not gate_reason:
+            gate_reason = "missing_original_creditor"
+
+    if require_original_creditor and not gate_allowed:
+        reason_suffix = f" reason={gate_reason}" if gate_reason else ""
+        skip_message = f"PACK_SKIPPED {account_a}-{account_b}{reason_suffix}"
+        _candidate_logger.info(skip_message)
+        logger.info(
+            "MERGE_V2_PACK_GATE sid=%s i=%s j=%s reason=%s stage=builder",
+            sid_str,
+            account_a,
+            account_b,
+            gate_reason,
+        )
+        if pack_path.exists():
+            try:
+                pack_path.unlink()
+            except OSError:  # pragma: no cover - defensive
+                logger.warning(
+                    "MERGE_V2_PACK_REMOVE_FAILED sid=%s pair=(%s,%s) path=%s",
+                    sid_str,
+                    account_a,
+                    account_b,
+                    pack_path,
+                    exc_info=True,
+                )
+        return {
+            "sid": sid_str,
+            "pair": {"a": account_a, "b": account_b},
+            "skipped": True,
+            "reason": gate_reason,
+        }
 
     try:
         raw_lines_a = _load_raw_lines(raw_a_path)

@@ -34,7 +34,7 @@ DEFAULT_FIELDS: List[str] = [
 logger = logging.getLogger(__name__)
 
 
-VALID_FIELDS: Set[str] = set(DEFAULT_FIELDS)
+VALID_FIELDS: Set[str] = set(DEFAULT_FIELDS) | {"account_label"}
 
 
 POINTS_MODE_DEFAULT_WEIGHTS: Dict[str, float] = {
@@ -45,6 +45,7 @@ POINTS_MODE_DEFAULT_WEIGHTS: Dict[str, float] = {
     "account_status": 0.5,
     "history_2y": 1.0,
     "history_7y": 1.0,
+    "account_label": 1.0,
 }
 
 
@@ -64,6 +65,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Optional merge fields stay disabled until toggled via MERGE_USE_* flags.
     "use_original_creditor": False,
     "use_creditor_name": False,
+    "require_original_creditor_for_ai": False,
     "weights": {},
     "thresholds": {},
     "overrides": {},
@@ -75,9 +77,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Emit per-pair diagnostics for the first N comparisons when points mode
     # is active so behaviour can be audited without enabling verbose logging.
     "points_diagnostics_limit": 3,
+    "points_diagnostics": False,
+    "points_persist_breakdown": False,
+    "points_diag_dir": "ai_packs/merge/diagnostics",
+    # Optional account label support remains disabled unless explicitly opted in.
+    "use_account_label": False,
+    "account_label_source": "meta.heading_guess",
+    "account_label_normalize": True,
 }
 
-ALLOWLIST_FIELDS: List[str] = list(DEFAULT_FIELDS)
+ALLOWLIST_FIELDS: List[str] = list(DEFAULT_FIELDS) + ["account_label"]
 
 _MERGE_CONFIG_LOGGED = False
 
@@ -108,6 +117,13 @@ class MergeConfig(Mapping[str, Any]):
         weights: Dict[str, float],
         tolerances: Dict[str, Any],
         points_diagnostics_limit: int,
+        points_diagnostics: bool,
+        points_persist_breakdown: bool,
+        points_diag_dir: str,
+        use_account_label: bool,
+        account_label_source: Optional[str],
+        account_label_normalize: bool,
+        require_original_creditor_for_ai: bool,
     ) -> None:
         self._raw: Dict[str, Any] = dict(raw)
         self.points_mode = points_mode
@@ -118,6 +134,17 @@ class MergeConfig(Mapping[str, Any]):
         self.weights = dict(weights)
         self.tolerances = dict(tolerances)
         self.points_diagnostics_limit = int(max(points_diagnostics_limit, 0))
+        self.points_diagnostics = bool(points_diagnostics)
+        self.points_persist_breakdown = bool(points_persist_breakdown)
+        self.points_diag_dir = str(points_diag_dir)
+        self.use_account_label = bool(use_account_label)
+        self.account_label_source = (
+            str(account_label_source).strip()
+            if account_label_source is not None
+            else ""
+        )
+        self.account_label_normalize = bool(account_label_normalize)
+        self.require_original_creditor_for_ai = bool(require_original_creditor_for_ai)
 
         # Surface structured values through the mapping interface for backward
         # compatibility with existing dictionary-based access patterns.
@@ -131,6 +158,13 @@ class MergeConfig(Mapping[str, Any]):
                 "weights": dict(self.weights),
                 "tolerances": dict(self.tolerances),
                 "points_diagnostics_limit": self.points_diagnostics_limit,
+                "points_diagnostics": self.points_diagnostics,
+                "points_persist_breakdown": self.points_persist_breakdown,
+                "points_diag_dir": self.points_diag_dir,
+                "use_account_label": self.use_account_label,
+                "account_label_source": self.account_label_source,
+                "account_label_normalize": self.account_label_normalize,
+                "require_original_creditor_for_ai": self.require_original_creditor_for_ai,
             }
         )
 
@@ -454,6 +488,43 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
         diagnostics_limit = int(DEFAULT_CONFIG["points_diagnostics_limit"])
     diagnostics_limit = max(int(diagnostics_limit), 0)
 
+    points_diagnostics_flag = _coerce_bool(
+        raw_config.get("points_diagnostics"),
+        bool(DEFAULT_CONFIG.get("points_diagnostics", False)),
+    )
+
+    points_persist_breakdown_flag = _coerce_bool(
+        raw_config.get("points_persist_breakdown"),
+        bool(DEFAULT_CONFIG.get("points_persist_breakdown", False)),
+    )
+
+    points_diag_dir_raw = raw_config.get("points_diag_dir")
+    if isinstance(points_diag_dir_raw, str) and points_diag_dir_raw.strip():
+        points_diag_dir_value = points_diag_dir_raw.strip()
+    elif points_diag_dir_raw is None:
+        points_diag_dir_value = str(DEFAULT_CONFIG.get("points_diag_dir", "ai_packs/merge/diagnostics"))
+    else:
+        points_diag_dir_value = str(points_diag_dir_raw).strip()
+        if not points_diag_dir_value:
+            points_diag_dir_value = str(DEFAULT_CONFIG.get("points_diag_dir", "ai_packs/merge/diagnostics"))
+
+    use_account_label = _coerce_bool(raw_config.get("use_account_label"))
+    require_original_creditor_for_ai = _coerce_bool(
+        raw_config.get("require_original_creditor_for_ai"),
+        bool(DEFAULT_CONFIG["require_original_creditor_for_ai"]),
+    )
+    account_label_source_raw = raw_config.get("account_label_source")
+    if isinstance(account_label_source_raw, str):
+        account_label_source = account_label_source_raw.strip()
+    elif account_label_source_raw is None:
+        account_label_source = ""
+    else:
+        account_label_source = str(account_label_source_raw).strip()
+    account_label_normalize = _coerce_bool(
+        raw_config.get("account_label_normalize"),
+        bool(DEFAULT_CONFIG["account_label_normalize"]),
+    )
+
     fields_override = _normalize_fields(raw_config.get("fields_override"))
     recognized_override_fields = [field for field in fields_override if field in VALID_FIELDS]
 
@@ -555,6 +626,13 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
         raw_config.get("use_custom_weights")
     ) or bool(points_mode)
     processed_raw["fields_override"] = fields_override
+    processed_raw["use_account_label"] = use_account_label
+    processed_raw["account_label_source"] = account_label_source
+    processed_raw["account_label_normalize"] = account_label_normalize
+    processed_raw["require_original_creditor_for_ai"] = require_original_creditor_for_ai
+    processed_raw["points_diagnostics"] = points_diagnostics_flag
+    processed_raw["points_persist_breakdown"] = points_persist_breakdown_flag
+    processed_raw["points_diag_dir"] = points_diag_dir_value
 
     for warning in validation_warnings:
         logger.warning("[MERGE] %s", warning)
@@ -570,7 +648,7 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
     if not _MERGE_CONFIG_LOGGED:
         message = (
             "[MERGE] Config points_mode=%s ai_threshold=%.2f direct_threshold=%.2f "
-            "fields=%s weights=%s tolerances=%s diagnostics_limit=%s"
+            "fields=%s weights=%s tolerances=%s diagnostics_limit=%s diagnostics=%s"
             % (
                 points_mode,
                 float(ai_points_threshold),
@@ -579,10 +657,19 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
                 weights,
                 tolerances,
                 diagnostics_limit,
+                points_diagnostics_flag,
             )
         )
         logger.info(message)
         print(message)
+        logger.info(
+            "[MERGE] points_diagnostics=%s limit=%s oc_gate=%s persist_breakdown=%s diag_dir=%s",
+            "on" if points_diagnostics_flag else "off",
+            diagnostics_limit,
+            "on" if require_original_creditor_for_ai else "off",
+            "on" if points_persist_breakdown_flag else "off",
+            points_diag_dir_value,
+        )
         _MERGE_CONFIG_LOGGED = True
 
     structured = MergeConfig(
@@ -595,6 +682,13 @@ def _create_structured_config(raw_config: Dict[str, Any]) -> MergeConfig:
         weights=weights,
         tolerances=tolerances,
         points_diagnostics_limit=diagnostics_limit,
+        points_diagnostics=points_diagnostics_flag,
+        points_persist_breakdown=points_persist_breakdown_flag,
+        points_diag_dir=points_diag_dir_value,
+        use_account_label=use_account_label,
+        account_label_source=account_label_source,
+        account_label_normalize=account_label_normalize,
+        require_original_creditor_for_ai=require_original_creditor_for_ai,
     )
 
     setattr(structured, "weights_map", dict(weights_from_env))

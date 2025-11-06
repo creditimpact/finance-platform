@@ -23,6 +23,12 @@ def test_business_to_calendar_days_conversion(business_days, expected):
     assert business_to_calendar_days(business_days) == expected
 
 
+def test_business_to_calendar_handles_monday_start():
+    monday = date(2023, 7, 3)
+    assert business_to_calendar(monday, 1) == 1
+    assert business_to_calendar(monday, 5) == 5
+
+
 def test_business_to_calendar_handles_friday_start():
     # Friday start should require a full weekend skip for the second day.
     assert business_to_calendar(4, 1) == 1

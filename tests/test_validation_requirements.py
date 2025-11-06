@@ -65,6 +65,23 @@ def _requirements_by_field(bureaus):
     return by_field, inconsistencies
 
 
+def test_business_day_sla_flag_falls_back_to_calendar(monkeypatch):
+    monkeypatch.setenv("VALIDATION_BUSINESS_DAY_SLA_ENABLED", "0")
+
+    bureaus = {
+        "equifax": {"payment_status": "CO"},
+        "experian": {"payment_status": "CO"},
+        "transunion": {"payment_status": "OK"},
+    }
+
+    requirements, _ = _requirements_by_field(bureaus)
+    rule = requirements["payment_status"]
+
+    assert rule["min_days"] == 25  # legacy calendar days preserved
+    assert rule["min_days_business"] == 19
+    assert rule["duration_unit"] == "calendar_days"
+
+
 def test_account_number_last4_mismatch_is_strong():
     bureaus = {
         "transunion": {"account_number_display": "****9992"},

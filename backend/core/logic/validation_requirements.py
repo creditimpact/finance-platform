@@ -49,7 +49,7 @@ from backend.validation.decision_matrix import decide_default
 from backend.validation.seed_arguments import build_seed_argument
 from backend.core.merge.acctnum import acctnum_level, acctnum_match_level
 from backend.prevalidation import read_date_convention
-from backend.validation.utils_dates import business_to_calendar_days
+from backend.validation.utils_dates import business_to_calendar
 
 tolerance_logger = logging.getLogger("backend.validation.tolerance")
 logger = logging.getLogger(__name__)
@@ -1241,13 +1241,13 @@ def _build_requirement_entries(
         if rule.duration_unit == "business_days":
             business_min_days = rule.min_days
             if _business_day_sla_enabled():
-                min_days_value = business_to_calendar_days(rule.min_days)
+                min_days_value = business_to_calendar(0, rule.min_days)
             else:
                 legacy_value = _LEGACY_CALENDAR_MINIMUMS.get(field)
                 if legacy_value is not None:
                     min_days_value = legacy_value
                 else:
-                    min_days_value = business_to_calendar_days(rule.min_days)
+                    min_days_value = business_to_calendar(0, rule.min_days)
                 duration_unit = "calendar_days"
 
         payload: Dict[str, Any] = {

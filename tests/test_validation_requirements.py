@@ -1,7 +1,11 @@
 import pytest
-
 from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.validation_requirements import build_validation_requirements
+
+
+@pytest.fixture(autouse=True)
+def enable_business_day_rollout(monkeypatch):
+    monkeypatch.setenv("VALIDATION_USE_BUSINESS_DAYS", "1")
 
 
 @pytest.fixture
@@ -66,7 +70,7 @@ def _requirements_by_field(bureaus):
 
 
 def test_business_day_sla_flag_falls_back_to_calendar(monkeypatch):
-    monkeypatch.setenv("VALIDATION_BUSINESS_DAY_SLA_ENABLED", "0")
+    monkeypatch.setenv("VALIDATION_USE_BUSINESS_DAYS", "0")
 
     bureaus = {
         "equifax": {"payment_status": "CO"},

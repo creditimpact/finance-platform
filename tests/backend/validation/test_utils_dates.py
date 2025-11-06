@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -37,6 +37,13 @@ def test_business_to_calendar_skips_holidays():
     july_3 = date(2023, 7, 3)  # Monday
     holidays = {date(2023, 7, 4)}  # Tuesday holiday
     assert business_to_calendar(july_3, 3, holidays=holidays) == 4
+
+
+def test_business_to_calendar_accepts_datetime_start():
+    friday_afternoon = datetime(2023, 9, 1, 15, 30)  # Friday
+    # First business day (Friday) counts despite time component; second skips weekend.
+    assert business_to_calendar(friday_afternoon, 1) == 1
+    assert business_to_calendar(friday_afternoon, 2) == 4
 
 
 def test_business_to_calendar_days_rejects_invalid():

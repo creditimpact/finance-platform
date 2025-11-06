@@ -16,7 +16,9 @@ following top-level keys:
 | `field` / `field_key` | Human-readable and normalised field identifiers. |
 | `category` | High-level grouping from the validation requirement (may be `null`). |
 | `documents` | Normalised list of supporting documents requested for the field. |
-| `min_days` | Optional minimum-age requirement for the documents. |
+| `min_days` | Minimum age in **calendar days** used by legacy consumers. |
+| `min_days_business` | Minimum age in business days (source of truth for SLAs). |
+| `duration_unit` | Unit associated with `min_days_business` (`business_days` today). |
 | `strength` | Requirement strength normalised to `weak` or `soft`; strong items are filtered out. |
 | `bureaus` | Per-bureau `raw` and `normalized` values for the field. |
 | `context` | Supplemental consistency signals (consensus summary, disagreeing or missing bureaus, history snapshots, requirement notes, etc.). |
@@ -26,6 +28,11 @@ following top-level keys:
 The `prompt.user` block echoes the metadata above (SID, account identifiers,
 field identifiers, bureau values, and context) so downstream tooling can send
 lines directly to the model without additional lookups.
+
+`min_days` remains a calendar-day number so existing consumers do not need to
+change units. The canonical SLA is tracked via `min_days_business` and
+`duration_unit` so that downstream builders can migrate to business-day logic
+without breaking older integrations.
 
 ## Output payload (result line)
 

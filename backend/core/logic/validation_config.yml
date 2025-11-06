@@ -20,12 +20,14 @@ defaults:
   ai_needed: false
   min_corroboration: 1
   conditional_gate: false
+  duration_unit: calendar_days
 
 fields:
   # ---- Open/Identification ----
   account_number_display:
     category: open_ident
     min_days: 2
+    duration_unit: business_days
     points: 3
     documents: [account_opening_contract, monthly_statement, collection_report]
     strength: soft
@@ -36,6 +38,7 @@ fields:
   date_opened:
     category: open_ident
     min_days: 3
+    duration_unit: business_days
     points: 3
     documents: [account_opening_contract, application_form, system_audit_log]
     strength: strong
@@ -44,6 +47,7 @@ fields:
   closed_date:
     category: open_ident
     min_days: 6
+    duration_unit: business_days
     points: 6
     documents: [closure_letter, internal_closure_report]
     strength: strong
@@ -52,6 +56,7 @@ fields:
   account_type:
     category: open_ident
     min_days: 2
+    duration_unit: business_days
     points: 3
     documents: [account_opening_contract, application_form, monthly_statement]
     strength: soft
@@ -60,6 +65,7 @@ fields:
   creditor_type:
     category: open_ident
     min_days: 6
+    duration_unit: business_days
     points: 6
     documents: [account_opening_contract, lender_agreement, cra_report]
     strength: soft
@@ -68,7 +74,8 @@ fields:
   # ---- Terms ----
   high_balance:
     category: terms
-    min_days: 8
+    min_days: 6
+    duration_unit: business_days
     points: 6
     documents: [loan_agreement, monthly_statement, internal_balance_report]
     strength: strong
@@ -76,7 +83,8 @@ fields:
 
   credit_limit:
     category: terms
-    min_days: 8
+    min_days: 6
+    duration_unit: business_days
     points: 6
     documents: [credit_line_agreement, limit_change_record, monthly_statement]
     strength: strong
@@ -85,6 +93,7 @@ fields:
   term_length:
     category: terms
     min_days: 3
+    duration_unit: business_days
     points: 3
     documents: [loan_agreement, terms_sheet]
     strength: soft
@@ -93,6 +102,7 @@ fields:
   payment_amount:
     category: terms
     min_days: 5
+    duration_unit: business_days
     points: 6
     documents: [loan_agreement, amortization_schedule, monthly_statement]
     strength: strong
@@ -101,6 +111,7 @@ fields:
   payment_frequency:
     category: terms
     min_days: 3
+    duration_unit: business_days
     points: 3
     documents: [loan_agreement, terms_sheet, monthly_statement]
     strength: soft
@@ -109,7 +120,8 @@ fields:
   # ---- Activity ----
   balance_owed:
     category: activity
-    min_days: 8
+    min_days: 6
+    duration_unit: business_days
     points: 6
     documents: [monthly_statement, balance_report, collection_report]
     strength: strong
@@ -118,6 +130,7 @@ fields:
   last_payment:
     category: activity
     min_days: 3
+    duration_unit: business_days
     points: 3
     documents: [monthly_statement, payment_receipt, internal_payment_log]
     strength: strong
@@ -125,7 +138,8 @@ fields:
 
   past_due_amount:
     category: activity
-    min_days: 8
+    min_days: 6
+    duration_unit: business_days
     points: 6
     documents: [monthly_statement, collection_report, delinquency_notice]
     strength: strong
@@ -133,7 +147,8 @@ fields:
 
   date_of_last_activity:
     category: activity
-    min_days: 12
+    min_days: 10
+    duration_unit: business_days
     points: 8
     documents: [monthly_statement, system_activity_log, internal_report]
     strength: strong
@@ -142,7 +157,8 @@ fields:
   # ---- Status / Reporting ----
   account_status:
     category: status
-    min_days: 12
+    min_days: 10
+    duration_unit: business_days
     points: 8
     documents: [monthly_statement, cra_report, cra_audit_log]
     strength: strong   # strong only when disagreement (open vs closed)
@@ -150,7 +166,8 @@ fields:
 
   payment_status:
     category: status
-    min_days: 25
+    min_days: 19
+    duration_unit: business_days
     points: 12
     documents: [collection_notes, chargeoff_statement, monthly_statement]
     strength: strong
@@ -158,7 +175,8 @@ fields:
 
   account_rating:
     category: status
-    min_days: 18
+    min_days: 14
+    duration_unit: business_days
     points: 10
     documents: [cra_report, cra_audit_log]
     strength: soft     # semantics differ across bureaus
@@ -169,6 +187,7 @@ fields:
   last_verified:
     category: status
     min_days: 6
+    duration_unit: business_days
     points: 4
     documents: [cra_report, cra_reporting_log, monthly_statement]
     strength: strong
@@ -177,6 +196,7 @@ fields:
   date_reported:
     category: status
     min_days: 3
+    duration_unit: business_days
     points: 3
     documents: [cra_reporting_log, cra_report]
     strength: strong
@@ -185,7 +205,8 @@ fields:
   # ---- Histories (NEW: must implement robust compare) ----
   two_year_payment_history:
     category: history
-    min_days: 18
+    min_days: 14
+    duration_unit: business_days
     points: 10
     documents: [monthly_statements_2y, internal_payment_history]
     strength: strong
@@ -193,7 +214,8 @@ fields:
 
   seven_year_history:
     category: history
-    min_days: 25
+    min_days: 19
+    duration_unit: business_days
     points: 12
     documents: [cra_report_7y, cra_audit_logs, collection_history]
     strength: strong

@@ -496,6 +496,10 @@ class ValidationPackBuilder:
         documents = self._normalize_string_list(requirement.get("documents"))
         category = self._coerce_optional_str(requirement.get("category"))
         min_days = self._coerce_optional_int(requirement.get("min_days"))
+        min_days_business = self._coerce_optional_int(
+            requirement.get("min_days_business")
+        )
+        duration_unit = self._coerce_optional_str(requirement.get("duration_unit"))
         min_corroboration = self._coerce_optional_int(
             requirement.get("min_corroboration")
         )
@@ -528,6 +532,8 @@ class ValidationPackBuilder:
             "category": category,
             "documents": documents,
             "min_days": min_days,
+            "min_days_business": min_days_business,
+            "duration_unit": duration_unit,
             "strength": strength,
             "bureaus": bureau_values,
             "context": context,

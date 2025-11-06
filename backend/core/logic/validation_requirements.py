@@ -16,9 +16,11 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
     Mapping,
     MutableMapping,
     Sequence,
+    cast,
 )
 
 import yaml
@@ -47,6 +49,7 @@ from backend.validation.decision_matrix import decide_default
 from backend.validation.seed_arguments import build_seed_argument
 from backend.core.merge.acctnum import acctnum_level, acctnum_match_level
 from backend.prevalidation import read_date_convention
+from backend.validation.utils_dates import business_to_calendar_days
 
 tolerance_logger = logging.getLogger("backend.validation.tolerance")
 logger = logging.getLogger(__name__)
@@ -98,12 +101,25 @@ _ACCOUNT_NUMBER_BUREAU_LABELS: Mapping[str, str] = {
     "transunion": "Tu",
 }
 _ACCOUNT_NUMBER_DETERMINISTIC_FLAG = "VALIDATION_ACCOUNT_NUMBER_DISPLAY_DETERMINISTIC"
+_BUSINESS_DAY_SLA_FLAG = "VALIDATION_BUSINESS_DAY_SLA_ENABLED"
 
 _FALSE_FLAG_VALUES = {"0", "false", "off", "no"}
 
 
 def _use_deterministic_account_number_policy() -> bool:
     override = os.getenv(_ACCOUNT_NUMBER_DETERMINISTIC_FLAG)
+    if override is None:
+        return True
+
+    lowered = override.strip().lower()
+    if lowered in _FALSE_FLAG_VALUES:
+        return False
+
+    return True
+
+
+def _business_day_sla_enabled() -> bool:
+    override = os.getenv(_BUSINESS_DAY_SLA_FLAG)
     if override is None:
         return True
 
@@ -358,6 +374,9 @@ def _include_creditor_remarks() -> bool:
     return normalized in {"1", "true", "yes", "y", "on"}
 
 
+DurationUnit = Literal["calendar_days", "business_days"]
+
+
 @dataclass(frozen=True)
 class ValidationRule:
     """Metadata describing the validation needed for a field."""
@@ -370,6 +389,7 @@ class ValidationRule:
     ai_needed: bool
     min_corroboration: int
     conditional_gate: bool
+    duration_unit: DurationUnit
 
 
 @dataclass(frozen=True)
@@ -425,6 +445,19 @@ def _normalize_strength(value: str) -> str:
     return lowered
 
 
+def _normalize_duration_unit(value: Any, *, allow_none: bool = False) -> DurationUnit | None:
+    if value is None:
+        if allow_none:
+            return None
+        return "calendar_days"
+
+    text = str(value).strip().lower()
+    if text not in {"calendar_days", "business_days"}:
+        raise ValueError("duration_unit must be 'calendar_days' or 'business_days'")
+
+    return cast(DurationUnit, text)
+
+
 class _BaseSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -438,6 +471,7 @@ class ValidationDefaultsSchema(_BaseSchema):
     ai_needed: bool
     min_corroboration: conint(ge=1) = 1  # type: ignore[call-overload]
     conditional_gate: bool = False
+    duration_unit: DurationUnit = "calendar_days"
 
     @field_validator("category", mode="before")
     @classmethod
@@ -459,6 +493,15 @@ class ValidationDefaultsSchema(_BaseSchema):
             raise ValueError("strength must be a string")
         return _normalize_strength(value)
 
+    @field_validator("duration_unit", mode="before")
+    @classmethod
+    def _normalize_duration_unit_validator(
+        cls, value: Any
+    ) -> DurationUnit:
+        normalized = _normalize_duration_unit(value)
+        assert normalized is not None
+        return normalized
+
 
 class CategoryRuleSchema(_BaseSchema):
     min_days: conint(ge=0)  # type: ignore[call-overload]
@@ -479,6 +522,7 @@ class ValidationFieldSchema(_BaseSchema):
     ai_needed: bool
     min_corroboration: conint(ge=1) | None = None  # type: ignore[call-overload]
     conditional_gate: bool | None = None
+    duration_unit: DurationUnit | None = None
 
     @field_validator("category", mode="before")
     @classmethod
@@ -503,6 +547,13 @@ class ValidationFieldSchema(_BaseSchema):
         if not isinstance(value, str):
             raise ValueError("strength must be a string")
         return _normalize_strength(value)
+
+    @field_validator("duration_unit", mode="before")
+    @classmethod
+    def _normalize_duration_unit_validator(
+        cls, value: Any
+    ) -> DurationUnit | None:
+        return _normalize_duration_unit(value, allow_none=True)
 
 
 class ValidationConfigSchema(_BaseSchema):
@@ -544,6 +595,7 @@ def _build_validation_defaults(schema: ValidationDefaultsSchema) -> ValidationRu
         bool(schema.ai_needed),
         int(schema.min_corroboration),
         bool(schema.conditional_gate),
+        schema.duration_unit,
     )
 
 
@@ -593,6 +645,7 @@ def _build_field_rule(
         if schema.conditional_gate is not None
         else defaults.conditional_gate
     )
+    duration_unit = schema.duration_unit or defaults.duration_unit
     return ValidationRule(
         category,
         min_days,
@@ -602,6 +655,7 @@ def _build_field_rule(
         ai_needed,
         min_corroboration,
         conditional_gate,
+        duration_unit,
     )
 
 
@@ -784,20 +838,45 @@ def _filter_inconsistent_fields(
 
 _HISTORY_FIELDS = {"two_year_payment_history", "seven_year_history"}
 
+_LEGACY_CALENDAR_MINIMUMS: Mapping[str, int] = {
+    "account_number_display": 2,
+    "date_opened": 3,
+    "closed_date": 6,
+    "account_type": 2,
+    "creditor_type": 6,
+    "high_balance": 8,
+    "credit_limit": 8,
+    "term_length": 3,
+    "payment_amount": 5,
+    "payment_frequency": 3,
+    "balance_owed": 8,
+    "last_payment": 3,
+    "past_due_amount": 8,
+    "date_of_last_activity": 12,
+    "account_status": 12,
+    "payment_status": 25,
+    "account_rating": 18,
+    "last_verified": 6,
+    "date_reported": 3,
+    "two_year_payment_history": 18,
+    "seven_year_history": 25,
+}
+
 _HISTORY_REQUIREMENT_OVERRIDES: Mapping[str, ValidationRule] = {
     "two_year_payment_history": ValidationRule(
         category="history",
-        min_days=18,
+        min_days=14,
         documents=("monthly_statements_2y", "internal_payment_history"),
         points=10,
         strength="strong",
         ai_needed=False,
         min_corroboration=1,
         conditional_gate=False,
+        duration_unit="business_days",
     ),
     "seven_year_history": ValidationRule(
         category="history",
-        min_days=25,
+        min_days=19,
         documents=(
             "cra_report_7y",
             "cra_audit_logs",
@@ -808,6 +887,7 @@ _HISTORY_REQUIREMENT_OVERRIDES: Mapping[str, ValidationRule] = {
         ai_needed=False,
         min_corroboration=1,
         conditional_gate=False,
+        duration_unit="business_days",
     ),
 }
 
@@ -1056,6 +1136,7 @@ def _apply_strength_policy(
         ai_needed,
         rule.min_corroboration,
         rule.conditional_gate,
+        rule.duration_unit,
     )
 
 
@@ -1148,23 +1229,44 @@ def _build_requirement_entries(
                 ai_needed=override.ai_needed,
                 min_corroboration=override.min_corroboration,
                 conditional_gate=override.conditional_gate,
+                duration_unit=override.duration_unit,
             )
 
         rule = _apply_strength_policy(field, details, rule)
         bureaus = _select_requirement_bureaus(details, broadcast_all=broadcast_all)
-        requirements.append(
-            {
-                "field": field,
-                "category": rule.category,
-                "min_days": rule.min_days,
-                "documents": list(rule.documents),
-                "strength": rule.strength,
-                "ai_needed": rule.ai_needed,
-                "min_corroboration": rule.min_corroboration,
-                "conditional_gate": rule.conditional_gate,
-                "bureaus": bureaus,
-            }
-        )
+        business_min_days: int | None = None
+        min_days_value = rule.min_days
+        duration_unit = rule.duration_unit
+
+        if rule.duration_unit == "business_days":
+            business_min_days = rule.min_days
+            if _business_day_sla_enabled():
+                min_days_value = business_to_calendar_days(rule.min_days)
+            else:
+                legacy_value = _LEGACY_CALENDAR_MINIMUMS.get(field)
+                if legacy_value is not None:
+                    min_days_value = legacy_value
+                else:
+                    min_days_value = business_to_calendar_days(rule.min_days)
+                duration_unit = "calendar_days"
+
+        payload: Dict[str, Any] = {
+            "field": field,
+            "category": rule.category,
+            "min_days": min_days_value,
+            "documents": list(rule.documents),
+            "strength": rule.strength,
+            "ai_needed": rule.ai_needed,
+            "min_corroboration": rule.min_corroboration,
+            "conditional_gate": rule.conditional_gate,
+            "bureaus": bureaus,
+            "duration_unit": duration_unit,
+        }
+
+        if business_min_days is not None:
+            payload["min_days_business"] = business_min_days
+
+        requirements.append(payload)
     return requirements
 
 

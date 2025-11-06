@@ -626,6 +626,8 @@ def _collect_weak_items(summary: Mapping[str, Any] | None) -> list[dict[str, Any
             "field": field,
             "category": entry.get("category"),
             "min_days": entry.get("min_days"),
+            "min_days_business": entry.get("min_days_business"),
+            "duration_unit": entry.get("duration_unit"),
             "documents": documents_list,
         }
 

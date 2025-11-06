@@ -78,6 +78,8 @@ def test_build_validation_requirements_uses_config_and_defaults():
     balance_rule = next(entry for entry in requirements if entry["field"] == "balance_owed")
     assert balance_rule["category"] == "activity"
     assert balance_rule["min_days"] == 8
+    assert balance_rule["min_days_business"] == 6
+    assert balance_rule["duration_unit"] == "business_days"
     assert "monthly_statement" in balance_rule["documents"]
     assert balance_rule["strength"] == "strong"
     assert balance_rule["ai_needed"] is False
@@ -1239,6 +1241,8 @@ def test_history_missing_vs_present_requires_strong_documents():
     two_year_req = fields["two_year_payment_history"]
     assert two_year_req["category"] == "history"
     assert two_year_req["min_days"] == 18
+    assert two_year_req["min_days_business"] == 14
+    assert two_year_req["duration_unit"] == "business_days"
     assert two_year_req["documents"] == [
         "monthly_statements_2y",
         "internal_payment_history",
@@ -1254,6 +1258,8 @@ def test_history_missing_vs_present_requires_strong_documents():
     seven_req = fields["seven_year_history"]
     assert seven_req["category"] == "history"
     assert seven_req["min_days"] == 25
+    assert seven_req["min_days_business"] == 19
+    assert seven_req["duration_unit"] == "business_days"
     assert seven_req["documents"] == [
         "cra_report_7y",
         "cra_audit_logs",

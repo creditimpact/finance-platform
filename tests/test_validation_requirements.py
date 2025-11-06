@@ -89,6 +89,8 @@ def test_histories_require_soft_policy(account_with_histories):
     assert history_rule["strength"] == "soft"
     assert history_rule["ai_needed"] is True
     assert history_rule["min_days"] == 18
+    assert history_rule["min_days_business"] == 14
+    assert history_rule["duration_unit"] == "business_days"
     assert history_rule["documents"] == [
         "monthly_statements_2y",
         "internal_payment_history",
@@ -106,6 +108,8 @@ def test_histories_require_soft_policy(account_with_histories):
     assert seven_rule["strength"] == "soft"
     assert seven_rule["ai_needed"] is True
     assert seven_rule["min_days"] == 25
+    assert seven_rule["min_days_business"] == 19
+    assert seven_rule["duration_unit"] == "business_days"
     assert seven_rule["documents"] == [
         "cra_report_7y",
         "cra_audit_logs",
@@ -237,6 +241,8 @@ def test_sanity_example_strong_and_soft_requirements():
     assert two_year_rule["strength"] == "soft"
     assert two_year_rule["ai_needed"] is True
     assert two_year_rule["min_days"] == 18
+    assert two_year_rule["min_days_business"] == 14
+    assert two_year_rule["duration_unit"] == "business_days"
     assert two_year_rule["documents"] == [
         "monthly_statements_2y",
         "internal_payment_history",

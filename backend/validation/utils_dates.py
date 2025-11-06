@@ -11,6 +11,28 @@ from typing import Any, Iterable, Mapping, Optional, Tuple
 
 from .config import get_prevalidation_trace_relpath
 
+
+def business_to_calendar_days(business_days: Any) -> int:
+    """Convert a business-day duration into calendar days.
+
+    The conversion assumes a 5-day work week (Monday–Friday) with no holidays
+    and returns ``0`` for non-positive inputs. Values are coerced to ``int`` so
+    callers may pass strings or ``Decimal`` instances.
+    """
+
+    try:
+        days = int(business_days)
+    except (TypeError, ValueError):
+        raise ValueError("business_days must be an integer") from None
+
+    if days <= 0:
+        return 0
+
+    full_weeks, _ = divmod(days - 1, 5)
+    weekend_padding = full_weeks * 2
+    return days + weekend_padding
+
+
 _LOGGER = logging.getLogger(__name__)
 
 _VALID_CONVENTIONS = {"DMY", "MDY", "YMD"}

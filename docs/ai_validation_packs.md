@@ -53,7 +53,9 @@ runs/<SID>/ai_packs/validation/
 
 ## Data contracts
 
-Copy these payloads verbatim when building or validating artifacts:
+Copy these payloads verbatim when building or validating artifacts. The calendar
+`min_days` value remains for backwards compatibility while `min_days_business`
+and `duration_unit` capture the new SLA semantics.
 
 ### 1.1 Pack line (JSONL) — one line per weak field
 
@@ -66,6 +68,8 @@ Copy these payloads verbatim when building or validating artifacts:
   "field": "account_type",
   "category": "open_ident",
   "min_days": 2,
+  "min_days_business": 2,
+  "duration_unit": "business_days",
   "documents": ["account_opening_contract","application_form","monthly_statement"],
   "strength": "weak",
   "context": {

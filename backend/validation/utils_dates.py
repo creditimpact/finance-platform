@@ -5,32 +5,113 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Tuple
 
 from .config import get_prevalidation_trace_relpath
 
 
-def business_to_calendar_days(business_days: Any) -> int:
-    """Convert a business-day duration into calendar days.
+def business_to_calendar(
+    start_date_or_weekday: date | datetime | int,
+    business_days: int,
+    *,
+    holidays: Iterable[date | datetime] | None = None,
+    weekend: Iterable[int] = (5, 6),
+) -> int:
+    """Return calendar days needed to satisfy a ``business_days`` SLA.
 
-    The conversion assumes a 5-day work week (Monday–Friday) with no holidays
-    and returns ``0`` for non-positive inputs. Values are coerced to ``int`` so
-    callers may pass strings or ``Decimal`` instances.
+    Parameters
+    ----------
+    start_date_or_weekday:
+        Either a :class:`datetime.date`, :class:`datetime.datetime`, or the
+        integer weekday (``0`` = Monday … ``6`` = Sunday) representing the
+        starting point of the SLA window.
+    business_days:
+        The number of business days that must elapse. Non-positive values
+        return ``0``.
+    holidays:
+        Optional iterable of holiday dates that should be skipped in addition to
+        weekends.
+    weekend:
+        Iterable of weekday integers that represent non-working days. Defaults
+        to Saturday/Sunday (``5``/``6``).
     """
 
     try:
-        days = int(business_days)
-    except (TypeError, ValueError):
-        raise ValueError("business_days must be an integer") from None
+        required_days = int(business_days)
+    except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+        raise ValueError("business_days must be an integer") from exc
 
-    if days <= 0:
+    if required_days <= 0:
         return 0
 
-    full_weeks, _ = divmod(days - 1, 5)
-    weekend_padding = full_weeks * 2
-    return days + weekend_padding
+    weekend_days = {int(day) for day in weekend}
+
+    current_date: date | None
+    current_weekday: int
+
+    if isinstance(start_date_or_weekday, datetime):
+        current_date = start_date_or_weekday.date()
+        current_weekday = current_date.weekday()
+    elif isinstance(start_date_or_weekday, date):
+        current_date = start_date_or_weekday
+        current_weekday = current_date.weekday()
+    elif isinstance(start_date_or_weekday, int):
+        current_weekday = int(start_date_or_weekday)
+        if current_weekday < 0 or current_weekday > 6:
+            raise ValueError("Weekday must be between 0 (Mon) and 6 (Sun)")
+        current_date = None
+    else:  # pragma: no cover - defensive
+        raise TypeError(
+            "start_date_or_weekday must be a date, datetime, or weekday integer"
+        )
+
+    holiday_set: set[date] = set()
+    if holidays is not None:
+        for entry in holidays:
+            if isinstance(entry, datetime):
+                holiday_set.add(entry.date())
+            elif isinstance(entry, date):
+                holiday_set.add(entry)
+            else:  # pragma: no cover - defensive
+                raise TypeError("holiday entries must be date or datetime")
+
+    calendar_days = 0
+    accrued_business = 0
+
+    while accrued_business < required_days:
+        if current_date is not None:
+            weekday = current_date.weekday()
+            is_holiday = current_date in holiday_set
+        else:
+            weekday = current_weekday
+            is_holiday = False
+
+        calendar_days += 1
+
+        if weekday not in weekend_days and not is_holiday:
+            accrued_business += 1
+            if accrued_business >= required_days:
+                break
+
+        if current_date is not None:
+            current_date += timedelta(days=1)
+        else:
+            current_weekday = (current_weekday + 1) % 7
+
+    return calendar_days
+
+
+def business_to_calendar_days(business_days: Any) -> int:
+    """Backward compatible wrapper assuming a Monday starting point."""
+
+    try:
+        days = int(business_days)
+    except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+        raise ValueError("business_days must be an integer") from exc
+
+    return business_to_calendar(0, days)
 
 
 _LOGGER = logging.getLogger(__name__)

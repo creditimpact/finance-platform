@@ -101,9 +101,10 @@ _ACCOUNT_NUMBER_BUREAU_LABELS: Mapping[str, str] = {
     "transunion": "Tu",
 }
 _ACCOUNT_NUMBER_DETERMINISTIC_FLAG = "VALIDATION_ACCOUNT_NUMBER_DISPLAY_DETERMINISTIC"
-_BUSINESS_DAY_SLA_FLAG = "VALIDATION_BUSINESS_DAY_SLA_ENABLED"
+_BUSINESS_DAY_SLA_FLAG = "VALIDATION_USE_BUSINESS_DAYS"
 
 _FALSE_FLAG_VALUES = {"0", "false", "off", "no"}
+_TRUE_FLAG_VALUES = {"1", "true", "on", "yes"}
 
 
 def _use_deterministic_account_number_policy() -> bool:
@@ -121,13 +122,15 @@ def _use_deterministic_account_number_policy() -> bool:
 def _business_day_sla_enabled() -> bool:
     override = os.getenv(_BUSINESS_DAY_SLA_FLAG)
     if override is None:
-        return True
+        return False
 
     lowered = override.strip().lower()
+    if lowered in _TRUE_FLAG_VALUES:
+        return True
     if lowered in _FALSE_FLAG_VALUES:
         return False
 
-    return True
+    return False
 
 
 def _is_dry_run_enabled() -> bool:

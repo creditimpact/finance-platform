@@ -44,6 +44,11 @@ from backend.core.logic.validation_requirements import (
 )
 
 
+@pytest.fixture(autouse=True)
+def enable_business_day_rollout(monkeypatch):
+    monkeypatch.setenv("VALIDATION_USE_BUSINESS_DAYS", "1")
+
+
 def test_compute_inconsistent_fields_detects_money_and_text():
     bureaus = {
         "transunion": {"balance_owed": "$100.00", "account_status": "Open"},

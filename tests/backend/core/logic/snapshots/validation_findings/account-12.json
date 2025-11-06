@@ -1,4 +1,7 @@
 {
+  "ai_fields": [
+    "creditor_type"
+  ],
   "findings": [
     {
       "ai_needed": true,
@@ -15,11 +18,13 @@
         "application_form",
         "monthly_statement"
       ],
+      "duration_unit": "business_days",
       "field": "account_type",
       "is_mismatch": false,
       "is_missing": true,
       "min_corroboration": 1,
       "min_days": 2,
+      "min_days_business": 2,
       "missing_count": 1,
       "present_count": 2,
       "reason_code": "C1_TWO_PRESENT_ONE_MISSING",
@@ -41,11 +46,13 @@
         "closure_letter",
         "internal_closure_report"
       ],
+      "duration_unit": "business_days",
       "field": "closed_date",
       "is_mismatch": false,
       "is_missing": true,
       "min_corroboration": 1,
-      "min_days": 6,
+      "min_days": 8,
+      "min_days_business": 6,
       "missing_count": 2,
       "present_count": 1,
       "reason_code": "C2_ONE_MISSING",
@@ -68,11 +75,13 @@
         "limit_change_record",
         "monthly_statement"
       ],
+      "duration_unit": "business_days",
       "field": "credit_limit",
       "is_mismatch": true,
       "is_missing": false,
       "min_corroboration": 1,
       "min_days": 8,
+      "min_days_business": 6,
       "missing_count": 0,
       "present_count": 3,
       "reason_code": "C4_TWO_MATCH_ONE_DIFF",
@@ -95,11 +104,13 @@
         "lender_agreement",
         "cra_report"
       ],
+      "duration_unit": "business_days",
       "field": "creditor_type",
       "is_mismatch": true,
       "is_missing": false,
       "min_corroboration": 1,
-      "min_days": 6,
+      "min_days": 8,
+      "min_days_business": 6,
       "missing_count": 0,
       "present_count": 3,
       "reason_code": "C4_TWO_MATCH_ONE_DIFF",
@@ -122,11 +133,13 @@
         "system_activity_log",
         "internal_report"
       ],
+      "duration_unit": "business_days",
       "field": "date_of_last_activity",
       "is_mismatch": true,
       "is_missing": false,
       "min_corroboration": 1,
       "min_days": 12,
+      "min_days_business": 10,
       "missing_count": 0,
       "present_count": 3,
       "reason_code": "C5_ALL_DIFF",
@@ -149,11 +162,13 @@
         "application_form",
         "system_audit_log"
       ],
+      "duration_unit": "business_days",
       "field": "date_opened",
       "is_mismatch": true,
       "is_missing": false,
       "min_corroboration": 1,
       "min_days": 3,
+      "min_days_business": 3,
       "missing_count": 0,
       "present_count": 3,
       "reason_code": "C4_TWO_MATCH_ONE_DIFF",
@@ -176,11 +191,13 @@
         "monthly_statement",
         "internal_balance_report"
       ],
+      "duration_unit": "business_days",
       "field": "high_balance",
       "is_mismatch": true,
       "is_missing": false,
       "min_corroboration": 1,
       "min_days": 8,
+      "min_days_business": 6,
       "missing_count": 0,
       "present_count": 3,
       "reason_code": "C5_ALL_DIFF",
@@ -203,11 +220,13 @@
         "payment_receipt",
         "internal_payment_log"
       ],
+      "duration_unit": "business_days",
       "field": "last_payment",
       "is_mismatch": true,
       "is_missing": false,
       "min_corroboration": 1,
       "min_days": 3,
+      "min_days_business": 3,
       "missing_count": 0,
       "present_count": 3,
       "reason_code": "C4_TWO_MATCH_ONE_DIFF",
@@ -230,11 +249,13 @@
         "cra_reporting_log",
         "monthly_statement"
       ],
+      "duration_unit": "business_days",
       "field": "last_verified",
       "is_mismatch": false,
       "is_missing": true,
       "min_corroboration": 1,
-      "min_days": 6,
+      "min_days": 8,
+      "min_days_business": 6,
       "missing_count": 2,
       "present_count": 1,
       "reason_code": "C2_ONE_MISSING",
@@ -257,11 +278,13 @@
         "cra_audit_logs",
         "collection_history"
       ],
+      "duration_unit": "business_days",
       "field": "seven_year_history",
       "is_mismatch": true,
       "is_missing": true,
       "min_corroboration": 1,
       "min_days": 25,
+      "min_days_business": 19,
       "missing_count": 1,
       "present_count": 2,
       "reason_code": "C3_TWO_PRESENT_CONFLICT",
@@ -283,11 +306,13 @@
         "monthly_statements_2y",
         "internal_payment_history"
       ],
+      "duration_unit": "business_days",
       "field": "two_year_payment_history",
       "is_mismatch": true,
       "is_missing": true,
       "min_corroboration": 1,
       "min_days": 18,
+      "min_days_business": 14,
       "missing_count": 1,
       "present_count": 2,
       "reason_code": "C3_TWO_PRESENT_CONFLICT",
@@ -295,8 +320,5 @@
       "send_to_ai": false,
       "strength": "soft"
     }
-  ],
-  "ai_fields": [
-    "creditor_type"
   ]
 }

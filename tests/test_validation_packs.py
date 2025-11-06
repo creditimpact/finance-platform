@@ -139,6 +139,9 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
                     "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
+                    "min_days": 8,
+                    "min_days_business": 6,
+                    "duration_unit": "business_days",
                 },
                 {
                     "field": "account_rating",
@@ -149,6 +152,9 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
                     "notes": "recent rating change",
                     "conditional_gate": True,
                     "send_to_ai": True,
+                    "min_days": 18,
+                    "min_days_business": 14,
+                    "duration_unit": "business_days",
                 },
             ],
             "field_consistency": {
@@ -213,8 +219,14 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
     assert fields == {"account_type", "account_rating"}
 
     findings = {line.payload["field"]: line.payload["finding"] for line in lines}
+    assert findings["account_type"]["min_days"] == 8
+    assert findings["account_type"]["min_days_business"] == 6
+    assert findings["account_type"]["duration_unit"] == "business_days"
     assert not findings["account_type"].get("conditional_gate")
     assert findings["account_rating"].get("conditional_gate") is True
+    assert findings["account_rating"]["min_days"] == 18
+    assert findings["account_rating"]["min_days_business"] == 14
+    assert findings["account_rating"]["duration_unit"] == "business_days"
 
     pack_path = validation_packs_dir(sid, runs_root=runs_root) / validation_pack_filename_for_account(
         account_id

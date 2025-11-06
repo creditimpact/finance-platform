@@ -32,7 +32,10 @@ lines directly to the model without additional lookups.
 `min_days` remains a calendar-day number so existing consumers do not need to
 change units. The canonical SLA is tracked via `min_days_business` and
 `duration_unit` so that downstream builders can migrate to business-day logic
-without breaking older integrations.
+without breaking older integrations. Business-day calculations skip weekends
+(Saturday/Sunday) and do not yet exclude region-specific holidays; a holiday
+provider will be wired in during a future enhancement once requirements are
+finalised.
 
 ## Output payload (result line)
 

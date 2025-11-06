@@ -55,7 +55,9 @@ runs/<SID>/ai_packs/validation/
 
 Copy these payloads verbatim when building or validating artifacts. The calendar
 `min_days` value remains for backwards compatibility while `min_days_business`
-and `duration_unit` capture the new SLA semantics.
+and `duration_unit` capture the new SLA semantics. Business-day calculations
+skip Saturday/Sunday weekends today; holiday exclusions will be layered in as a
+future enhancement once regional requirements are defined.
 
 ### 1.1 Pack line (JSONL) — one line per weak field
 

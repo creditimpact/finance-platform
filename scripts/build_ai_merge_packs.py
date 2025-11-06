@@ -5,9 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from collections.abc import Mapping as MappingABC
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence, Union
+from typing import Any, Mapping, Sequence
 
 try:  # pragma: no cover - convenience bootstrap
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -25,12 +24,8 @@ from backend.core.ai.paths import (
     pair_pack_filename,
     pair_pack_path,
 )
-from backend.core.logic.normalize import last4, normalize_acctnum
 from backend.core.logic.report_analysis.account_merge import (
     coerce_score_value,
-    detect_points_mode_from_payload,
-    normalize_parts_for_serialization,
-    resolve_identity_debt_fields,
 )
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RunManifest, persist_manifest
@@ -64,42 +59,6 @@ def _safe_int(value: object, default: int = 0) -> int:
         return int(str(value))
     except Exception:
         return default
-
-
-def _normalize_account_number(value: object) -> str | None:
-    if value is None:
-        return None
-    normalized = normalize_acctnum(str(value))
-    return normalized if normalized else None
-
-
-def _account_last4(value: object) -> str | None:
-    if value is None:
-        return None
-    return last4(str(value))
-
-
-def _compute_group_score(
-    parts: Mapping[str, object] | None,
-    fields: Iterable[str],
-    *,
-    points_mode: bool,
-) -> Union[int, float]:
-    if not isinstance(parts, MappingABC):
-        return 0.0 if points_mode else 0
-
-    total: Union[int, float] = 0.0 if points_mode else 0
-    for field in fields:
-        value = parts.get(field, 0.0 if points_mode else 0)
-        if isinstance(value, (int, float)):
-            total += value
-            continue
-        try:
-            numeric = float(value) if points_mode else int(value)
-        except (TypeError, ValueError):
-            continue
-        total += numeric
-    return total
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -149,7 +108,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     log.info("PACKS_DIR_USED sid=%s dir=%s", sid, packs_dir)
     log.debug("MERGE_RESULTS_DIR sid=%s dir=%s", sid, merge_paths.results_dir)
 
-    manifest = RunManifest.for_sid(sid)
+    manifest = RunManifest.for_sid(sid, allow_create=True)
     manifest.upsert_ai_packs_dir(base_dir)
     persist_manifest(manifest)
     log.info("MANIFEST_AI_PACKS_DIR_SET sid=%s dir=%s", sid, base_dir)
@@ -160,6 +119,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         only_merge_best=bool(args.only_merge_best),
         max_lines_per_side=int(args.max_lines_per_side),
     )
+
+    existing_totals: dict[str, Any] = {}
+    if index_path.exists():
+        try:
+            existing_index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:
+            existing_index_payload = None
+        if isinstance(existing_index_payload, Mapping):
+            totals_candidate = existing_index_payload.get("totals")
+            if isinstance(totals_candidate, Mapping):
+                existing_totals = dict(totals_candidate)
 
     index_entries: list[dict[str, object]] = []
     for pack in packs:
@@ -172,73 +142,18 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         pack_filename = pair_pack_filename(a_idx, b_idx)
         pack_path = pair_pack_path(merge_paths, a_idx, b_idx)
-        context = pack.get("context") if isinstance(pack.get("context"), dict) else {}
-        context_a = context.get("a") if isinstance(context.get("a"), list) else []
-        context_b = context.get("b") if isinstance(context.get("b"), list) else []
-        highlights_raw = pack.get("highlights") if isinstance(pack.get("highlights"), dict) else {}
-        highlights = dict(highlights_raw)
-        points_mode_active = detect_points_mode_from_payload(highlights_raw)
-        parts_raw = (
-            highlights.get("parts")
-            if isinstance(highlights.get("parts"), Mapping)
-            else {}
-        )
-        parts_normalized = normalize_parts_for_serialization(
-            parts_raw, points_mode=points_mode_active
-        )
-        identity_fields, debt_fields = resolve_identity_debt_fields()
-        identity_score = _compute_group_score(
-            parts_normalized,
-            identity_fields,
-            points_mode=points_mode_active,
-        )
-        debt_score = _compute_group_score(
-            parts_normalized,
-            debt_fields,
-            points_mode=points_mode_active,
-        )
-        highlights["parts"] = parts_normalized
-        highlights["identity_score"] = identity_score
-        highlights["debt_score"] = debt_score
-        highlights["points_mode"] = points_mode_active
-        pack["highlights"] = highlights
 
-        ids_raw = pack.get("ids") if isinstance(pack.get("ids"), dict) else {}
-        account_number_a = ids_raw.get("account_number_a")
-        account_number_b = ids_raw.get("account_number_b")
-        ids_payload = dict(ids_raw)
-        account_a_norm = _normalize_account_number(account_number_a)
-        account_b_norm = _normalize_account_number(account_number_b)
-        ids_payload["account_number_a_norm"] = account_a_norm
-        ids_payload["account_number_b_norm"] = account_b_norm
-        ids_payload["account_last4_a"] = _account_last4(account_a_norm or account_number_a)
-        ids_payload["account_last4_b"] = _account_last4(account_b_norm or account_number_b)
-        pack["ids"] = ids_payload
-
-        messages = pack.get("messages") if isinstance(pack.get("messages"), list) else []
-        for message in messages:
-            if not isinstance(message, dict):
-                continue
-            if message.get("role") != "user":
-                continue
-            content = message.get("content")
-            if not isinstance(content, str):
-                continue
-            try:
-                payload = json.loads(content)
-            except json.JSONDecodeError:
-                continue
-
-            payload["ids"] = ids_payload
-            payload["numeric_match_summary"] = highlights
-            message["content"] = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-            break
-
+        points_mode_active = bool(pack.get("points_mode"))
         score_total = coerce_score_value(
-            highlights.get("total"), points_mode=points_mode_active
+            pack.get("score_total"), points_mode=points_mode_active
         )
 
-        _write_pack(pack_path, pack)
+        # Pack payload should remain minimal; strip helper metadata before persisting.
+        pack_to_write = dict(pack)
+        pack_to_write.pop("points_mode", None)
+        pack_to_write.pop("score_total", None)
+
+        _write_pack(pack_path, pack_to_write)
         log.info("PACK_WRITTEN sid=%s file=%s a=%s b=%s", sid, pack_filename, a_idx, b_idx)
 
         index_entries.append(
@@ -247,8 +162,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "b": b_idx,
                 "pair": [a_idx, b_idx],
                 "pack_file": pack_filename,
-                "lines_a": len(context_a),
-                "lines_b": len(context_b),
+                "lines_a": 0,
+                "lines_b": 0,
                 "score_total": score_total,
                 "score": score_total,
             }
@@ -277,11 +192,20 @@ def main(argv: Sequence[str] | None = None) -> None:
                 pairs_payload.append(pair_entry)
                 seen_pairs.add(pair)
 
+        totals_payload: dict[str, Any] = dict(existing_totals)
+        totals_payload["packs_built"] = pairs_count
+        totals_payload["created_packs"] = pairs_count
+        if "merge_zero_packs" in totals_payload:
+            totals_payload["merge_zero_packs"] = False
+        if "scored_pairs" not in totals_payload:
+            totals_payload["scored_pairs"] = pairs_count
+
         index_payload = {
             "sid": sid,
             "packs": index_entries,
             "pairs": pairs_payload,
             "pairs_count": pairs_count,
+            "totals": totals_payload,
         }
         _write_index(index_path, index_payload)
         packs_in_index = len(index_payload.get("packs", []))

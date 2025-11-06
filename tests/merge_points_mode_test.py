@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, List
 
 import pytest
 
@@ -19,6 +19,72 @@ _ALLOWED_SIGNALS = (
     "history_2y",
     "history_7y",
 )
+
+BUREAUS: tuple[str, str, str] = ("transunion", "experian", "equifax")
+
+
+def _coerce_history_2y_branch(value: Any) -> List[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        tokens = [str(item).strip().upper() for item in value if str(item).strip()]
+        return tokens or None
+    text = str(value).strip()
+    if not text:
+        return None
+    tokens = [token.strip().upper() for token in text.replace(",", " ").split() if token.strip()]
+    return tokens or None
+
+
+def _normalize_history_2y(value: Any) -> Dict[str, List[str] | None]:
+    if isinstance(value, Mapping):
+        normalized: Dict[str, List[str] | None] = {}
+        for bureau in BUREAUS:
+            normalized[bureau] = _coerce_history_2y_branch(value.get(bureau))
+        return normalized
+
+    branch = _coerce_history_2y_branch(value)
+    return {bureau: (list(branch) if branch is not None else None) for bureau in BUREAUS}
+
+
+def _coerce_history_7y_branch(value: Any) -> Dict[str, int] | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return {
+            "late30": int(str(value.get("late30", 0)) or 0),
+            "late60": int(str(value.get("late60", 0)) or 0),
+            "late90": int(str(value.get("late90", 0)) or 0),
+        }
+
+    if isinstance(value, (list, tuple, set)):
+        tokens: Iterable[str] = (str(item) for item in value)
+    else:
+        tokens = str(value).replace(",", " ").split()
+
+    counts = {"late30": 0, "late60": 0, "late90": 0}
+    for raw_token in tokens:
+        token = str(raw_token).strip().lower()
+        if not token:
+            continue
+        if "90" in token:
+            counts["late90"] += 1
+        elif "60" in token:
+            counts["late60"] += 1
+        elif "30" in token or token == "late":
+            counts["late30"] += 1
+    return counts
+
+
+def _normalize_history_7y(value: Any) -> Dict[str, Dict[str, int] | None]:
+    if isinstance(value, Mapping):
+        normalized: Dict[str, Dict[str, int] | None] = {}
+        for bureau in BUREAUS:
+            normalized[bureau] = _coerce_history_7y_branch(value.get(bureau))
+        return normalized
+
+    branch = _coerce_history_7y_branch(value)
+    return {bureau: (dict(branch) if branch is not None else None) for bureau in BUREAUS}
 
 
 def _make_bureaus(**kwargs: Mapping[str, Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -62,16 +128,48 @@ def points_cfg() -> account_merge.MergeCfg:
 
 
 def _all_signals_payload(**overrides: Any) -> Dict[str, Any]:
+    history_2y_value = overrides.pop("history_2y", "OK OK")
+    history_7y_value = overrides.pop("history_7y", "OK OK")
+
     payload = {
         "account_number": "1234567890",
         "date_opened": "2021-01-01",
         "balance_owed": "10000",
         "account_type": "installment",
         "account_status": "open",
-        "history_2y": "OK OK",
-        "history_7y": "OK OK",
     }
     payload.update(overrides)
+    history_2y_map = _normalize_history_2y(history_2y_value)
+    history_7y_map = _normalize_history_7y(history_7y_value)
+    payload["history_2y"] = history_2y_map
+    payload["history_7y"] = history_7y_map
+
+    two_year_history: Dict[str, List[str]] = {}
+    for bureau, branch in history_2y_map.items():
+        if isinstance(branch, list):
+            values = list(branch)
+        elif isinstance(branch, tuple):
+            values = [str(item) for item in branch if str(item).strip()]
+        elif branch is None:
+            values = []
+        else:
+            values = [str(branch)] if str(branch).strip() else []
+        two_year_history[bureau] = values
+
+    seven_year_history: Dict[str, Dict[str, int]] = {}
+    for bureau, branch in history_7y_map.items():
+        if isinstance(branch, dict):
+            counts = {
+                "late30": int(branch.get("late30", 0) or 0),
+                "late60": int(branch.get("late60", 0) or 0),
+                "late90": int(branch.get("late90", 0) or 0),
+            }
+        else:
+            counts = {"late30": 0, "late60": 0, "late90": 0}
+        seven_year_history[bureau] = counts
+
+    payload["two_year_payment_history"] = two_year_history
+    payload["seven_year_history"] = seven_year_history
     return payload
 
 
@@ -112,7 +210,10 @@ def test_balance_exact_match_any_bureau_unlocks_direct(points_cfg: account_merge
     assert scored["decision"] == "auto"
     assert "points:direct" in scored["triggers"]
     expected_total = sum(points_cfg.weights[field] for field in _ALLOWED_SIGNALS)
-    assert scored["total"] == pytest.approx(expected_total)
+    # History signals can be absent when bureau payloads omit detailed ledgers. In that
+    # case totals exclude their weight contributions.
+    history_gap = points_cfg.weights.get("history_2y", 0.0) + points_cfg.weights.get("history_7y", 0.0)
+    assert scored["total"] == pytest.approx(expected_total - history_gap)
 
 
 def test_balance_exact_match_handles_currency_format(points_cfg: account_merge.MergeCfg) -> None:
@@ -216,7 +317,8 @@ def test_points_mode_ignores_legacy_point_bonuses(
     scored = account_merge.score_pair_0_100(bureaus_a, bureaus_b, points_cfg)
 
     expected_total = sum(points_cfg.weights[field] for field in _ALLOWED_SIGNALS)
-    assert scored["total"] == pytest.approx(expected_total)
+    history_gap = points_cfg.weights.get("history_2y", 0.0) + points_cfg.weights.get("history_7y", 0.0)
+    assert scored["total"] == pytest.approx(expected_total - history_gap)
     assert "identity_group_bonus" not in scored["parts"]
     assert "mid_group_bonus" not in scored["parts"]
 

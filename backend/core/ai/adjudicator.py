@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 from collections.abc import Mapping
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, List, Sequence
 
 import httpx
 
@@ -103,6 +103,8 @@ ALLOWED_DECISIONS: set[str] = {
     "same_debt_diff_account",
     "same_debt_account_unknown",
     "different",
+    "duplicate",
+    "not_duplicate",
 }
 
 ALLOWED_FLAGS_ACCOUNT: set[str] = {"true", "false", "unknown"}
@@ -121,12 +123,35 @@ def validate_ai_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Validate and normalize a raw AI payload against the decision contract."""
 
     decision = str(payload.get("decision", "")).strip()
-    if decision not in ALLOWED_DECISIONS:
-        raise AdjudicatorError(f"Decision outside contract: {decision!r}")
-
     flags_raw = payload.get("flags", {})
     if not isinstance(flags_raw, Mapping):
         raise AdjudicatorError("Flags outside contract")
+
+    duplicate_flag: bool | None = None
+    if "duplicate" in flags_raw:
+        duplicate_flag = _normalize_duplicate_flag(flags_raw.get("duplicate"))
+
+    if decision in {"duplicate", "not_duplicate"} or duplicate_flag is not None:
+        inferred_duplicate = decision == "duplicate"
+        if duplicate_flag is None:
+            duplicate_flag = inferred_duplicate
+        elif decision in {"duplicate", "not_duplicate"} and duplicate_flag != inferred_duplicate:
+            raise AdjudicatorError("flags.duplicate disagrees with decision")
+
+        reason_value = payload.get("reason")
+        if not isinstance(reason_value, str) or not reason_value.strip():
+            raise AdjudicatorError("AI adjudicator response must include a reason string")
+        normalized_reason = reason_value.strip()
+        normalized_decision = "duplicate" if duplicate_flag else "not_duplicate"
+        normalized_flags: Dict[str, Any] = {"duplicate": duplicate_flag}
+        return {
+            "decision": normalized_decision,
+            "flags": normalized_flags,
+            "reason": normalized_reason,
+        }
+
+    if decision not in ALLOWED_DECISIONS:
+        raise AdjudicatorError(f"Decision outside contract: {decision!r}")
 
     account_flag = _coerce_flag(flags_raw.get("account_match", "unknown"))
     debt_flag = _coerce_flag(flags_raw.get("debt_match", "unknown"))
@@ -134,9 +159,16 @@ def validate_ai_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     if account_flag not in ALLOWED_FLAGS_ACCOUNT or debt_flag not in ALLOWED_FLAGS_DEBT:
         raise AdjudicatorError("Flags outside contract")
 
+    normalized_flags: Dict[str, Any] = {
+        "account_match": account_flag,
+        "debt_match": debt_flag,
+    }
+    if duplicate_flag is not None:
+        normalized_flags["duplicate"] = "true" if duplicate_flag else "false"
+
     return {
         "decision": decision,
-        "flags": {"account_match": account_flag, "debt_match": debt_flag},
+        "flags": normalized_flags,
         "reason": payload.get("reason"),
     }
 
@@ -168,6 +200,20 @@ def _normalize_match_flag(value: object, *, field: str) -> bool | str:
     raise AdjudicatorError(
         f"AI adjudicator flags must set {field} to true, false, or \"unknown\""
     )
+
+
+def _normalize_duplicate_flag(value: object) -> bool:
+    """Return a normalized boolean from ``flags.duplicate``."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "duplicate"}:
+            return True
+        if lowered in {"false", "0", "no", "not_duplicate"}:
+            return False
+    raise AdjudicatorError("AI adjudicator flags.duplicate must be true or false")
 
 
 def _decision_for_flags(
@@ -237,6 +283,48 @@ def _normalize_and_validate_decision(
             "AI adjudicator response must include flags.account_match/debt_match"
         )
 
+    if "duplicate" in flags_raw:
+        duplicate_flag = _normalize_duplicate_flag(flags_raw.get("duplicate"))
+        decision_primitive = resp.get("decision")
+        if isinstance(decision_primitive, str) and decision_primitive.strip().lower() in {
+            "duplicate",
+            "not_duplicate",
+        }:
+            decision_value = decision_primitive.strip().lower()
+        else:
+            decision_value = "duplicate" if duplicate_flag else "not_duplicate"
+
+        normalized_payload: Dict[str, Any] = {
+            "decision": decision_value,
+            "reason": reason_value,
+            "flags": {"duplicate": duplicate_flag},
+        }
+        return normalized_payload, False
+
+    duplicate_flag: bool | None = None
+    if "duplicate" in flags_raw:
+        duplicate_flag = _normalize_duplicate_flag(flags_raw.get("duplicate"))
+
+    if decision_value in {"duplicate", "not_duplicate"}:
+        inferred_duplicate = decision_value == "duplicate"
+        if duplicate_flag is None:
+            duplicate_flag = inferred_duplicate
+        elif duplicate_flag != inferred_duplicate:
+            raise AdjudicatorError("flags.duplicate disagrees with decision")
+
+        normalized_payload: Dict[str, Any] = dict(resp)
+        normalized_payload["decision"] = (
+            "same_account_same_debt" if duplicate_flag else "different"
+        )
+        normalized_payload["reason"] = reason_value
+        normalized_payload["flags"] = {
+            "account_match": True if duplicate_flag else False,
+            "debt_match": True if duplicate_flag else False,
+            "duplicate": duplicate_flag,
+        }
+        normalized_payload["normalized"] = True
+        return normalized_payload, True
+
     account_flag = _normalize_match_flag(flags_raw.get("account_match"), field="account_match")
     debt_flag = _normalize_match_flag(flags_raw.get("debt_match"), field="debt_match")
 
@@ -244,7 +332,12 @@ def _normalize_and_validate_decision(
     if normalized_decision not in ALLOWED_DECISIONS:
         raise AdjudicatorError("AI adjudicator decision was outside the allowed set")
 
-    normalized_flags = {"account_match": account_flag, "debt_match": debt_flag}
+    normalized_flags: Dict[str, Any] = {
+        "account_match": account_flag,
+        "debt_match": debt_flag,
+    }
+    if duplicate_flag is not None:
+        normalized_flags["duplicate"] = duplicate_flag
 
     normalized = decision_value not in ALLOWED_DECISIONS or decision_value != normalized_decision
 
@@ -278,7 +371,12 @@ def _prepare_user_payload(pack: Dict[str, Any]) -> Dict[str, Any]:
     return {key: pack[key] for key in _ALLOWED_USER_PAYLOAD_KEYS if key in pack}
 
 
-def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
+def decide_merge_or_different(
+    pack: dict,
+    *,
+    timeout: int,
+    messages: Sequence[Mapping[str, Any]] | None = None,
+) -> dict:
     """Return the adjudicator response with decision, reason, and flags.
 
     May raise transport/HTTP errors; caller handles retries and ai_error tags.
@@ -316,15 +414,32 @@ def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
     if org_id:
         headers["OpenAI-Organization"] = org_id
 
-    user_payload = _prepare_user_payload(pack)
-    messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps(user_payload)},
-    ]
+    if messages is None:
+        user_payload = _prepare_user_payload(pack)
+        request_messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(user_payload)},
+        ]
+    else:
+        request_messages = []
+        for message in messages:
+            if not isinstance(message, Mapping):
+                raise AdjudicatorError("AI adjudicator messages must be objects")
+            role_raw = message.get("role")
+            if not isinstance(role_raw, str) or not role_raw.strip():
+                raise AdjudicatorError("AI adjudicator messages require a role")
+            cloned: Dict[str, Any] = {"role": role_raw.strip()}
+            if "content" in message:
+                cloned["content"] = message["content"]
+            if "name" in message:
+                cloned["name"] = message["name"]
+            request_messages.append(cloned)
+        if not request_messages:
+            raise AdjudicatorError("AI adjudicator messages cannot be empty")
 
     request_body: Dict[str, object] = {
         "model": model,
-        "messages": messages,
+        "messages": request_messages,
         "response_format": dict(RESPONSE_FORMAT),
     }
     for key, value in REQUEST_PARAMS.items():

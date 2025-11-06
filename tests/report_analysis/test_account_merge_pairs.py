@@ -1,6 +1,7 @@
 import json
+from copy import deepcopy
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping, cast
 
 import pytest
 
@@ -16,6 +17,8 @@ from backend.core.logic.report_analysis.account_merge import (
     persist_merge_tags,
     score_all_pairs_0_100,
 )
+from backend.config import merge_config
+from backend.pipeline.runs import RunManifest, persist_manifest
 from scripts.build_ai_merge_packs import main as build_packs_main
 
 
@@ -66,6 +69,23 @@ def _write_account_payload(
     tags_path.write_text("[]\n", encoding="utf-8")
 
 
+_FIXTURE_DIR = Path(__file__).resolve().parents[2] / "backend" / "tests" / "fixtures" / "account_merge"
+
+
+def _load_fixture(name: str) -> dict[str, Any]:
+    fixture_path = _FIXTURE_DIR / name
+    return json.loads(fixture_path.read_text(encoding="utf-8"))
+
+
+def _strip_original_creditor(payload: Mapping[str, Any]) -> dict[str, Any]:
+    sanitized = cast(dict[str, Any], deepcopy(payload))
+    for bureau in ("transunion", "experian", "equifax"):
+        section = sanitized.get(bureau)
+        if isinstance(section, dict):
+            section.pop("original_creditor", None)
+    return sanitized
+
+
 def test_account_number_clique_persists_all_pair_packs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -78,18 +98,31 @@ def test_account_number_clique_persists_all_pair_packs(
     account_specs = {
         14: {
             "bureaus": {
-                "transunion": {"account_number_display": f"{base_digits[:6]}****{base_digits[-4:]}"},
-                "experian": {"account_number": f"****{base_digits[-4:]}"},
+                "transunion": {
+                    "account_number_display": f"{base_digits[:6]}****{base_digits[-4:]}",
+                    "original_creditor": "Creditor A",
+                },
+                "experian": {
+                    "account_number": f"****{base_digits[-4:]}",
+                    "original_creditor": "Creditor A",
+                },
             },
             "raw_lines": [
                 "Creditor A",
+
                 f"Account # {base_digits[:6]}****{base_digits[-4:]} -- ****{base_digits[-4:]} -- {base_digits}",
             ],
         },
         15: {
             "bureaus": {
-                "experian": {"account_number_display": base_digits},
-                "equifax": {"account_number": f"XXXX{base_digits[-4:]}"},
+                "experian": {
+                    "account_number_display": base_digits,
+                    "original_creditor": "Creditor B",
+                },
+                "equifax": {
+                    "account_number": f"XXXX{base_digits[-4:]}",
+                    "original_creditor": "Creditor B",
+                },
             },
             "raw_lines": [
                 "Creditor B",
@@ -98,8 +131,14 @@ def test_account_number_clique_persists_all_pair_packs(
         },
         29: {
             "bureaus": {
-                "transunion": {"account_number": base_digits},
-                "equifax": {"account_number_display": f"****{base_digits[-4:]}"},
+                "transunion": {
+                    "account_number": base_digits,
+                    "original_creditor": "Creditor C",
+                },
+                "equifax": {
+                    "account_number_display": f"****{base_digits[-4:]}",
+                    "original_creditor": "Creditor C",
+                },
             },
             "raw_lines": [
                 "Creditor C",
@@ -108,8 +147,14 @@ def test_account_number_clique_persists_all_pair_packs(
         },
         39: {
             "bureaus": {
-                "experian": {"account_number": f"{base_digits[:4]}****{base_digits[-4:]}"},
-                "equifax": {"account_number_display": base_digits},
+                "experian": {
+                    "account_number": f"{base_digits[:4]}****{base_digits[-4:]}",
+                    "original_creditor": "Creditor D",
+                },
+                "equifax": {
+                    "account_number_display": base_digits,
+                    "original_creditor": "Creditor D",
+                },
             },
             "raw_lines": [
                 "Creditor D",
@@ -127,6 +172,17 @@ def test_account_number_clique_persists_all_pair_packs(
     indices = sorted(account_specs.keys())
     scores = score_all_pairs_0_100(sid, indices, runs_root=runs_root)
     best = choose_best_partner(scores)
+    simplified = {
+        str(left): {
+            str(right): {
+                "decision": str(details.get("decision")),
+                "total": details.get("total"),
+            }
+            for right, details in partners.items()
+        }
+        for left, partners in scores.items()
+    }
+    print("MERGE_SCORES", simplified)
     persist_merge_tags(sid, scores, best, runs_root=runs_root)
 
     for left, partner_map in scores.items():
@@ -220,6 +276,146 @@ def test_build_summary_ai_entries_normalizes_aliases() -> None:
     pair_entry = next(entry for entry in entries if entry.get("kind") == "same_debt_pair")
     assert pair_entry["ai_result"]["decision"] == "same_debt_account_unknown"
     assert "same_debt_account_unclear" in pair_entry.get("notes", [])
+
+
+def test_build_packs_index_records_skip_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID-SKIPS"
+    runs_root = tmp_path / "runs"
+    accounts_root = runs_root / sid / "cases" / "accounts"
+
+    left_payload = _strip_original_creditor(_load_fixture("trimmed_9.json"))
+    right_payload = _strip_original_creditor(_load_fixture("trimmed_10.json"))
+
+    for idx, payload in enumerate((left_payload, right_payload), start=1):
+        _write_account_payload(
+            accounts_root,
+            idx,
+            payload,
+            [f"Fixture account {idx}"],
+        )
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("AI_THRESHOLD", "0")
+    monkeypatch.setenv("MERGE_REQUIRE_ORIGINAL_CREDITOR_FOR_AI", "1")
+    monkeypatch.setenv("MERGE_ZERO_PACKS_SIGNAL", "1")
+    monkeypatch.setenv("MERGE_SKIP_COUNTS_ENABLED", "1")
+    monkeypatch.setenv("MERGE_ENABLED", "1")
+    monkeypatch.setenv("MERGE_POINTS_MODE", "1")
+    monkeypatch.setenv("MERGE_AI_POINTS_THRESHOLD", "3")
+    monkeypatch.setenv("MERGE_DIRECT_POINTS_THRESHOLD", "99")
+    merge_config.reset_merge_config_cache()
+
+    try:
+        indices = [1, 2]
+        scores = score_all_pairs_0_100(sid, indices, runs_root=runs_root)
+        best = choose_best_partner(scores)
+        persist_merge_tags(sid, scores, best, runs_root=runs_root)
+
+        manifest_path = runs_root / sid / "manifest.json"
+        manifest = RunManifest.load_or_create(manifest_path, sid, allow_create=True)
+        persist_manifest(manifest)
+
+        build_packs_main(
+            [
+                "--sid",
+                sid,
+                "--runs-root",
+                str(runs_root),
+                "--include-all-pairs",
+                "--max-lines-per-side",
+                "5",
+            ]
+        )
+
+        merge_paths = get_merge_paths(runs_root, sid, create=False)
+        index_path = merge_paths.index_file
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        totals = payload.get("totals", {})
+
+        assert totals.get("merge_zero_packs") is True
+        skip_counts = totals.get("skip_counts") or {}
+        assert skip_counts.get("missing_original_creditor") == 1
+        assert totals.get("skip_reason_top") == "missing_original_creditor"
+        assert totals.get("packs_built") == 0
+        assert totals.get("created_packs") == 0
+    finally:
+        merge_config.reset_merge_config_cache()
+
+
+def test_merge_zero_packs_emits_telemetry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID-TELEM"
+    runs_root = tmp_path / "runs"
+    accounts_root = runs_root / sid / "cases" / "accounts"
+
+    left_payload = _strip_original_creditor(_load_fixture("trimmed_9.json"))
+    right_payload = _strip_original_creditor(_load_fixture("trimmed_10.json"))
+
+    for idx, payload in enumerate((left_payload, right_payload), start=1):
+        _write_account_payload(
+            accounts_root,
+            idx,
+            payload,
+            [f"Fixture account {idx}"],
+        )
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("AI_THRESHOLD", "0")
+    monkeypatch.setenv("MERGE_REQUIRE_ORIGINAL_CREDITOR_FOR_AI", "1")
+    monkeypatch.setenv("MERGE_ZERO_PACKS_SIGNAL", "1")
+    monkeypatch.setenv("MERGE_SKIP_COUNTS_ENABLED", "1")
+    monkeypatch.setenv("MERGE_ENABLED", "1")
+    monkeypatch.setenv("MERGE_POINTS_MODE", "1")
+    monkeypatch.setenv("MERGE_AI_POINTS_THRESHOLD", "3")
+    monkeypatch.setenv("MERGE_DIRECT_POINTS_THRESHOLD", "99")
+    merge_config.reset_merge_config_cache()
+
+    captured: list[tuple[str, object]] = []
+
+    def _capture_counter(name: str, increment: object = 1) -> None:
+        captured.append((name, increment))
+
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.account_merge.emit_counter",
+        _capture_counter,
+    )
+
+    try:
+        indices = [1, 2]
+        scores = score_all_pairs_0_100(sid, indices, runs_root=runs_root)
+        best = choose_best_partner(scores)
+        persist_merge_tags(sid, scores, best, runs_root=runs_root)
+
+        manifest_path = runs_root / sid / "manifest.json"
+        manifest = RunManifest.load_or_create(manifest_path, sid, allow_create=True)
+        persist_manifest(manifest)
+
+        build_packs_main(
+            [
+                "--sid",
+                sid,
+                "--runs-root",
+                str(runs_root),
+                "--include-all-pairs",
+                "--max-lines-per-side",
+                "5",
+            ]
+        )
+    finally:
+        merge_config.reset_merge_config_cache()
+
+    zero_pack_metrics = [entry for entry in captured if entry[0].startswith("merge.zero_packs")]
+    assert zero_pack_metrics, f"expected zero-pack telemetry, got {captured!r}"
+
+    total_calls = [increment for name, increment in captured if name == "merge.zero_packs.total"]
+    assert total_calls == [1]
+
+    reason_metric = "merge.zero_packs.reason.missing_original_creditor"
+    reason_calls = [increment for name, increment in captured if name == reason_metric]
+    assert reason_calls and sum(int(value) for value in reason_calls) >= 1
 
 
 def test_merge_decision_alias_members() -> None:

@@ -11,7 +11,7 @@ import time
 from collections.abc import Mapping as MappingABC
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence, Union, overload
+from typing import Any, Iterable, Mapping, Sequence, Union, overload
 
 try:  # pragma: no cover - convenience bootstrap for direct execution
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -77,6 +77,8 @@ _DEBT_RULES_TEXT = (
 _DEBT_RULES_MARKER = (
     "- If Balance Owed and Past Due are both zero on both sides, this indicates no active debt; do NOT treat this as \"same debt\"."
 )
+
+_DUPLICATE_PROMPT_PREFIX = "You are an adjudicator for credit-report disputes."
 
 
 def _append_zero_debt_rules(pack: Mapping[str, object]) -> dict[str, object]:
@@ -151,6 +153,54 @@ def _append_zero_debt_rules(pack: Mapping[str, object]) -> dict[str, object]:
         updated_pack["system"] = _DEBT_RULES_TEXT
 
     return updated_pack
+
+
+def _normalize_messages(messages: Sequence[object]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for idx, message in enumerate(messages):
+        if not isinstance(message, MappingABC):
+            raise ValueError(f"AI messages must be objects (index={idx})")
+        role_raw = message.get("role")
+        if not isinstance(role_raw, str) or not role_raw.strip():
+            raise ValueError(f"AI messages require a role (index={idx})")
+        clone = dict(message)
+        clone["role"] = role_raw.strip()
+        normalized.append(clone)
+    return normalized
+
+
+def _messages_sha256(messages: Sequence[Mapping[str, Any]]) -> str:
+    canonical = json.dumps(
+        list(messages),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _sha256_bytes(canonical)
+
+
+def _ensure_duplicate_prompt(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    sid: str,
+    pair: Mapping[str, int],
+    pack_file: str,
+) -> None:
+    for message in messages:
+        if str(message.get("role", "")).strip().lower() != "system":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.startswith(_DUPLICATE_PROMPT_PREFIX):
+            return
+        break
+    log.error(
+        "DUPLICATE_SCHEMA_PROMPT_MISMATCH sid=%s pair=%s-%s pack=%s",
+        sid,
+        pair.get("a"),
+        pair.get("b"),
+        pack_file,
+    )
+    raise RuntimeError("DUPLICATE_SCHEMA_PROMPT_MISMATCH")
 
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_SCHEDULE = "1,3,7"
@@ -442,9 +492,11 @@ def _build_pack_skip_signature(
     b_idx: object,
     *,
     pack_sha: str | None,
+    prompt_sha: str | None,
+    schema: str | None,
     reason: str,
     pack_file: str | None,
-) -> tuple[int, int, str, str, str] | None:
+) -> tuple[int, int, str, str, str, str, str] | None:
     try:
         a_val = int(a_idx) if a_idx is not None else None
         b_val = int(b_idx) if b_idx is not None else None
@@ -458,14 +510,16 @@ def _build_pack_skip_signature(
         second,
         str(reason or ""),
         str(pack_sha or ""),
+        str(prompt_sha or ""),
+        str(schema or ""),
         str(pack_file or ""),
     )
 
 
 def _load_existing_pack_skip_signatures(
     path: Path,
-) -> set[tuple[int, int, str, str, str]]:
-    signatures: set[tuple[int, int, str, str, str]] = set()
+) -> set[tuple[int, int, str, str, str, str, str]]:
+    signatures: set[tuple[int, int, str, str, str, str, str]] = set()
     if not path.exists():
         return signatures
     try:
@@ -503,14 +557,21 @@ def _load_existing_pack_skip_signatures(
                 pack_file = payload.get("pack_file")
                 debug_payload = payload.get("debug")
                 pack_sha = None
+                prompt_sha = None
                 if isinstance(debug_payload, MappingABC):
                     sha_candidate = debug_payload.get("pack_sha256")
                     if isinstance(sha_candidate, str):
                         pack_sha = sha_candidate
+                    prompt_candidate = debug_payload.get("prompt_sha256")
+                    if isinstance(prompt_candidate, str):
+                        prompt_sha = prompt_candidate
+                schema_value = payload.get("schema")
                 signature = _build_pack_skip_signature(
                     normalized_pair[0],
                     normalized_pair[1],
                     pack_sha=pack_sha,
+                    prompt_sha=prompt_sha,
+                    schema=str(schema_value) if schema_value is not None else None,
                     reason=reason,
                     pack_file=str(pack_file) if pack_file is not None else None,
                 )
@@ -592,6 +653,7 @@ _PAIR_TAG_BY_DECISION: dict[str, str] = {
     "same_account_debt_unknown": "same_account_pair",
     "same_debt_diff_account": "same_debt_pair",
     "same_debt_account_unknown": "same_debt_pair",
+    "duplicate": "same_account_pair",
 }
 
 _IDENTITY_PART_FIELDS, _DEBT_PART_FIELDS = resolve_identity_debt_fields()
@@ -1116,7 +1178,10 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     for pack_path in pair_paths:
         pack_sha256 = _pack_sha256(pack_path)
-        pack = _append_zero_debt_rules(_load_pack(pack_path))
+        pack_raw = _load_pack(pack_path)
+        schema_value = str(pack_raw.get("schema") or "")
+        is_duplicate_schema = schema_value == "duplicate_debt_audit:v1"
+        pack = dict(pack_raw) if is_duplicate_schema else _append_zero_debt_rules(pack_raw)
         a_idx, b_idx = _pair_from_pack(pack, pack_path)
         score_value = _score_from_pack(pack)
         entry = index_entries.setdefault((a_idx, b_idx), {"a": a_idx, "b": b_idx})
@@ -1132,14 +1197,41 @@ def main(argv: Sequence[str] | None = None) -> None:
         pair_for_log = {"a": a_idx, "b": b_idx}
         pack_log = _log_factory(logs_path, sid, pair_for_log, pack_path.name)
 
+        messages_raw = pack.get("messages") if isinstance(pack, MappingABC) else None
+        normalized_messages: list[dict[str, Any]] | None = None
+        prompt_sha256 = SYSTEM_PROMPT_SHA256
+        if isinstance(messages_raw, Sequence):
+            try:
+                normalized_messages = _normalize_messages(messages_raw)
+            except ValueError as exc:
+                log.error(
+                    "AI_PACK_MESSAGES_INVALID sid=%s pair=%s-%s pack=%s err=%s",
+                    sid,
+                    a_idx,
+                    b_idx,
+                    pack_path.name,
+                    exc,
+                )
+                raise
+            prompt_sha256 = _messages_sha256(normalized_messages)
+            if is_duplicate_schema:
+                _ensure_duplicate_prompt(
+                    normalized_messages,
+                    sid=sid,
+                    pair=pair_for_log,
+                    pack_file=pack_path.name,
+                )
+
         debug_params = dict(AI_REQUEST_PARAMS)
         debug_params["response_format"] = dict(AI_RESPONSE_FORMAT)
         debug_payload = {
             "pack_sha256": pack_sha256,
-            "prompt_sha256": SYSTEM_PROMPT_SHA256,
+            "prompt_sha256": prompt_sha256,
             "model": os.getenv("AI_MODEL"),
             "params": debug_params,
         }
+        if schema_value:
+            debug_payload["schema"] = schema_value
 
         log.info(
             "AI_DEBUG_METADATA sid=%s a=%s b=%s pack_sha=%s prompt_sha=%s model=%s",
@@ -1147,7 +1239,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             a_idx,
             b_idx,
             pack_sha256,
-            SYSTEM_PROMPT_SHA256,
+            prompt_sha256,
             debug_payload["model"] or "<unset>",
         )
 
@@ -1163,6 +1255,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             result_path = pair_result_path(merge_paths, a_int, b_int)
             result_payload_existing = _load_result(result_path)
 
+        cache_matches = False
+        cache_schema: str | None = None
+        cache_pack_sha: str | None = None
+        cache_prompt_sha: str | None = None
+
         if result_payload_existing is None:
             ai_result_existing = pack.get("ai_result")
             if isinstance(ai_result_existing, MappingABC):
@@ -1170,6 +1267,35 @@ def main(argv: Sequence[str] | None = None) -> None:
                 legacy_result_found = True
 
         if result_payload_existing is not None:
+            cache_schema = str(result_payload_existing.get("schema") or "")
+            debug_existing = result_payload_existing.get("debug")
+            if isinstance(debug_existing, MappingABC):
+                pack_sha_candidate = debug_existing.get("pack_sha256")
+                prompt_sha_candidate = debug_existing.get("prompt_sha256")
+                if isinstance(pack_sha_candidate, str):
+                    cache_pack_sha = pack_sha_candidate
+                if isinstance(prompt_sha_candidate, str):
+                    cache_prompt_sha = prompt_sha_candidate
+            if (
+                cache_pack_sha == pack_sha256
+                and (cache_prompt_sha or "") == prompt_sha256
+                and (cache_schema or "") == schema_value
+            ):
+                cache_matches = True
+            else:
+                if cache_schema and cache_schema != schema_value:
+                    log.warning(
+                        "AI_CACHE_SCHEMA_MISMATCH forcing resend sid=%s pair=%s-%s cached_schema=%s new_schema=%s",
+                        sid,
+                        a_idx,
+                        b_idx,
+                        cache_schema,
+                        schema_value,
+                    )
+                result_payload_existing = None
+                legacy_result_found = False
+
+        if result_payload_existing is not None and cache_matches:
             entry["ai_result"] = dict(result_payload_existing)
             entry.pop("error", None)
             if legacy_result_found and a_int is not None and b_int is not None:
@@ -1179,13 +1305,19 @@ def main(argv: Sequence[str] | None = None) -> None:
                 a_idx,
                 b_idx,
                 pack_sha=pack_sha256,
+                prompt_sha=prompt_sha256,
+                schema=schema_value,
                 reason="result_present",
                 pack_file=pack_path.name,
             )
             if signature is None or signature not in existing_skip_signatures:
                 pack_log(
                     "PACK_SKIP",
-                    {"reason": "result_present", "debug": debug_payload},
+                    {
+                        "reason": "result_present",
+                        "debug": debug_payload,
+                        "schema": schema_value,
+                    },
                 )
                 if signature is not None:
                     existing_skip_signatures.add(signature)
@@ -1205,6 +1337,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         decision_payload: Mapping[str, object] | None = None
         last_error: Exception | None = None
 
+        log.info(
+            "AI_SEND sid=%s pair=%s-%s schema=%s prompt_sha256=%s pack_sha256=%s",
+            sid,
+            a_idx,
+            b_idx,
+            schema_value or "<unset>",
+            prompt_sha256,
+            pack_sha256,
+        )
+
         pack_log(
             "PACK_START",
             {
@@ -1221,7 +1363,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             try:
                 decision_payload = decide_merge_or_different(
-                    dict(pack), timeout=AI_REQUEST_TIMEOUT
+                    dict(pack),
+                    timeout=AI_REQUEST_TIMEOUT,
+                    messages=normalized_messages,
                 )
             except KeyboardInterrupt:
                 raise
@@ -1447,16 +1591,50 @@ def main(argv: Sequence[str] | None = None) -> None:
         decision = normalized_payload["decision"]
         reason = normalized_payload["reason"]
         flags_normalized = normalized_payload["flags"]
-        flags_serialized = {
-            "account_match": _serialize_match_flag(
-                flags_normalized.get("account_match")
-            ),
-            "debt_match": _serialize_match_flag(flags_normalized.get("debt_match")),
-        }
-        flags_for_storage = {
-            "account_match": flags_normalized.get("account_match"),
-            "debt_match": flags_normalized.get("debt_match"),
-        }
+
+        duplicate_contract = decision in {"duplicate", "not_duplicate"}
+        duplicate_flag_value: bool | None = None
+        if "duplicate" in flags_normalized:
+            raw_duplicate = flags_normalized.get("duplicate")
+            if isinstance(raw_duplicate, bool):
+                duplicate_flag_value = raw_duplicate
+            elif isinstance(raw_duplicate, str):
+                lowered = raw_duplicate.strip().lower()
+                if lowered in {"true", "1", "yes", "duplicate"}:
+                    duplicate_flag_value = True
+                elif lowered in {"false", "0", "no", "not_duplicate"}:
+                    duplicate_flag_value = False
+            elif raw_duplicate is not None:
+                duplicate_flag_value = bool(raw_duplicate)
+        if duplicate_contract and duplicate_flag_value is None:
+            duplicate_flag_value = decision == "duplicate"
+
+        if duplicate_contract:
+            assert duplicate_flag_value is not None
+            flags_for_storage = {"duplicate": duplicate_flag_value}
+            duplicate_flag_str = "true" if duplicate_flag_value else "false"
+            flags_serialized = {
+                "duplicate": duplicate_flag_str,
+                "account_match": "true" if duplicate_flag_value else "false",
+                "debt_match": "true" if duplicate_flag_value else "false",
+            }
+            flags_for_tags = dict(flags_serialized)
+        else:
+            flags_serialized = {
+                "account_match": _serialize_match_flag(
+                    flags_normalized.get("account_match")
+                ),
+                "debt_match": _serialize_match_flag(flags_normalized.get("debt_match")),
+            }
+            flags_for_storage = {
+                "account_match": flags_normalized.get("account_match"),
+                "debt_match": flags_normalized.get("debt_match"),
+            }
+            if "duplicate" in flags_normalized:
+                duplicate_value = flags_normalized.get("duplicate")
+                flags_serialized["duplicate"] = _serialize_match_flag(duplicate_value)
+                flags_for_storage["duplicate"] = duplicate_value
+            flags_for_tags = dict(flags_serialized)
 
         if decision not in ALLOWED_DECISIONS:
             raise AdjudicatorError(
@@ -1480,7 +1658,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             b_int = _ensure_int(b_idx, "b_idx")
 
         payload_for_tags = dict(normalized_payload)
-        payload_for_tags["flags"] = dict(flags_serialized)
+        payload_for_tags["flags"] = dict(flags_for_tags)
 
         log.info(
             "AI_DECISION_FINAL sid=%s a=%s b=%s decision=%s flags=%s",
@@ -1488,14 +1666,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             a_idx,
             b_idx,
             decision,
-            json.dumps(flags_serialized, sort_keys=True),
+            json.dumps(flags_for_tags, sort_keys=True),
         )
 
         pack_log(
             "AI_DECISION_PARSED",
             {
                 "decision": decision,
-                "flags": flags_serialized,
+                "flags": flags_for_tags,
                 "normalized": was_normalized and not fallback_used,
                 "fallback": fallback_used,
             },
@@ -1507,6 +1685,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             "flags": dict(flags_for_storage),
             "debug": dict(debug_payload),
         }
+        if schema_value:
+            ai_result_payload["schema"] = schema_value
         entry["ai_result"] = dict(ai_result_payload)
         entry.pop("error", None)
 
@@ -1531,6 +1711,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
         result_path = pair_result_path(merge_paths, a_int, b_int)
         _write_result(result_path, ai_result_payload)
+        log.info(
+            "AI_RESULT sid=%s pair=%s-%s decision=%s flags=%s prompt_sha256=%s pack_sha256=%s schema=%s",
+            sid,
+            a_idx,
+            b_idx,
+            decision,
+            ai_result_payload["flags"],
+            prompt_sha256,
+            pack_sha256,
+            schema_value or "<unset>",
+        )
         successes += 1
 
     index_payload = _build_index_payload(sid, index_data, index_entries)

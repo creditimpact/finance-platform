@@ -1,3 +1,4 @@
+import importlib
 import json
 import logging
 import os
@@ -1141,4 +1142,283 @@ def test_run_auto_ai_pipeline_skips_when_index_missing(monkeypatch, tmp_path):
     assert status.get('skipped_reason') == 'no_packs'
     assert status.get('sent') is False
     assert status.get('compacted') is False
+
+
+def test_validation_build_packs_passes_zero_pack_flag(monkeypatch, tmp_path: Path) -> None:
+    sid = "SFASTPATH"
+    runs_root = tmp_path / "runs"
+    payload = {
+        "sid": sid,
+        "runs_root": str(runs_root),
+        "merge_zero_packs": True,
+    }
+
+    runs_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        auto_ai_tasks,
+        "ensure_validation_section",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        auto_ai_tasks,
+        "runflow_step",
+        lambda *args, **kwargs: None,
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_build(
+        sid_value: str,
+        *,
+        runs_root: Path,
+        merge_zero_packs: bool,
+    ) -> dict[int, list[dict[str, object]]]:
+        captured["sid"] = sid_value
+        captured["runs_root"] = runs_root
+        captured["merge_zero_packs"] = merge_zero_packs
+        return {}
+
+    monkeypatch.setattr(
+        auto_ai_tasks,
+        "build_validation_packs_for_run",
+        fake_build,
+    )
+
+    result = auto_ai_tasks.validation_build_packs.run(payload)
+
+    assert result.get("merge_zero_packs") is True
+    assert Path(result.get("runs_root")) == runs_root
+    assert captured == {
+        "sid": sid,
+        "runs_root": runs_root,
+        "merge_zero_packs": True,
+    }
+
+
+def test_validation_send_fastpath_marks_success(monkeypatch, tmp_path: Path) -> None:
+    sid = "VALFAST"
+    runs_root = tmp_path / "runs"
+    payload = {
+        "sid": sid,
+        "runs_root": str(runs_root),
+        "merge_zero_packs": True,
+        "validation_packs": 0,
+    }
+
+    runs_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("VALIDATION_ZERO_PACKS_FASTPATH", "1")
+    monkeypatch.setenv("GENERATE_FRONTEND_ON_VALIDATION", "0")
+
+    sent_calls: list[tuple[Path, str]] = []
+
+    def fake_send(index_path: Path, *, stage: str = "validation") -> None:
+        assert index_path.exists()
+        sent_calls.append((index_path, stage))
+
+    monkeypatch.setattr(auto_ai_tasks, "send_validation_packs", fake_send)
+
+    step_calls: list[tuple[str, str, str, dict[str, object]]] = []
+
+    def fake_runflow_step(
+        sid_value: str,
+        stage: str,
+        action: str,
+        **kwargs: object,
+    ) -> None:
+        step_calls.append((sid_value, stage, action, dict(kwargs)))
+
+    monkeypatch.setattr(auto_ai_tasks, "runflow_step", fake_runflow_step)
+
+    recorded: dict[str, object] = {}
+
+    def fake_record_stage(
+        sid_value: str,
+        stage: str,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        recorded["sid"] = sid_value
+        recorded["stage"] = stage
+        recorded["kwargs"] = dict(kwargs)
+        return {"sid": sid_value}
+
+    monkeypatch.setattr(auto_ai_tasks, "record_stage", fake_record_stage)
+
+    barrier_calls: list[tuple[str, Path]] = []
+
+    def fake_reconcile(sid_value: str, *, runs_root: Path | str | None = None) -> None:
+        assert runs_root is not None
+        barrier_calls.append((sid_value, Path(runs_root)))
+
+    monkeypatch.setattr(
+        auto_ai_tasks,
+        "reconcile_umbrella_barriers",
+        fake_reconcile,
+    )
+
+    result = auto_ai_tasks.validation_send.run(payload)
+
+    assert result["validation_sent"] is True
+    assert result.get("validation_zero_fastpath") is True
+
+    assert sent_calls and sent_calls[0][1] == "validation"
+
+    assert step_calls and step_calls[-1][0] == sid
+    assert step_calls[-1][1:] == (
+        "validation",
+        "send",
+        {"status": "success", "metrics": {"packs": 0}, "out": {"fastpath": True}},
+    )
+
+    assert recorded.get("sid") == sid
+    stage_meta = recorded.get("kwargs", {})
+    assert stage_meta.get("status") == "success"
+    assert stage_meta.get("metrics", {}).get("merge_zero_packs") is True
+    assert stage_meta.get("counts") == {"findings_count": 0}
+
+    assert barrier_calls == [(sid, runs_root)]
+
+    assert result.get("review_autobuild_queued") is None
+
+
+def test_fastpath_enqueues_sender_once_and_writes_snapshot(monkeypatch, tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SFASTPATHSNAP"
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("RUNFLOW_MERGE_ZERO_PACKS_FASTPATH", "1")
+    monkeypatch.setenv("VALIDATION_AUTOSEND", "1")
+    monkeypatch.setenv("VALIDATION_ZERO_PACKS_FASTPATH", "1")
+    monkeypatch.setenv("UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG", "1")
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+
+    runs_root.mkdir(parents=True, exist_ok=True)
+
+    import backend.core.runflow as runflow_core
+    import backend.runflow.decider as runflow_decider
+
+    runflow_core = importlib.reload(runflow_core)
+    runflow_decider = importlib.reload(runflow_decider)
+
+    runflow_decider.record_stage(
+        sid,
+        "merge",
+        status="success",
+        counts={"pairs_scored": 3, "packs_created": 0},
+        empty_ok=True,
+        metrics={
+            "merge_zero_packs": True,
+            "skip_counts": {"missing_original_creditor": 3},
+            "skip_reason_top": "missing_original_creditor",
+        },
+        runs_root=runs_root,
+    )
+
+    runflow_decider.record_stage(
+        sid,
+        "validation",
+        status="built",
+        counts={"findings_count": 2},
+        empty_ok=False,
+        metrics={"packs_total": 2},
+        runs_root=runs_root,
+    )
+
+    enqueue_calls: list[tuple[str, Path, bool, dict[str, object]]] = []
+
+    def fake_enqueue(enqueue_sid: str, run_dir: Path, *, merge_zero_packs: bool, payload=None) -> bool:
+        enqueue_calls.append((enqueue_sid, run_dir, merge_zero_packs, dict(payload or {})))
+        lock_path = run_dir / ".locks" / "validation_fastpath.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text("locked", encoding="utf-8")
+        runflow_core.runflow_step(
+            enqueue_sid,
+            "validation",
+            "fastpath_send",
+            status="queued",
+            out={"merge_zero_packs": bool(merge_zero_packs)},
+        )
+        return True
+
+    monkeypatch.setattr(runflow_decider, "_enqueue_validation_fastpath", fake_enqueue)
+
+    decision = runflow_decider.decide_next(sid, runs_root=runs_root)
+
+    assert decision["next"] == "run_validation"
+    assert decision["reason"] == "merge_zero_packs"
+    assert decision.get("skip_merge_wait") is True
+    assert decision.get("validation_fastpath") is True
+    assert decision.get("merge_zero_packs") is True
+    assert decision.get("skip_reason_top") == "missing_original_creditor"
+    assert decision.get("skip_counts") == {"missing_original_creditor": 3}
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0][0] == sid
+    assert enqueue_calls[0][2] is True
+
+    runflow_payload = json.loads((runs_root / sid / "runflow.json").read_text(encoding="utf-8"))
+    validation_stage = runflow_payload["stages"]["validation"]
+    assert validation_stage["sent"] is True
+    assert validation_stage["status"] == "in_progress"
+    assert validation_stage["metrics"]["merge_zero_packs"] is True
+    assert validation_stage["metrics"]["skip_counts"] == {"missing_original_creditor": 3}
+    assert validation_stage["metrics"]["skip_reason_top"] == "missing_original_creditor"
+    assert validation_stage["summary"]["merge_zero_packs"] is True
+    assert validation_stage["summary"]["skip_counts"] == {"missing_original_creditor": 3}
+    assert validation_stage["summary"]["skip_reason_top"] == "missing_original_creditor"
+    summary_metrics = validation_stage["summary"]["metrics"]
+    assert summary_metrics["merge_zero_packs"] is True
+    assert summary_metrics["skip_counts"] == {"missing_original_creditor": 3}
+    assert summary_metrics["skip_reason_top"] == "missing_original_creditor"
+    assert isinstance(validation_stage["last_at"], str)
+
+    events_path = runs_root / sid / "runflow_events.jsonl"
+    assert events_path.exists()
+    events_text = events_path.read_text(encoding="utf-8")
+    assert '"fastpath_send"' in events_text
+
+    runflow_core = importlib.reload(runflow_core)
+    runflow_decider = importlib.reload(runflow_decider)
+
+
+def test_finalize_stage_propagates_zero_pack_metadata(monkeypatch, tmp_path: Path) -> None:
+    sid = "SFINAL"
+    payload = {
+        "sid": sid,
+        "runs_root": str(tmp_path),
+    }
+
+    snapshot = {
+        "counts": {"packs_created": 0, "pairs_scored": 5},
+        "metrics": {
+            "merge_zero_packs": True,
+            "skip_counts": {"missing_original_creditor": 3},
+            "skip_reason_top": "missing_original_creditor",
+            "reason": "All pairs gated",
+        },
+        "empty_ok": True,
+    }
+
+    decision = {
+        "next": "run_validation",
+        "reason": "merge_zero_packs",
+        "skip_reason_top": "missing_original_creditor",
+        "skip_counts": {"missing_original_creditor": 3},
+    }
+
+    monkeypatch.setattr(auto_ai_tasks, "_append_run_log_entry", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_ai_tasks, "_cleanup_lock", lambda *args, **kwargs: False)
+    monkeypatch.setattr(auto_ai_tasks, "finalize_merge_stage", lambda *args, **kwargs: snapshot)
+    monkeypatch.setattr(auto_ai_tasks, "decide_next", lambda *args, **kwargs: decision)
+    monkeypatch.setattr(auto_ai_tasks, "update_manifest_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_ai_tasks, "update_manifest_frontend", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_ai_tasks, "reconcile_umbrella_barriers", lambda *args, **kwargs: None)
+
+    result = auto_ai_tasks._finalize_stage(dict(payload))
+
+    assert result["merge_zero_packs"] is True
+    assert result["skip_counts"] == {"missing_original_creditor": 3}
+    assert result["skip_reason_top"] == "missing_original_creditor"
+    assert result["skip_reason"] == "All pairs gated"
 

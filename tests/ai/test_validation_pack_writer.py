@@ -913,3 +913,127 @@ def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
 
     _, unchanged = rewrite_index_to_canonical_layout(index_path, runs_root=runs_root)
     assert unchanged is False
+
+
+def test_build_validation_packs_fastpath_skips_merge_wait(monkeypatch, tmp_path: Path) -> None:
+    sid = "SFAST"
+    runs_root = tmp_path / "runs"
+
+    monkeypatch.setenv("VALIDATION_ZERO_PACKS_FASTPATH", "1")
+
+    wait_calls: dict[str, int] = {"count": 0}
+
+    def fake_wait(sid_value: str, runs_root_path: Path) -> None:
+        wait_calls["count"] += 1
+
+    class _StubWriter:
+        def write_all_packs(self) -> dict[int, list[dict[str, object]]]:
+            return {}
+
+    monkeypatch.setattr(
+        "backend.ai.validation_builder._wait_for_merge_completion", fake_wait
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder._get_writer", lambda *args, **kwargs: _StubWriter()
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder.ensure_validation_section",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder.record_validation_build_summary",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder._update_manifest_for_run",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder.reconcile_umbrella_barriers",
+        lambda *args, **kwargs: None,
+    )
+
+    result = build_validation_packs_for_run(
+        sid,
+        runs_root=runs_root,
+        merge_zero_packs=True,
+    )
+
+    assert result == {}
+    assert wait_calls["count"] == 0
+
+
+def test_validation_skips_merge_wait_when_zero_packs(monkeypatch, tmp_path: Path) -> None:
+    sid = "SFASTSNAP"
+    runs_root = tmp_path / "runs"
+
+    monkeypatch.setenv("VALIDATION_ZERO_PACKS_FASTPATH", "1")
+
+    wait_calls: dict[str, int] = {"count": 0}
+
+    def fake_wait(sid_value: str, runs_root_path: Path) -> None:
+        wait_calls["count"] += 1
+
+    class _StubWriter:
+        def write_all_packs(self) -> dict[int, list[dict[str, object]]]:
+            return {}
+
+    snapshot_payload = {
+        "stages": {
+            "merge": {
+                "status": "success",
+                "summary": {
+                    "merge_zero_packs": True,
+                    "pairs_scored": 2,
+                    "packs_created": 0,
+                    "metrics": {
+                        "merge_zero_packs": True,
+                        "pairs_scored": 2,
+                        "created_packs": 0,
+                    },
+                },
+                "metrics": {
+                    "merge_zero_packs": True,
+                    "pairs_scored": 2,
+                    "created_packs": 0,
+                },
+            }
+        }
+    }
+
+    monkeypatch.setattr(
+        "backend.ai.validation_builder._wait_for_merge_completion", fake_wait
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder._get_writer",
+        lambda *args, **kwargs: _StubWriter(),
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder.ensure_validation_section",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder.record_validation_build_summary",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder._update_manifest_for_run",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder.reconcile_umbrella_barriers",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.ai.validation_builder.get_runflow_snapshot",
+        lambda *args, **kwargs: snapshot_payload,
+    )
+
+    result = build_validation_packs_for_run(
+        sid,
+        runs_root=runs_root,
+        merge_zero_packs=False,
+    )
+
+    assert result == {}
+    assert wait_calls["count"] == 0

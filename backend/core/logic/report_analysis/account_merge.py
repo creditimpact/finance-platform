@@ -39,6 +39,7 @@ from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
+from backend.telemetry.metrics import emit_counter
 from backend.core.runflow import runflow_event, steps_pair_topn
 from backend.core.runflow_spans import end_span, span_step, start_span
 from backend.config.merge_config import (
@@ -98,6 +99,8 @@ CANON: Dict[str, Dict[str, List[str]]] = {
     "same_debt_diff_account": {"aliases": ["same_debt_account_different"]},
     "same_debt_account_unknown": {"aliases": ["same_debt"]},
     "different": {"aliases": []},
+    "duplicate": {"aliases": []},
+    "not_duplicate": {"aliases": []},
 }
 
 
@@ -110,6 +113,8 @@ class MergeDecision(str, Enum):
     SAME_DEBT_DIFF_ACCOUNT = "same_debt_diff_account"
     SAME_DEBT_ACCOUNT_UNKNOWN = "same_debt_account_unknown"
     DIFFERENT = "different"
+    DUPLICATE = "duplicate"
+    NOT_DUPLICATE = "not_duplicate"
 
     # Legacy aliases preserved for backwards compatibility.
     MERGE = "same_account_same_debt"
@@ -138,6 +143,7 @@ AI_PAIR_KIND_BY_DECISION = {
     "same_account_debt_unknown": "same_account_pair",
     "same_debt_diff_account": "same_debt_pair",
     "same_debt_account_unknown": "same_debt_pair",
+    "duplicate": "same_account_pair",
     "different": "same_account_pair",
 }
 
@@ -300,6 +306,40 @@ def _read_env_flag(env: Mapping[str, str], key: str, default: bool) -> bool:
     if lowered in {"0", "false", "no", "off"}:
         return False
     return bool(default)
+
+
+MERGE_SKIP_COUNTS_ENABLED = _read_env_flag(os.environ, "MERGE_SKIP_COUNTS_ENABLED", True)
+MERGE_ZERO_PACKS_SIGNAL = _read_env_flag(os.environ, "MERGE_ZERO_PACKS_SIGNAL", True)
+MERGE_POINTS_DIAGNOSTICS_EMIT_JSON = _read_env_flag(
+    os.environ, "MERGE_POINTS_DIAGNOSTICS_EMIT_JSON", True
+)
+
+
+_SKIP_REASON_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_skip_reason(reason: Any) -> str:
+    """Normalize skip reasons to ``snake_case`` identifiers."""
+
+    if reason is None:
+        return "unspecified"
+    text = str(reason).strip().lower()
+    if not text:
+        return "unspecified"
+    normalized = _SKIP_REASON_SANITIZE_RE.sub("_", text).strip("_")
+    return normalized or "unspecified"
+
+
+def _select_skip_reason_top(counts: Mapping[str, int]) -> Optional[str]:
+    """Return the plurality skip reason with lexicographic tie-break."""
+
+    if not counts:
+        return None
+    max_count = max(int(value) for value in counts.values())
+    top_keys = [key for key, value in counts.items() if int(value) == max_count]
+    if not top_keys:
+        return None
+    return sorted(top_keys)[0]
 
 
 def merge_v2_only_enabled() -> bool:
@@ -3023,22 +3063,80 @@ def _points_mode_compare_account_label(
     return matched, aux
 
 
+def _coerce_history_sequence(value: Any) -> Optional[List[str]]:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        tokens = [str(item).strip().upper() for item in value if str(item).strip()]
+        return tokens or None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        tokens = [token.strip().upper() for token in text.replace(",", " ").split() if token.strip()]
+        return tokens or None
+    return None
+
+
+def _coerce_history_counts(value: Any) -> Optional[Dict[str, int]]:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return {
+            "late30": _safe_int(value.get("late30")),
+            "late60": _safe_int(value.get("late60")),
+            "late90": _safe_int(value.get("late90")),
+        }
+
+    if isinstance(value, (list, tuple, set)):
+        tokens = [str(item) for item in value]
+    else:
+        tokens = str(value).replace(",", " ").split()
+
+    counts = {"late30": 0, "late60": 0, "late90": 0}
+    for raw_token in tokens:
+        token = str(raw_token).strip().lower()
+        if not token:
+            continue
+        if "90" in token:
+            counts["late90"] += 1
+        elif "60" in token:
+            counts["late60"] += 1
+        elif "30" in token or token == "late":
+            counts["late30"] += 1
+    return counts
+
+
 def _points_mode_compare_history_2y(
     left_context: Mapping[str, Any],
     right_context: Mapping[str, Any],
     *,
     threshold: float,
 ) -> Tuple[bool, Dict[str, Any]]:
-    left_history = (
-        left_context.get("history_2y")
-        if isinstance(left_context.get("history_2y"), Mapping)
-        else {}
-    )
-    right_history = (
-        right_context.get("history_2y")
-        if isinstance(right_context.get("history_2y"), Mapping)
-        else {}
-    )
+    left_history_value = left_context.get("history_2y")
+    right_history_value = right_context.get("history_2y")
+
+    if not isinstance(left_history_value, Mapping):
+        sequence = _coerce_history_sequence(left_history_value)
+        left_history: Dict[str, Sequence[str] | None] = {}
+        if sequence is not None:
+            for bureau in ("transunion", "experian", "equifax"):
+                left_history[bureau] = list(sequence)
+        else:
+            left_history = {}
+    else:
+        left_history = dict(left_history_value)
+
+    if not isinstance(right_history_value, Mapping):
+        sequence = _coerce_history_sequence(right_history_value)
+        right_history: Dict[str, Sequence[str] | None] = {}
+        if sequence is not None:
+            for bureau in ("transunion", "experian", "equifax"):
+                right_history[bureau] = list(sequence)
+        else:
+            right_history = {}
+    else:
+        right_history = dict(right_history_value)
 
     candidate_entries: List[Dict[str, Any]] = []
     best_info: Optional[Dict[str, Any]] = None
@@ -3058,7 +3156,8 @@ def _points_mode_compare_history_2y(
             },
         }
 
-        if not isinstance(left_raw, (list, tuple)) or not left_raw:
+        left_sequence = _coerce_history_sequence(left_raw)
+        if not left_sequence:
             entry.update(
                 {
                     "evaluated": False,
@@ -3069,7 +3168,9 @@ def _points_mode_compare_history_2y(
             )
             candidate_entries.append(entry)
             continue
-        if not isinstance(right_raw, (list, tuple)) or not right_raw:
+
+        right_sequence = _coerce_history_sequence(right_raw)
+        if not right_sequence:
             entry.update(
                 {
                     "evaluated": False,
@@ -3081,8 +3182,8 @@ def _points_mode_compare_history_2y(
             candidate_entries.append(entry)
             continue
 
-        left_norm = [str(item).strip().upper() for item in left_raw if str(item).strip()]
-        right_norm = [str(item).strip().upper() for item in right_raw if str(item).strip()]
+        left_norm = list(left_sequence)
+        right_norm = list(right_sequence)
 
         if not left_norm:
             entry.update(
@@ -3219,27 +3320,35 @@ def _points_mode_compare_history_7y(
         }
 
         if left_branch is None:
-            entry.update(
-                {
-                    "evaluated": False,
-                    "matched": False,
-                    "match_score": 0.0,
-                    "reasons": ["left_missing_value"],
-                }
-            )
-            candidate_entries.append(entry)
-            continue
+            counts = _coerce_history_counts(left_history.get(left_bureau))
+            if counts is not None:
+                left_branch = counts
+            else:
+                entry.update(
+                    {
+                        "evaluated": False,
+                        "matched": False,
+                        "match_score": 0.0,
+                        "reasons": ["left_missing_value"],
+                    }
+                )
+                candidate_entries.append(entry)
+                continue
         if right_branch is None:
-            entry.update(
-                {
-                    "evaluated": False,
-                    "matched": False,
-                    "match_score": 0.0,
-                    "reasons": ["right_missing_value"],
-                }
-            )
-            candidate_entries.append(entry)
-            continue
+            counts = _coerce_history_counts(right_history.get(right_bureau))
+            if counts is not None:
+                right_branch = counts
+            else:
+                entry.update(
+                    {
+                        "evaluated": False,
+                        "matched": False,
+                        "match_score": 0.0,
+                        "reasons": ["right_missing_value"],
+                    }
+                )
+                candidate_entries.append(entry)
+                continue
 
         sum_left = sum(max(0, _safe_int(left_branch.get(key))) for key in ("late30", "late60", "late90"))
         sum_right = sum(max(0, _safe_int(right_branch.get(key))) for key in ("late30", "late60", "late90"))
@@ -4332,6 +4441,8 @@ def score_all_pairs_0_100(
                 continue
     points_mode_flag = bool(getattr(cfg, "points_mode", False))
     persist_breakdown_enabled = bool(getattr(cfg, "points_persist_breakdown", False))
+    if not MERGE_POINTS_DIAGNOSTICS_EMIT_JSON:
+        persist_breakdown_enabled = False
     diag_dir_setting_raw = getattr(cfg, "points_diag_dir", "ai_packs/merge/diagnostics")
     diag_dir_setting = str(diag_dir_setting_raw or "ai_packs/merge/diagnostics")
     if points_mode_flag:
@@ -4486,6 +4597,7 @@ def score_all_pairs_0_100(
     skipped_pairs = 0
     pair_summaries: List[Dict[str, Any]] = []
     pair_topn_limit = steps_pair_topn()
+    skip_counts: Dict[str, int] = defaultdict(int)
 
     def score_and_maybe_build_pack(left_pos: int, right_pos: int) -> None:
         nonlocal pair_counter, created_packs, matches_strong, matches_weak, conflict_pairs, skipped_pairs
@@ -4559,6 +4671,9 @@ def score_all_pairs_0_100(
                     right_data,
                     cfg,
                 )
+
+        if not isinstance(result, dict):
+            result = dict(result)
 
         try:
             score_points = float(result.get("score_points", 0.0) or 0.0)
@@ -4882,6 +4997,14 @@ def score_all_pairs_0_100(
         if not allowed:
             skipped_pairs += 1
 
+        result["pack_allowed"] = bool(allowed)
+        if allowed:
+            result.pop("pack_skip_reason", None)
+        else:
+            normalized_skip_reason = pack_skip_reason or "unspecified"
+            result["pack_skip_reason"] = normalized_skip_reason
+            pack_skip_reason = normalized_skip_reason
+
         pair_summaries.append(
             {
                 "left": int(left),
@@ -4971,6 +5094,9 @@ def score_all_pairs_0_100(
                 account=f"{left}-{right}",
                 out={"reason": pack_skip_reason},
             )
+            if MERGE_SKIP_COUNTS_ENABLED:
+                reason_key = _normalize_skip_reason(pack_skip_reason)
+                skip_counts[reason_key] += 1
             if result.get("conflicts"):
                 scores[left].pop(right, None)
                 scores[right].pop(left, None)
@@ -5024,6 +5150,30 @@ def score_all_pairs_0_100(
             out=out_payload,
         )
 
+    skip_counts_payload: Dict[str, int] = {}
+    skip_reason_top: Optional[str] = None
+    if MERGE_SKIP_COUNTS_ENABLED:
+        skip_counts_payload = {
+            key: int(value)
+            for key, value in skip_counts.items()
+            if int(value) > 0
+        }
+        if skip_counts_payload:
+            selected = _select_skip_reason_top(skip_counts_payload)
+            if selected is not None:
+                skip_reason_top = selected
+
+    merge_zero_packs = created_packs == 0 and pair_counter > 0
+    human_reason: Optional[str] = None
+    if merge_zero_packs:
+        if skip_reason_top:
+            human_reason = f"All pairs gated: {skip_reason_top.replace('_', ' ')}"
+        else:
+            human_reason = "All pairs below scoring threshold"
+            skip_reason_top = "unspecified"
+            if MERGE_SKIP_COUNTS_ENABLED and not skip_counts_payload:
+                skip_counts_payload = {"unspecified": int(pair_counter)}
+
     totals_metrics = {
         "scored_pairs": pair_counter,
         "matches_strong": matches_strong,
@@ -5034,6 +5184,30 @@ def score_all_pairs_0_100(
         "created_packs": created_packs,
         "topn_limit": pair_topn_limit,
     }
+
+    if MERGE_SKIP_COUNTS_ENABLED:
+        totals_metrics["skip_counts"] = skip_counts_payload
+        if skip_reason_top is not None:
+            totals_metrics["skip_reason_top"] = skip_reason_top
+    if MERGE_ZERO_PACKS_SIGNAL:
+        totals_metrics["merge_zero_packs"] = bool(merge_zero_packs)
+        if merge_zero_packs:
+            emit_counter("merge.zero_packs.total")
+            if skip_counts_payload:
+                for reason_key, reason_count in skip_counts_payload.items():
+                    emit_counter(
+                        f"merge.zero_packs.reason.{reason_key}",
+                        int(reason_count),
+                    )
+            else:
+                fallback_reason = (
+                    _normalize_skip_reason(skip_reason_top)
+                    if skip_reason_top
+                    else "unspecified"
+                )
+                emit_counter(f"merge.zero_packs.reason.{fallback_reason}")
+    if human_reason:
+        totals_metrics["reason"] = human_reason
 
     ranked_for_index: List[Dict[str, Any]] = []
     for rank, entry in enumerate(ranked_pairs, start=1):
@@ -5832,6 +6006,15 @@ def _normalize_merge_payload_for_tag(
         payload["reasons"] = _tag_normalize_str_list(triggers_source)
         payload["conflicts"] = _tag_normalize_str_list(result.get("conflicts"))
 
+        pack_allowed_value = result.get("pack_allowed")
+        if pack_allowed_value is None:
+            pack_allowed_value = payload["decision"].lower() in {"ai", "auto"}
+        payload["pack_allowed"] = bool(pack_allowed_value)
+
+        pack_skip_reason_value = result.get("pack_skip_reason")
+        if pack_skip_reason_value is not None:
+            payload["pack_skip_reason"] = str(pack_skip_reason_value)
+
     payload["strong"] = any(
         isinstance(reason, str) and reason.startswith("strong:")
         for reason in payload["reasons"]
@@ -5860,6 +6043,11 @@ def _normalize_merge_payload_for_tag(
     payload.setdefault("matched_pairs", {})
     payload["matched_pairs"].setdefault("account_number", [])
     payload["acctnum_level"] = acct_level
+    payload.setdefault("pack_allowed", payload["decision"].lower() in {"ai", "auto"})
+
+    if "pack_allowed" in payload and not payload["pack_allowed"]:
+        if "pack_skip_reason" not in payload:
+            payload["pack_skip_reason"] = "unspecified"
 
     return payload
 
@@ -6054,6 +6242,12 @@ def build_summary_ai_entries(
             default_flags["debt_match"] = "true"
     if lowered_decision.startswith("same_debt_"):
         default_flags["debt_match"] = "true"
+    if lowered_decision == "duplicate":
+        default_flags["account_match"] = "true"
+        default_flags["debt_match"] = "true"
+    elif lowered_decision == "not_duplicate":
+        default_flags["account_match"] = "false"
+        default_flags["debt_match"] = "false"
 
     final_flags: Dict[str, str] = {}
     for key in ("account_match", "debt_match"):
@@ -6076,6 +6270,21 @@ def build_summary_ai_entries(
         ):
             normalized_flag = True
 
+    duplicate_flag_str: Optional[str] = None
+    if isinstance(normalized_flags_payload, Mapping):
+        duplicate_flag_str = _flag_as_string(normalized_flags_payload.get("duplicate"))
+    if duplicate_flag_str is None:
+        if lowered_decision == "duplicate":
+            duplicate_flag_str = "true"
+        elif lowered_decision == "not_duplicate":
+            duplicate_flag_str = "false"
+    if duplicate_flag_str is not None:
+        final_flags["duplicate"] = duplicate_flag_str
+        if raw_flags is not None and "duplicate" in raw_flags:
+            original_duplicate = _flag_as_string(raw_flags.get("duplicate"))
+            if original_duplicate is None or original_duplicate != duplicate_flag_str:
+                normalized_flag = True
+
     reason_value = normalized_payload.get("reason")
     if isinstance(reason_value, str):
         reason_text = reason_value.strip()
@@ -6093,6 +6302,8 @@ def build_summary_ai_entries(
         "decision": normalized_decision or "different",
         "flags": {key: final_flags[key] for key in ("account_match", "debt_match")},
     }
+    if "duplicate" in final_flags:
+        ai_result_payload["flags"]["duplicate"] = final_flags["duplicate"]
     if reason_text:
         ai_result_payload["reason"] = reason_text
 
@@ -6626,47 +6837,26 @@ def persist_merge_tags(
                         highlights_from_pair,
                     )
                     try:
-                        context_payload = (
-                            pack_payload.get("context", {})
-                            if isinstance(pack_payload, Mapping)
-                            else {}
-                        )
-                        highlights_payload = (
-                            pack_payload.get("highlights", {})
-                            if isinstance(pack_payload, Mapping)
-                            else {}
-                        )
-
-                        context_a = list(context_payload.get("a") or [])
-                        context_b = list(context_payload.get("b") or [])
-
-                        total_value = highlights_payload.get("total")
-                        if points_mode_active:
+                        total_value = None
+                        if isinstance(pack_payload, Mapping):
+                            total_value = pack_payload.get("score_total")
+                        if total_value is None:
                             try:
-                                total_value = float(total_value)
-                            except (TypeError, ValueError):
-                                total_value = None
-                        else:
-                            try:
-                                total_value = int(total_value)
-                            except (TypeError, ValueError):
-                                total_value = None
-
-                        triggers_raw = highlights_payload.get("triggers", [])
-                        if isinstance(triggers_raw, Iterable) and not isinstance(
-                            triggers_raw, (str, bytes)
-                        ):
-                            triggers_value = [str(item) for item in triggers_raw if item is not None]
-                        else:
-                            triggers_value = []
+                                total_value = (
+                                    float(total_score_value)
+                                    if points_mode_active
+                                    else int(total_score_int)
+                                )
+                            except NameError:
+                                total_value = 0.0 if points_mode_active else 0
 
                         pack_log = {
                             "sid": sid,
                             "pair": {"a": left, "b": right},
-                            "lines_a": len(context_a),
-                            "lines_b": len(context_b),
+                            "schema": pack_payload.get("schema") if isinstance(pack_payload, Mapping) else None,
+                            "lines_a": 0,
+                            "lines_b": 0,
                             "total": total_value,
-                            "triggers": triggers_value,
                         }
                         logger.info("MERGE_V2_PACK %s", json.dumps(pack_log, sort_keys=True))
                     except Exception:  # pragma: no cover - defensive logging

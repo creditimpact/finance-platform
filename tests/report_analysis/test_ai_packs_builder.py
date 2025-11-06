@@ -102,8 +102,28 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
         ],
     )
 
+    _write_json(account_a_dir / "meta.json", {"account_name": "US BK CACS"})
+    _write_json(account_b_dir / "meta.json", {"heading_guess": "U S BANK"})
     _write_json(account_a_dir / "tags.json", [_merge_pair_tag(16), _merge_best_tag(16)])
     _write_json(account_b_dir / "tags.json", [_merge_best_tag(11)])
+    _write_json(
+        account_a_dir / "bureaus.json",
+        {
+            "transunion": {
+                "original_creditor": "US BK CACS",
+            },
+            "order": ["transunion", "experian", "equifax"],
+        },
+    )
+    _write_json(
+        account_b_dir / "bureaus.json",
+        {
+            "transunion": {
+                "original_creditor": "01 Palisades Funding Corp",
+            },
+            "order": ["transunion", "experian", "equifax"],
+        },
+    )
 
     packs = build_merge_ai_packs(sid, runs_root, max_lines_per_side=6)
 
@@ -111,92 +131,44 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
     pack = packs[0]
 
     assert pack["pair"] == {"a": 11, "b": 16}
-    context_a = pack["context"]["a"]
-    assert context_a[0] == "US BK CACS"
-    assert context_a[1] == "Lender normalized: US BANK"
-    assert "Two-Year Payment History" not in " ".join(context_a)
-    assert pack["ids"]["account_number_a"] == "409451******"
-    assert pack["ids"]["account_number_b"] == "409451******"
-    assert pack["ids"]["account_number_a_normalized"] == "409451"
-    assert pack["ids"]["account_number_b_normalized"] == "409451"
-    assert pack["ids"]["account_number_a_last4"] == "9451"
-    assert pack["ids"]["account_number_b_last4"] == "9451"
-    ids_by_bureau = pack["ids_by_bureau"]
-    assert ids_by_bureau["a"]["transunion"] == {
-        "raw": "409451******",
-        "digits": "409451",
-        "last4": "9451",
+    assert pack["sid"] == sid
+    assert pack["schema"] == "duplicate_debt_audit:v1"
+    assert pack["sources"] == {
+        "a": ["bureaus.json", "meta.json", "tags.json"],
+        "b": ["bureaus.json", "meta.json", "tags.json"],
     }
-    assert ids_by_bureau["a"]["experian"] == {"raw": None, "digits": None, "last4": None}
-    assert ids_by_bureau["a"]["equifax"] == {
-        "raw": "409451******",
-        "digits": "409451",
-        "last4": "9451",
-    }
-    assert ids_by_bureau["b"]["transunion"] == {"raw": None, "digits": None, "last4": None}
-    assert ids_by_bureau["b"]["experian"] == {
-        "raw": "409451******",
-        "digits": "409451",
-        "last4": "9451",
-    }
-    assert ids_by_bureau["b"]["equifax"] == {"raw": None, "digits": None, "last4": None}
-    assert pack["highlights"]["total"] == 59
-    assert pack["highlights"]["identity_score"] == 28
-    assert pack["highlights"]["debt_score"] == 31
-    assert pack["highlights"]["matched_fields"]["balance_owed"] is True
-    assert pack["highlights"]["context_flags"]["amounts_equal_within_tol"] is True
-    assert pack["highlights"]["context_flags"]["dates_plausible_chain"] is False
-    assert pack["highlights"]["context_flags"]["acct_last4_equal"] is True
-    assert pack["highlights"]["context_flags"]["acct_stem_equal"] is True
-    assert pack["highlights"]["context_flags"]["acctnum_conflict"] is False
-    assert pack["limits"]["max_lines_per_side"] == 6
-    assert pack["context_flags"]["amounts_equal_within_tol"] is True
-    assert pack["context_flags"]["is_collection_agency_a"] is False
-    assert pack["context_flags"]["acct_last4_equal"] is True
-    assert pack["context_flags"]["acct_stem_equal"] is True
-    assert pack["context_flags"]["acctnum_conflict"] is False
-    assert set(pack["tolerances_hint"].keys()) == {
-        "amount_abs_usd",
-        "amount_ratio",
-        "last_payment_day_tol",
-    }
+    assert pack["score_total"] == 59
+    assert pack["points_mode"] is False
+    assert "context" not in pack
+    assert "ids" not in pack
+    assert "ids_by_bureau" not in pack
+    assert "highlights" not in pack
+    assert "context_flags" not in pack
+    assert "limits" not in pack
+    assert "tolerances_hint" not in pack
 
     messages = pack["messages"]
     assert len(messages) == 2
     assert messages[0]["role"] == "system"
     assert "adjudicator" in messages[0]["content"]
-    assert (
-        "If only last four digits match but stems differ, never choose any same_account_*"
-        in messages[0]["content"]
-    )
+    assert "duplicate" in messages[0]["content"].lower()
 
     user_payload = json.loads(messages[1]["content"])
     assert user_payload["pair"] == {"a": 11, "b": 16}
-    assert user_payload["numeric_match_summary"]["total"] == 59
-    assert user_payload["numeric_match_summary"]["identity_score"] == 28
-    assert user_payload["numeric_match_summary"]["debt_score"] == 31
-    assert user_payload["ids"]["account_number_a_normalized"] == "409451"
-    assert user_payload["ids"]["account_number_b_normalized"] == "409451"
-    assert user_payload["ids"]["account_number_a_last4"] == "9451"
-    assert user_payload["ids"]["account_number_b_last4"] == "9451"
-    assert user_payload["ids_by_bureau"] == ids_by_bureau
-    assert user_payload["context_flags"]["amounts_equal_within_tol"] is True
-    assert user_payload["context_flags"]["dates_plausible_chain"] is False
-    assert user_payload["context_flags"]["acct_last4_equal"] is True
-    assert user_payload["context_flags"]["acct_stem_equal"] is True
-    assert user_payload["context_flags"]["acctnum_conflict"] is False
-    assert user_payload["output_contract"]["decision"] == [
-        "same_account_same_debt",
-        "same_account_diff_debt",
-        "same_account_debt_unknown",
-        "same_debt_diff_account",
-        "same_debt_account_unknown",
-        "different",
-    ]
-    assert user_payload["output_contract"]["flags"] == {
-        "account_match": ["true", "false", "unknown"],
-        "debt_match": ["true", "false", "unknown"],
-    }
+    assert user_payload["sid"] == sid
+    assert user_payload["a"]["name"] == "US BK CACS"
+    assert user_payload["b"]["name"] == "U S BANK"
+    assert user_payload["a"]["name_normalized"] == "US BK CACS"
+    assert user_payload["b"]["name_normalized"] == "U S BANK"
+    assert "primary_issue" in user_payload["a"]
+    assert "primary_issue" in user_payload["b"]
+    assert "bureaus" in user_payload["a"]
+    assert "bureaus" in user_payload["b"]
+    assert (
+        user_payload["b"]["bureaus"]["transunion"]["original_creditor_normalized"]
+        == "PALISADES FUNDING CORP"
+    )
+    assert set(user_payload.keys()) == {"sid", "pair", "a", "b"}
 
 
 def test_context_flags_collection_agency_relaxed_dates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -259,8 +231,9 @@ def test_build_merge_ai_packs_only_merge_best_filter(tmp_path: Path) -> None:
     assert len(packs_all) == 1
     pack = packs_all[0]
     assert pack["pair"] == {"a": 21, "b": 22}
-    assert len(pack["context"]["a"]) <= 3
-    assert len(pack["context"]["b"]) <= 3
+    assert pack["schema"] == "duplicate_debt_audit:v1"
+    assert pack["sources"]["a"] == ["bureaus.json", "meta.json", "tags.json"]
+    assert "context" not in pack
 
 
 def test_build_merge_ai_packs_caps_context_to_env_limit(tmp_path: Path, monkeypatch) -> None:
@@ -322,14 +295,15 @@ def test_build_merge_ai_packs_caps_context_to_env_limit(tmp_path: Path, monkeypa
     assert len(packs) == 1
     pack = packs[0]
 
-    context_a = pack["context"]["a"]
-    context_b = pack["context"]["b"]
-
-    assert context_a[0] == "US BK CACS"
-    assert context_b[0] == "U S BANK"
-    assert len(context_a) <= 7
-    assert len(context_b) <= 7
-    assert pack["limits"]["max_lines_per_side"] == 7
+    assert pack["schema"] == "duplicate_debt_audit:v1"
+    assert pack["pair"] == {"a": 31, "b": 32}
+    assert pack["score_total"] == 59
+    assert pack["sources"] == {
+        "a": ["bureaus.json", "meta.json", "tags.json"],
+        "b": ["bureaus.json", "meta.json", "tags.json"],
+    }
+    assert "context" not in pack
+    assert "limits" not in pack
 
 
 def test_build_merge_ai_packs_includes_hard_auto_pairs(tmp_path: Path) -> None:
@@ -371,8 +345,8 @@ def test_build_merge_ai_packs_includes_hard_auto_pairs(tmp_path: Path) -> None:
     assert len(packs) == 1
     pack = packs[0]
     assert pack["pair"] == {"a": 41, "b": 42}
-    assert pack["highlights"]["total"] == 88
-    assert pack["highlights"]["acctnum_level"] == "exact_or_known_match"
+    assert pack["score_total"] == 88
+    assert pack["schema"] == "duplicate_debt_audit:v1"
 
 
 def test_build_ai_merge_packs_cli_updates_manifest(

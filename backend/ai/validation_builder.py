@@ -35,7 +35,7 @@ from backend.core.ai.paths import (
 )
 from backend.pipeline.runs import RunManifest, persist_manifest
 from backend.core.runflow import record_validation_build_summary
-from backend.runflow.decider import reconcile_umbrella_barriers
+from backend.runflow.decider import get_runflow_snapshot, reconcile_umbrella_barriers
 from backend.validation.redaction import sanitize_validation_payload
 from backend.core.ai.eligibility_policy import (
     canonicalize_history,
@@ -59,6 +59,7 @@ _PACKS_ENABLED_ENV = "VALIDATION_PACKS_ENABLED"
 _PACKS_PER_FIELD_ENV = "VALIDATION_PACKS_PER_FIELD"
 _PACK_MAX_SIZE_ENV = "VALIDATION_PACK_MAX_SIZE_KB"
 _AUTOSEND_ENABLED_ENV = "VALIDATION_AUTOSEND_ENABLED"
+_ZERO_PACKS_FASTPATH_ENV = "VALIDATION_ZERO_PACKS_FASTPATH"
 _LEGACY_AUTOSEND_ENV_VARS: tuple[str, ...] = (
     "ENABLE_VALIDATION_SENDER",
     "AUTO_VALIDATION_SEND",
@@ -236,6 +237,32 @@ def _normalize_flag(value: Any) -> bool | None:
         if lowered in _FALSE_STRINGS:
             return False
     return None
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value:
+            return None
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            try:
+                return int(float(text))
+            except (TypeError, ValueError):
+                return None
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_mismatch(requirement: Mapping[str, Any]) -> bool:
@@ -1658,6 +1685,10 @@ def _packs_enabled() -> bool:
     return _env_flag(_PACKS_ENABLED_ENV, True)
 
 
+def _zero_packs_fastpath_enabled() -> bool:
+    return _env_flag(_ZERO_PACKS_FASTPATH_ENV, True)
+
+
 def _packs_per_field_enabled() -> bool:
     return _env_flag(_PACKS_PER_FIELD_ENV, False)
 
@@ -1735,6 +1766,69 @@ def _merge_stage_sent(runs_root: Path, sid: str) -> bool:
         return False
     stage_status = manifest.get_ai_stage_status("merge")
     return bool(stage_status.get("sent"))
+
+
+def _snapshot_merge_zero_flag(snapshot: Mapping[str, Any]) -> bool:
+    stages = snapshot.get("stages") if isinstance(snapshot, Mapping) else None
+    if not isinstance(stages, Mapping):
+        return False
+
+    merge_stage = stages.get("merge")
+    if not isinstance(merge_stage, Mapping):
+        return False
+
+    def _flag(candidate: Any) -> bool | None:
+        flag = _normalize_flag(candidate)
+        if flag is not None:
+            return flag
+        return None
+
+    for direct in (
+        merge_stage.get("merge_zero_packs"),
+        merge_stage.get("mergeZeroPacks"),
+    ):
+        resolved = _flag(direct)
+        if resolved is not None:
+            return resolved
+
+    summary = merge_stage.get("summary")
+    if isinstance(summary, Mapping):
+        summary_flag = _flag(summary.get("merge_zero_packs"))
+        if summary_flag is not None:
+            return summary_flag
+        summary_metrics = summary.get("metrics")
+        if isinstance(summary_metrics, Mapping):
+            metrics_flag = _flag(summary_metrics.get("merge_zero_packs"))
+            if metrics_flag is not None:
+                return metrics_flag
+
+    metrics_payload = merge_stage.get("metrics")
+    if isinstance(metrics_payload, Mapping):
+        metrics_flag = _flag(metrics_payload.get("merge_zero_packs"))
+        if metrics_flag is not None:
+            return metrics_flag
+
+    containers: list[Mapping[str, Any]] = []
+    if isinstance(summary, Mapping):
+        containers.append(summary)
+        summary_metrics = summary.get("metrics")
+        if isinstance(summary_metrics, Mapping):
+            containers.append(summary_metrics)
+    if isinstance(metrics_payload, Mapping):
+        containers.append(metrics_payload)
+    containers.append(merge_stage)
+
+    for container in containers:
+        created = _coerce_int(container.get("packs_created"))
+        if created is None:
+            created = _coerce_int(container.get("created_packs"))
+        scored = _coerce_int(container.get("pairs_scored"))
+        if scored is None:
+            scored = _coerce_int(container.get("scored_pairs"))
+        if created == 0 and (scored or 0) > 0:
+            return True
+
+    return False
 
 
 def _wait_for_merge_completion(
@@ -1913,7 +2007,10 @@ def build_validation_pack_for_account(
 
 
 def build_validation_packs_for_run(
-    sid: str, *, runs_root: Path | str | None = None
+    sid: str,
+    *,
+    runs_root: Path | str | None = None,
+    merge_zero_packs: bool = False,
 ) -> dict[int, list[PackLine]]:
     """Build validation packs for every account of ``sid``."""
 
@@ -1934,7 +2031,33 @@ def build_validation_packs_for_run(
         )
         return {}
 
-    _wait_for_merge_completion(sid, runs_root_path)
+    snapshot_zero_flag = False
+    try:
+        snapshot = get_runflow_snapshot(sid, runs_root=runs_root_path)
+    except Exception:  # pragma: no cover - defensive
+        log.debug(
+            "VALIDATION_FASTPATH_SNAPSHOT_READ_FAILED sid=%s", sid, exc_info=True
+        )
+    else:
+        snapshot_zero_flag = _snapshot_merge_zero_flag(snapshot)
+
+    zero_sources: list[str] = []
+    if merge_zero_packs:
+        zero_sources.append("payload")
+    if snapshot_zero_flag:
+        zero_sources.append("runflow")
+
+    merge_zero_flag = bool(merge_zero_packs) or snapshot_zero_flag
+    fastpath_allowed = merge_zero_flag and _zero_packs_fastpath_enabled()
+    if fastpath_allowed:
+        source_label = ",".join(zero_sources) if zero_sources else "unknown"
+        log.info(
+            "VALIDATION_FASTPATH_SKIP_MERGE_WAIT sid=%s reason=merge_zero_packs source=%s",
+            sid,
+            source_label,
+        )
+    else:
+        _wait_for_merge_completion(sid, runs_root_path)
 
     writer = _get_writer(sid, runs_root_path)
     results = writer.write_all_packs()

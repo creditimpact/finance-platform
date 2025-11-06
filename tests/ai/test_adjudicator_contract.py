@@ -46,6 +46,37 @@ def test_keeps_merge_when_flags_strong_match() -> None:
     assert was_normalized is True
 
 
+def test_normalizes_duplicate_contract() -> None:
+    payload = {
+        "decision": "duplicate",
+        "reason": "A cites B as original creditor",
+        "flags": {"duplicate": True},
+    }
+
+    normalized, was_normalized = _normalize_and_validate_decision(payload)
+
+    assert normalized["decision"] == "duplicate"
+    assert normalized["reason"] == "A cites B as original creditor"
+    assert normalized["flags"] == {"duplicate": True}
+    assert "normalized" not in normalized
+    assert was_normalized is False
+
+
+def test_normalizes_not_duplicate_contract() -> None:
+    payload = {
+        "decision": "not_duplicate",
+        "reason": "different creditors",
+        "flags": {"duplicate": False},
+    }
+
+    normalized, was_normalized = _normalize_and_validate_decision(payload)
+
+    assert normalized["decision"] == "not_duplicate"
+    assert normalized["flags"] == {"duplicate": False}
+    assert "normalized" not in normalized
+    assert was_normalized is False
+
+
 def test_validate_ai_payload_coerces_boolean_flags() -> None:
     payload = {
         "decision": "same_account_same_debt",
@@ -81,3 +112,19 @@ def test_validate_ai_payload_rejects_invalid_flag() -> None:
 
     with pytest.raises(AdjudicatorError, match="Flags outside contract"):
         validate_ai_payload(payload)
+
+
+def test_validate_ai_payload_accepts_duplicate_contract() -> None:
+    payload = {
+        "decision": "duplicate",
+        "reason": "oc matches",
+        "flags": {"duplicate": True},
+    }
+
+    normalized = validate_ai_payload(payload)
+
+    assert normalized == {
+        "decision": "duplicate",
+        "flags": {"duplicate": True},
+        "reason": "oc matches",
+    }

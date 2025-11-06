@@ -51,6 +51,8 @@ from backend.core.runflow.env_snapshot import log_worker_env_snapshot
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from importlib import util as importlib_util
+
 from celery import Celery, shared_task, signals
 from kombu import Queue
 
@@ -68,6 +70,36 @@ app = Celery("tasks")
 # Ensure note_style Celery tasks are registered when the worker boots.
 import backend.ai.merge.tasks  # noqa: E402,F401
 import backend.ai.note_style.tasks  # noqa: E402,F401
+
+# Ensure validation pipeline tasks are imported when Celery initialises. To avoid
+# circular imports (auto_ai_tasks imports this module), rely on Celery's
+# ``imports`` configuration to load modules after this file is fully evaluated.
+_PIPELINE_TASK_MODULES: list[str] = ["backend.pipeline.auto_ai_tasks"]
+if importlib_util.find_spec("backend.validation.tasks") is not None:
+    _PIPELINE_TASK_MODULES.append("backend.validation.tasks")
+else:  # pragma: no cover - optional dependency
+    logging.getLogger(__name__).debug("VALIDATION_TASKS_IMPORT_MISSING")
+
+app.conf.update(imports=_PIPELINE_TASK_MODULES)
+
+
+CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
+    "backend.api.tasks.stage_a_task": {"queue": "celery"},
+    "backend.api.tasks.generate_frontend_packs_task": {"queue": "frontend"},
+    "backend.ai.merge.tasks.send_merge_packs": {"queue": "merge"},
+    "backend.ai.note_style.tasks.note_style_prepare_and_send_task": {"queue": "note_style"},
+    "backend.ai.note_style.tasks.note_style_send_account_task": {"queue": "note_style"},
+    "backend.ai.note_style.tasks.note_style_send_sid_task": {"queue": "note_style"},
+}
+
+CELERY_TASK_ROUTES.update(
+    {
+        "backend.pipeline.auto_ai_tasks.validation_build_packs": {"queue": "validation"},
+        "backend.pipeline.auto_ai_tasks.validation_send": {"queue": "validation"},
+        "backend.pipeline.auto_ai_tasks.validation_compact": {"queue": "validation"},
+        "backend.validation.*": {"queue": "validation"},
+    }
+)
 
 
 def _default_queue_name() -> str:
@@ -124,12 +156,7 @@ def _flatten_task_routes(routes: object) -> dict[str, dict]:
 
 
 _TARGETED_TASK_ROUTES = {
-    "backend.api.tasks.generate_frontend_packs_task": "frontend",
-    "backend.ai.note_style.tasks.note_style_prepare_and_send_task": "note_style",
-    "backend.ai.note_style.tasks.note_style_send_account_task": "note_style",
-    "backend.ai.note_style.tasks.note_style_send_sid_task": "note_style",
-    "backend.ai.merge.tasks.send_merge_packs": "merge",
-    "backend.pipeline.auto_ai_tasks.validation_send": "validation",
+    task_name: route.get("queue", "celery") for task_name, route in CELERY_TASK_ROUTES.items()
 }
 
 _LAST_TARGETED_ROUTES: dict[str, str] = {}

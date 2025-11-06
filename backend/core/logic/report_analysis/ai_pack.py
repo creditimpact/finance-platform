@@ -9,6 +9,10 @@ from datetime import date, datetime
 from typing import Iterable, Mapping
 
 from backend.core.ai.paths import ensure_merge_paths, pair_pack_path
+from backend.core.logic.report_analysis.ai_packs import (
+    build_duplicate_audit_payload,
+    build_duplicate_debt_messages,
+)
 
 from . import config as merge_config
 
@@ -615,7 +619,6 @@ def build_ai_pack_for_pair(
 ) -> dict:
     sid_str = str(sid)
     runs_root_path = Path(runs_root)
-    accounts_root = runs_root_path / sid_str / "cases" / "accounts"
 
     try:
         account_a = int(a_idx)
@@ -623,32 +626,15 @@ def build_ai_pack_for_pair(
     except Exception as exc:  # pragma: no cover - defensive
         raise ValueError("Account indices must be integers") from exc
 
-    highlight_error: dict[str, str] | None = None
-    try:
-        normalized_highlights = _normalize_highlights(highlights)
-    except Exception as exc:  # pragma: no cover - defensive
-        normalized_highlights = {}
-        highlight_error = {
-            "kind": type(exc).__name__,
-            "message": str(exc),
-            "stage": "normalize_highlights",
-        }
-
-    raw_a_path = accounts_root / str(account_a) / "raw_lines.json"
-    raw_b_path = accounts_root / str(account_b) / "raw_lines.json"
-
     merge_paths = ensure_merge_paths(runs_root_path, sid_str, create=True)
-    packs_dir = merge_paths.packs_dir
+    pack_path = pair_pack_path(merge_paths, *sorted((account_a, account_b)))
 
-    first_idx, second_idx = sorted((account_a, account_b))
-    pack_path = pair_pack_path(merge_paths, first_idx, second_idx)
-    payload: dict
+    payload = build_duplicate_audit_payload(runs_root_path, sid_str, account_a, account_b)
+    messages = build_duplicate_debt_messages(payload)
 
-    gate_cfg = None
-    gate_allowed = True
-    gate_reason = ""
     merge_logic = None
-    try:  # pragma: no cover - defensive
+    gate_cfg = None
+    try:  # pragma: no cover - defensive import
         from backend.core.logic.report_analysis import account_merge as merge_logic  # type: ignore
     except Exception:
         merge_logic = None
@@ -663,24 +649,15 @@ def build_ai_pack_for_pair(
         getattr(gate_cfg, "require_original_creditor_for_ai", False)
     )
 
+    gate_allowed = True
+    gate_reason = ""
     if require_original_creditor and merge_logic is not None:
-        def _safe_load_bureaus(index: int) -> Mapping[str, Mapping[str, object]]:
-            try:
-                return merge_logic.load_bureaus(sid_str, index, runs_root=runs_root_path)
-            except FileNotFoundError:
-                return {}
-            except Exception:
-                logger.exception(
-                    "MERGE_V2_BUREAUS_LOAD_FAILED sid=%s idx=%s", sid_str, index
-                )
-                return {}
-
-        bureaus_a = _safe_load_bureaus(account_a)
-        bureaus_b = _safe_load_bureaus(account_b)
+        bureaus_a = payload.get("a", {}).get("bureaus") if isinstance(payload.get("a"), Mapping) else {}
+        bureaus_b = payload.get("b", {}).get("bureaus") if isinstance(payload.get("b"), Mapping) else {}
         gate_allowed, gate_reason = merge_logic._ai_pack_gate_allows(  # type: ignore[attr-defined]
             gate_cfg,
-            bureaus_a,
-            bureaus_b,
+            bureaus_a if isinstance(bureaus_a, Mapping) else {},
+            bureaus_b if isinstance(bureaus_b, Mapping) else {},
         )
         if not gate_reason:
             gate_reason = "missing_original_creditor"
@@ -690,7 +667,7 @@ def build_ai_pack_for_pair(
         skip_message = f"PACK_SKIPPED {account_a}-{account_b}{reason_suffix}"
         _candidate_logger.info(skip_message)
         logger.info(
-            "MERGE_V2_PACK_GATE sid=%s i=%s j=%s reason=%s stage=builder",
+            "MERGE_DUP_PACK_GATE sid=%s i=%s j=%s reason=%s stage=builder",
             sid_str,
             account_a,
             account_b,
@@ -701,7 +678,7 @@ def build_ai_pack_for_pair(
                 pack_path.unlink()
             except OSError:  # pragma: no cover - defensive
                 logger.warning(
-                    "MERGE_V2_PACK_REMOVE_FAILED sid=%s pair=(%s,%s) path=%s",
+                    "MERGE_DUP_PACK_REMOVE_FAILED sid=%s pair=(%s,%s) path=%s",
                     sid_str,
                     account_a,
                     account_b,
@@ -715,62 +692,46 @@ def build_ai_pack_for_pair(
             "reason": gate_reason,
         }
 
-    try:
-        raw_lines_a = _load_raw_lines(raw_a_path)
-        raw_lines_b = _load_raw_lines(raw_b_path)
-
-        max_lines = merge_config.get_ai_pack_max_lines_per_side()
-
-        context_a = extract_context_raw(raw_lines_a, WANTED_CONTEXT_KEYS, max_lines)
-        context_b = extract_context_raw(raw_lines_b, WANTED_CONTEXT_KEYS, max_lines)
-
-        normalized_a = [_normalize_line(_coerce_text(line)) for line in raw_lines_a or []]
-        normalized_b = [_normalize_line(_coerce_text(line)) for line in raw_lines_b or []]
-
-        account_number_a = _extract_account_number(normalized_a)
-        account_number_b = _extract_account_number(normalized_b)
-
-        context_flags = build_context_flags(
-            normalized_highlights,
-            normalized_a,
-            normalized_b,
-        )
-
-        if isinstance(normalized_highlights, dict):
-            normalized_highlights = dict(normalized_highlights)
+    points_mode_active = False
+    score_total: float | int | None = None
+    if isinstance(highlights, Mapping):
+        if merge_logic is not None:
+            points_mode_active = merge_logic.detect_points_mode_from_payload(highlights)
+            score_total = merge_logic.coerce_score_value(
+                highlights.get("total"), points_mode=points_mode_active
+            )
         else:
-            normalized_highlights = {}
-        normalized_highlights["context_flags"] = context_flags
+            try:
+                from backend.core.logic.report_analysis.account_merge import (
+                    coerce_score_value,
+                    detect_points_mode_from_payload,
+                )
 
-        pack_for_a = _build_pack_payload(
-            sid_str,
-            account_a,
-            account_b,
-            context_a,
-            context_b,
-            account_number_a,
-            account_number_b,
-            normalized_highlights,
-            max_lines,
-        )
+                points_mode_active = detect_points_mode_from_payload(highlights)
+                score_total = coerce_score_value(
+                    highlights.get("total"), points_mode=points_mode_active
+                )
+            except Exception:  # pragma: no cover - defensive fallback
+                points_mode_active = False
+                score_total = None
 
-        _validate_pack_payload(pack_for_a)
-        payload = dict(pack_for_a)
-        if highlight_error is not None:
-            payload["error"] = highlight_error
-    except Exception as exc:  # pragma: no cover - defensive
-        error_payload = {
-            "sid": sid_str,
-            "pair": {"a": account_a, "b": account_b},
-            "highlights": dict(normalized_highlights),
-            "error": {"kind": type(exc).__name__, "message": str(exc)},
-        }
-        if highlight_error is not None:
-            error_payload["error"]["highlights_normalization_error"] = highlight_error
-        payload = error_payload
+    pack_record: dict[str, object] = {
+        "sid": sid_str,
+        "pair": {"a": account_a, "b": account_b},
+        "messages": messages,
+        "schema": "duplicate_debt_audit:v1",
+        "sources": {
+            "a": ["bureaus.json", "meta.json", "tags.json"],
+            "b": ["bureaus.json", "meta.json", "tags.json"],
+        },
+    }
+    if score_total is not None:
+        pack_record["score_total"] = score_total
+        pack_record["points_mode"] = points_mode_active
 
-    payload_text = json.dumps(payload, sort_keys=True)
-    pack_path.write_text(payload_text + "\n", encoding="utf-8")
+    serialized = json.dumps(pack_record, ensure_ascii=False, sort_keys=True)
+    pack_path.parent.mkdir(parents=True, exist_ok=True)
+    pack_path.write_text(serialized + "\n", encoding="utf-8")
 
-    return payload
+    return pack_record
 

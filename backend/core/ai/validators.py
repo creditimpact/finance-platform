@@ -9,6 +9,8 @@ DECISIONS = {
     "same_debt_diff_account",
     "same_debt_account_unknown",
     "different",
+    "duplicate",
+    "not_duplicate",
 }
 
 
@@ -18,6 +20,26 @@ def validate_ai_result(obj: dict) -> tuple[bool, str | None]:
     try:
         d = obj["decision"]
         flags = obj["flags"]
+        if d in {"duplicate", "not_duplicate"} or "duplicate" in flags:
+            dup_raw = flags.get("duplicate")
+            if isinstance(dup_raw, bool):
+                dup_val = dup_raw
+            elif isinstance(dup_raw, str):
+                lowered = dup_raw.strip().lower()
+                if lowered in {"true", "1", "yes", "duplicate"}:
+                    dup_val = True
+                elif lowered in {"false", "0", "no", "not_duplicate"}:
+                    dup_val = False
+                else:
+                    return False, "flags_duplicate_invalid"
+            else:
+                return False, "flags_duplicate_invalid"
+            if d == "duplicate" and not dup_val:
+                return False, "flags_inconsistent"
+            if d == "not_duplicate" and dup_val:
+                return False, "flags_inconsistent"
+            return True, None
+
         am = flags.get("account_match")
         dm = flags.get("debt_match")
         ok = (

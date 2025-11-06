@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+from contextlib import contextmanager
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
-from typing import Mapping, Sequence
+from typing import Iterator, Mapping, Sequence
+
+import pytest
 
 
 def _ensure_requests_stub() -> None:
@@ -22,6 +26,19 @@ def _ensure_requests_stub() -> None:
             pass
 
     module.Session = _DummySession
+
+    if "backend.ai" not in sys.modules:
+        ai_path = Path(__file__).resolve().parents[3] / "backend" / "ai"
+        ai_module = ModuleType("backend.ai")
+        ai_module.__file__ = str(ai_path / "__init__.py")
+        ai_module.__path__ = [str(ai_path)]
+        ai_module.__package__ = "backend.ai"
+        import importlib.machinery as _machinery
+
+        spec = _machinery.ModuleSpec("backend.ai", loader=None, is_package=True)
+        spec.submodule_search_locations = [str(ai_path)]
+        ai_module.__spec__ = spec
+        sys.modules["backend.ai"] = ai_module
     module.RequestException = Exception
     sys.modules["requests"] = module
 
@@ -42,6 +59,77 @@ from backend.core.ai.paths import (
 def _load_runflow(tmp_root: Path, sid: str) -> dict:
     path = tmp_root / sid / "runflow.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+@contextmanager
+def _zero_pack_finalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    sid: str,
+    skip_count: int = 2,
+    emit_step: bool = True,
+    skip_reason: str = "missing_original_creditor",
+    merge_reason: str | None = None,
+    include_merge_zero: bool = True,
+) -> Iterator[SimpleNamespace]:
+    global runflow_module, runflow_decider
+
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("MERGE_ZERO_PACKS_SIGNAL", "1")
+    monkeypatch.setenv("MERGE_SKIP_COUNTS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG", "1")
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_EMIT_ZERO_PACKS_STEP", "1" if emit_step else "0")
+
+    runflow_module = importlib.reload(runflow_module)
+    runflow_decider = importlib.reload(runflow_decider)
+
+    merge_dir = runs_root / sid / "ai_packs" / "merge"
+    results_dir = merge_dir / "results"
+    packs_dir = merge_dir / "packs"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    packs_dir.mkdir(parents=True, exist_ok=True)
+
+    totals_payload: dict[str, object] = {
+        "scored_pairs": skip_count,
+        "created_packs": 0,
+        "skip_counts": {skip_reason: skip_count},
+        "skip_reason_top": skip_reason,
+    }
+    if include_merge_zero:
+        totals_payload["merge_zero_packs"] = True
+    if merge_reason is not None:
+        totals_payload["reason"] = merge_reason
+
+    index_payload = {
+        "totals": totals_payload,
+        "pairs": [],
+    }
+    index_path = merge_dir / "pairs_index.json"
+    index_path.write_text(json.dumps(index_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    try:
+        result = runflow_decider.finalize_merge_stage(sid, runs_root=runs_root)
+        payload = _load_runflow(runs_root, sid)
+        steps_path = runs_root / sid / "runflow_steps.json"
+        steps_payload = (
+            json.loads(steps_path.read_text(encoding="utf-8"))
+            if steps_path.exists()
+            else {}
+        )
+        yield SimpleNamespace(
+            runs_root=runs_root,
+            sid=sid,
+            result=result,
+            payload=payload,
+            steps=steps_payload,
+        )
+    finally:
+        runflow_module = importlib.reload(runflow_module)
+        runflow_decider = importlib.reload(runflow_decider)
 
 
 def _write_note_style_index(
@@ -284,6 +372,446 @@ def test_decide_next_records_runflow_decide_step(tmp_path, monkeypatch):
     monkeypatch.delenv("RUNS_ROOT", raising=False)
     importlib.reload(runflow_module)
     importlib.reload(runflow_decider)
+
+
+def test_finalize_persists_zero_packs_metrics(tmp_path, monkeypatch):
+    with _zero_pack_finalization(
+        tmp_path,
+        monkeypatch,
+        sid="S-zero-pack-metrics",
+        skip_count=3,
+        merge_reason="All pairs gated: missing original creditor",
+    ) as ctx:
+        metrics = ctx.result["metrics"]
+        assert metrics["merge_zero_packs"] is True
+        assert metrics["pairs_scored"] == 3
+        assert metrics["created_packs"] == 0
+        assert metrics["skip_reason_top"] == "missing_original_creditor"
+        assert metrics["skip_counts"] == {"missing_original_creditor": 3}
+        assert metrics["merge_reason"] == "All pairs gated: missing original creditor"
+
+        merge_stage = ctx.payload["stages"]["merge"]
+        stage_metrics = merge_stage["metrics"]
+        assert stage_metrics["merge_zero_packs"] is True
+        assert stage_metrics["skip_reason_top"] == "missing_original_creditor"
+        assert stage_metrics["skip_counts"]["missing_original_creditor"] == 3
+        assert stage_metrics["merge_reason"] == "All pairs gated: missing original creditor"
+
+        summary = merge_stage["summary"]
+        assert summary["merge_zero_packs"] is True
+        assert summary["skip_reason_top"] == "missing_original_creditor"
+        assert summary["skip_counts"] == {"missing_original_creditor": 3}
+        assert summary["pairs_scored"] == 3
+        assert summary["packs_created"] == 0
+        assert summary["merge_reason"] == "All pairs gated: missing original creditor"
+        summary_metrics = summary.get("metrics", {})
+        assert summary_metrics.get("pairs_scored") == 3
+        assert summary_metrics.get("created_packs") == 0
+        assert summary_metrics.get("merge_zero_packs") is True
+
+        barriers = ctx.payload["umbrella_barriers"]
+        assert barriers["merge_zero_packs"] is True
+
+
+def test_umbrella_barriers_include_merge_zero_packs_diagnostic(tmp_path, monkeypatch):
+    with _zero_pack_finalization(
+        tmp_path,
+        monkeypatch,
+        sid="S-zero-pack-barrier",
+    ) as ctx:
+        barriers = ctx.payload["umbrella_barriers"]
+        assert barriers["merge_zero_packs"] is True
+        assert barriers["merge_ready"] is True
+
+
+def test_runflow_emits_merge_zero_packs_step(tmp_path, monkeypatch):
+    with _zero_pack_finalization(
+        tmp_path,
+        monkeypatch,
+        sid="S-zero-pack-step",
+        emit_step=True,
+    ) as ctx:
+        merge_stage = ctx.steps.get("stages", {}).get("merge", {})
+        zero_pack_entries = [
+            entry for entry in merge_stage.get("steps", []) if entry.get("name") == "merge_zero_packs"
+        ]
+        assert len(zero_pack_entries) == 1
+        assert zero_pack_entries[0].get("status") == "success"
+        assert zero_pack_entries[0].get("out") == {
+            "skip_reason_top": "missing_original_creditor",
+            "skip_counts": {"missing_original_creditor": 2},
+        }
+
+
+def test_finalize_backfills_missing_merge_zero_packs(tmp_path, monkeypatch):
+    with _zero_pack_finalization(
+        tmp_path,
+        monkeypatch,
+        sid="S-zero-pack-backfill",
+        include_merge_zero=False,
+        skip_count=4,
+    ) as ctx:
+        metrics = ctx.payload["stages"]["merge"]["metrics"]
+        summary = ctx.payload["stages"]["merge"]["summary"]
+        assert metrics["merge_zero_packs"] is True
+        assert summary["merge_zero_packs"] is True
+        assert ctx.result["metrics"]["merge_zero_packs"] is True
+
+
+def test_reconcile_backfills_zero_pack_metadata_from_index(tmp_path, monkeypatch):
+    global runflow_module, runflow_decider
+
+    runs_root = tmp_path / "runs"
+    sid = "S-zero-reconcile"
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    monkeypatch.setenv("MERGE_ZERO_PACKS_SIGNAL", "1")
+    monkeypatch.setenv("MERGE_SKIP_COUNTS_ENABLED", "1")
+
+    umbrella_module = ModuleType("backend.runflow.umbrella")
+    umbrella_module.schedule_merge_autosend = lambda *args, **kwargs: None
+    umbrella_module.schedule_note_style_after_validation = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "backend.runflow.umbrella", umbrella_module)
+
+    runflow_module = importlib.reload(runflow_module)
+    runflow_decider = importlib.reload(runflow_decider)
+
+    try:
+        runflow_decider.record_stage(
+            sid,
+            "merge",
+            status="success",
+            counts={"pairs_scored": 0, "packs_created": 0},
+            empty_ok=True,
+            metrics={},
+            runs_root=runs_root,
+            refresh_barriers=False,
+        )
+
+        run_dir = runs_root / sid
+
+        manifest_index = os.path.join("ai_packs", "merge", "pairs_index.json")
+        manifest_payload = {"ai": {"packs": {"index": manifest_index}}}
+        (run_dir / "manifest.json").write_text(
+            json.dumps(manifest_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        index_path = run_dir / "ai_packs" / "merge" / "pairs_index.json"
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_payload = {
+            "totals": {
+                "merge_zero_packs": True,
+                "scored_pairs": 7,
+                "created_packs": 0,
+                "skip_counts": {"missing_original_creditor": 7},
+                "skip_reason_top": "missing_original_creditor",
+                "reason": "All pairs gated: missing original creditor",
+            },
+            "pairs": [],
+        }
+        index_path.write_text(
+            json.dumps(index_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        statuses = runflow_decider.reconcile_umbrella_barriers(sid, runs_root=runs_root)
+
+        assert statuses["merge_zero_packs"] is True
+
+        payload = _load_runflow(runs_root, sid)
+        merge_stage = payload["stages"]["merge"]
+        metrics = merge_stage["metrics"]
+        summary = merge_stage["summary"]
+        assert merge_stage["merge_zero_packs"] is True
+        assert metrics["merge_zero_packs"] is True
+        assert summary["merge_zero_packs"] is True
+        assert metrics["pairs_scored"] == 7
+        assert metrics["created_packs"] == 0
+        assert metrics["skip_counts"] == {"missing_original_creditor": 7}
+        assert metrics["skip_reason_top"] == "missing_original_creditor"
+        assert summary.get("skip_counts") == {"missing_original_creditor": 7}
+        assert summary.get("skip_reason_top") == "missing_original_creditor"
+        assert metrics.get("reason") == "All pairs gated: missing original creditor"
+        assert summary.get("merge_reason") == "All pairs gated: missing original creditor"
+
+        umbrella_barriers = payload["umbrella_barriers"]
+        assert umbrella_barriers["merge_zero_packs"] is True
+    finally:
+        runflow_module = importlib.reload(runflow_module)
+        runflow_decider = importlib.reload(runflow_decider)
+
+
+def test_resolve_merge_index_path_prefers_manifest(tmp_path, monkeypatch):
+    sid = "S-index-manifest"
+    run_dir = tmp_path / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_index = os.path.join("ai_packs", "merge", "pairs_index.json")
+    manifest_payload = {"ai": {"packs": {"index": manifest_index}}}
+
+    monkeypatch.setenv("MERGE_INDEX_PATH", str(tmp_path / "ignored.json"))
+    monkeypatch.setattr(config, "MERGE_INDEX_PATH", "fallback/pairs_index.json", raising=False)
+
+    expected = (run_dir / "ai_packs" / "merge" / "pairs_index.json").resolve()
+
+    result = runflow_decider._resolve_merge_index_path(sid, run_dir, manifest_payload)
+
+    assert result == expected
+
+
+def test_resolve_merge_index_path_uses_env_override(tmp_path, monkeypatch):
+    sid = "S-index-env"
+    run_dir = tmp_path / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    env_relative = os.path.join("custom", "pairs_index.json")
+    expected = (run_dir / env_relative).resolve()
+
+    monkeypatch.setenv("MERGE_INDEX_PATH", env_relative)
+    monkeypatch.setattr(config, "MERGE_INDEX_PATH", "fallback/pairs_index.json", raising=False)
+
+    result = runflow_decider._resolve_merge_index_path(sid, run_dir, None)
+
+    assert result == expected
+
+
+def test_runflow_events_include_zero_pack_summary(tmp_path, monkeypatch):
+    with _zero_pack_finalization(
+        tmp_path,
+        monkeypatch,
+        sid="S-zero-pack-events",
+    ) as ctx:
+        events_path = ctx.runs_root / ctx.sid / "runflow_events.jsonl"
+        assert events_path.exists()
+        events = [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        merge_end_events = [
+            event for event in events if event.get("stage") == "merge" and event.get("event") == "end"
+        ]
+        assert merge_end_events, events
+        final_event = merge_end_events[-1]
+        summary = final_event.get("summary", {})
+        assert summary.get("merge_zero_packs") is True
+        assert summary.get("skip_reason_top") == "missing_original_creditor"
+        assert summary.get("skip_counts") == {"missing_original_creditor": 2}
+        metrics_payload = summary.get("metrics", {})
+        assert metrics_payload.get("merge_zero_packs") is True
+        assert metrics_payload.get("skip_reason_top") == "missing_original_creditor"
+
+
+def test_decider_skips_merge_send_wait_on_zero_packs(tmp_path, monkeypatch):
+    global runflow_module, runflow_decider
+
+    runs_root = tmp_path / "runs"
+    sid = "S-zero-fastpath"
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("MERGE_ZERO_PACKS_SIGNAL", "1")
+    monkeypatch.setenv("RUNFLOW_MERGE_ZERO_PACKS_FASTPATH", "1")
+
+    runflow_module = importlib.reload(runflow_module)
+    runflow_decider = importlib.reload(runflow_decider)
+
+    (runs_root / sid).mkdir(parents=True, exist_ok=True)
+
+    runflow_decider.record_stage(
+        sid,
+        "merge",
+        status="success",
+        counts={"pairs_scored": 5, "packs_created": 0},
+        empty_ok=True,
+        metrics={
+            "merge_zero_packs": True,
+            "skip_counts": {"missing_original_creditor": 3},
+            "skip_reason_top": "missing_original_creditor",
+        },
+        runs_root=runs_root,
+    )
+
+    decision = runflow_decider.decide_next(sid, runs_root=runs_root)
+
+    assert decision["next"] == "run_validation"
+    assert decision["reason"] == "merge_zero_packs"
+    assert decision.get("skip_merge_wait") is True
+    assert decision.get("merge_zero_packs") is True
+    assert decision.get("skip_reason_top") == "missing_original_creditor"
+    assert decision.get("skip_counts") == {"missing_original_creditor": 3}
+
+    payload = _load_runflow(runs_root, sid)
+    assert payload["run_state"] == "VALIDATING"
+
+    runflow_module = importlib.reload(runflow_module)
+    runflow_decider = importlib.reload(runflow_decider)
+
+
+def test_decider_fastpath_persists_without_run_state_change(tmp_path, monkeypatch):
+    global runflow_module, runflow_decider
+
+    runs_root = tmp_path / "runs"
+    sid = "S-fastpath-persist"
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("RUNFLOW_MERGE_ZERO_PACKS_FASTPATH", "1")
+    monkeypatch.setenv("VALIDATION_AUTOSEND", "1")
+    monkeypatch.setenv("VALIDATION_ZERO_PACKS_FASTPATH", "1")
+    monkeypatch.setenv("UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG", "1")
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+
+    runflow_module = importlib.reload(runflow_module)
+    runflow_decider = importlib.reload(runflow_decider)
+
+    def fake_enqueue(enqueue_sid: str, run_dir: Path, *, merge_zero_packs: bool, payload=None) -> bool:
+        runflow_module.runflow_step(
+            enqueue_sid,
+            "validation",
+            "fastpath_send",
+            status="queued",
+            out={"merge_zero_packs": bool(merge_zero_packs)},
+        )
+        lock_path = run_dir / ".locks" / "validation_fastpath.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text("locked", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(runflow_decider, "_enqueue_validation_fastpath", fake_enqueue)
+
+    runflow_decider.record_stage(
+        sid,
+        "merge",
+        status="success",
+        counts={"pairs_scored": 2, "packs_created": 0},
+        empty_ok=True,
+        metrics={
+            "merge_zero_packs": True,
+            "skip_counts": {"missing_original_creditor": 2},
+            "skip_reason_top": "missing_original_creditor",
+        },
+        runs_root=runs_root,
+    )
+
+    runflow_decider.record_stage(
+        sid,
+        "validation",
+        status="built",
+        counts={"findings_count": 3},
+        empty_ok=False,
+        metrics={"packs_total": 3},
+        runs_root=runs_root,
+    )
+
+    initial_snapshot = _load_runflow(runs_root, sid)
+    assert initial_snapshot["run_state"] == "VALIDATING"
+
+    decision = runflow_decider.decide_next(sid, runs_root=runs_root)
+
+    assert decision["next"] == "run_validation"
+    assert decision["reason"] == "merge_zero_packs"
+    assert decision.get("skip_merge_wait") is True
+
+    payload = _load_runflow(runs_root, sid)
+    assert payload["run_state"] == "VALIDATING"
+    validation_stage = payload["stages"]["validation"]
+    assert validation_stage["sent"] is True
+    assert validation_stage["status"] == "in_progress"
+    assert validation_stage["metrics"]["merge_zero_packs"] is True
+    assert validation_stage["metrics"]["skip_counts"] == {"missing_original_creditor": 2}
+    assert validation_stage["metrics"]["skip_reason_top"] == "missing_original_creditor"
+    assert validation_stage["skip_counts"] == {"missing_original_creditor": 2}
+    assert validation_stage["skip_reason_top"] == "missing_original_creditor"
+    assert isinstance(validation_stage["last_at"], str)
+    assert validation_stage["summary"]["merge_zero_packs"] is True
+    assert validation_stage["summary"]["skip_counts"] == {"missing_original_creditor": 2}
+    assert validation_stage["summary"]["skip_reason_top"] == "missing_original_creditor"
+    summary_metrics = validation_stage["summary"]["metrics"]
+    assert summary_metrics["merge_zero_packs"] is True
+    assert summary_metrics["skip_counts"] == {"missing_original_creditor": 2}
+    assert summary_metrics["skip_reason_top"] == "missing_original_creditor"
+
+    events_path = runs_root / sid / "runflow_events.jsonl"
+    events_text = events_path.read_text(encoding="utf-8")
+    assert '"fastpath_send"' in events_text
+    assert '"status": "queued"' in events_text
+
+    runflow_module = importlib.reload(runflow_module)
+    runflow_decider = importlib.reload(runflow_decider)
+
+
+def test_decider_fastpath_creates_validation_stage_when_missing(tmp_path, monkeypatch):
+    global runflow_module, runflow_decider
+
+    runs_root = tmp_path / "runs"
+    sid = "S-fastpath-create"
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("RUNFLOW_MERGE_ZERO_PACKS_FASTPATH", "1")
+    monkeypatch.setenv("VALIDATION_AUTOSEND", "1")
+    monkeypatch.setenv("VALIDATION_ZERO_PACKS_FASTPATH", "1")
+    monkeypatch.setenv("UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG", "1")
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+
+    runflow_module = importlib.reload(runflow_module)
+    runflow_decider = importlib.reload(runflow_decider)
+
+    enqueue_calls: list[tuple[str, Path, bool, dict[str, object]]] = []
+
+    def fake_enqueue(enqueue_sid: str, run_dir: Path, *, merge_zero_packs: bool, payload=None) -> bool:
+        enqueue_calls.append((enqueue_sid, run_dir, merge_zero_packs, dict(payload or {})))
+        lock_path = run_dir / ".locks" / "validation_fastpath.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text("locked", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(runflow_decider, "_enqueue_validation_fastpath", fake_enqueue)
+
+    runflow_decider.record_stage(
+        sid,
+        "merge",
+        status="success",
+        counts={"pairs_scored": 2, "packs_created": 0},
+        empty_ok=True,
+        metrics={
+            "merge_zero_packs": True,
+            "skip_counts": {"missing_original_creditor": 2},
+            "skip_reason_top": "missing_original_creditor",
+        },
+        runs_root=runs_root,
+    )
+
+    decision = runflow_decider.decide_next(sid, runs_root=runs_root)
+
+    assert decision["next"] == "run_validation"
+    assert decision["reason"] == "merge_zero_packs"
+    assert decision["validation_fastpath"] is True
+
+    payload = _load_runflow(runs_root, sid)
+    validation_stage = payload["stages"]["validation"]
+    assert validation_stage["sent"] is True
+    assert validation_stage["status"] == "in_progress"
+    assert validation_stage["metrics"]["merge_zero_packs"] is True
+    assert validation_stage["metrics"]["skip_counts"] == {"missing_original_creditor": 2}
+    assert validation_stage["metrics"]["skip_reason_top"] == "missing_original_creditor"
+    assert validation_stage["summary"]["merge_zero_packs"] is True
+    assert validation_stage["summary"]["skip_counts"] == {"missing_original_creditor": 2}
+    assert validation_stage["summary"]["skip_reason_top"] == "missing_original_creditor"
+    assert validation_stage["summary"]["metrics"]["merge_zero_packs"] is True
+    assert validation_stage["summary"]["metrics"]["skip_counts"] == {"missing_original_creditor": 2}
+    assert validation_stage["summary"]["metrics"]["skip_reason_top"] == "missing_original_creditor"
+    assert isinstance(validation_stage["last_at"], str)
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0][0] == sid
+    assert enqueue_calls[0][2] is True
+
+    runflow_module = importlib.reload(runflow_module)
+    runflow_decider = importlib.reload(runflow_decider)
 
 
 def test_note_style_stage_promotion_requires_completed_results(tmp_path: Path) -> None:

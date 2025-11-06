@@ -224,6 +224,9 @@ _UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS = max(
     _env_int("UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS", 5000), 0
 )
 _UMBRELLA_BARRIERS_DEBOUNCE_MS = max(_env_int("UMBRELLA_BARRIERS_DEBOUNCE_MS", 300), 0)
+_UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG = _env_enabled(
+    "UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG", True
+)
 
 
 _STEP_CALL_COUNTS: dict[tuple[str, str, str, str], int] = defaultdict(int)
@@ -637,6 +640,28 @@ def _apply_umbrella_barriers(
         except Exception:  # pragma: no cover - defensive
             disk_statuses = None
 
+    merge_zero_packs_flag = False
+    if _UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG and merge_stage:
+        merge_metrics = _ensure_metrics(merge_stage)
+        merge_zero_candidate: Any = merge_metrics.get("merge_zero_packs")
+        if merge_zero_candidate is None:
+            summary_payload = _ensure_summary(merge_stage)
+            direct_merge_zero = summary_payload.get("merge_zero_packs")
+            if direct_merge_zero is not None:
+                merge_zero_candidate = direct_merge_zero
+        if merge_zero_candidate is None:
+            summary_payload = _ensure_summary(merge_stage)
+            summary_metrics = summary_payload.get("metrics")
+            if isinstance(summary_metrics, Mapping):
+                merge_zero_candidate = summary_metrics.get("merge_zero_packs")
+        if merge_zero_candidate is None:
+            summary_payload = _ensure_summary(merge_stage)
+            scored_val = _coerce_int(summary_payload.get("pairs_scored"))
+            created_val = _coerce_int(summary_payload.get("packs_created"))
+            if scored_val is not None and created_val is not None and scored_val > 0 and created_val == 0:
+                merge_zero_candidate = True
+        merge_zero_packs_flag = bool(merge_zero_candidate)
+
     if isinstance(disk_statuses, Mapping) and disk_statuses:
         merge_ready = bool(disk_statuses.get("merge_ready", merge_ready))
         validation_ready = bool(
@@ -648,6 +673,10 @@ def _apply_umbrella_barriers(
         if _umbrella_require_style():
             default_all_ready = default_all_ready and style_ready
         all_ready = bool(disk_statuses.get("all_ready", default_all_ready))
+        if _UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG:
+            merge_zero_packs_flag = bool(
+                disk_statuses.get("merge_zero_packs", merge_zero_packs_flag)
+            )
     else:
         default_all_ready = merge_ready and validation_ready and review_ready
         if _umbrella_require_style():
@@ -662,6 +691,8 @@ def _apply_umbrella_barriers(
         "all_ready": all_ready,
         "checked_at": ts,
     }
+    if _UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG:
+        normalized_barriers["merge_zero_packs"] = merge_zero_packs_flag
     if _document_verifier_enabled():
         normalized_barriers.setdefault("document_ready", False)
     if isinstance(disk_statuses, Mapping):
@@ -1095,6 +1126,7 @@ def _normalize_barrier_flags(barriers: Optional[Mapping[str, Any]]) -> dict[str,
         "review_ready",
         "style_ready",
         "all_ready",
+        "merge_zero_packs",
     )
     result: dict[str, bool] = {}
     for key in keys:
@@ -1321,6 +1353,7 @@ def runflow_step(
                 "acctnum_pairs_summary",
                 "no_merge_candidates",
                 "pack_create",
+                "merge_zero_packs",
                 "merge_scoring_finish",
             }
             if status_for_steps == "success":

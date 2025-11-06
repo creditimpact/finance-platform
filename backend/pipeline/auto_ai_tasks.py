@@ -19,6 +19,7 @@ from backend.core.ai.paths import (
     parse_pair_result_filename,
     probe_legacy_ai_packs,
     validation_index_path,
+    validation_results_dir,
 )
 from backend.core.logic import polarity
 from backend.pipeline.auto_ai import (
@@ -46,7 +47,9 @@ from backend.runflow.decider import (
     decide_next,
     finalize_merge_stage,
     record_stage,
+    record_stage_force,
     reconcile_umbrella_barriers,
+    release_validation_fastpath_lock,
 )
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
 from backend.api.tasks import enqueue_generate_frontend_packs
@@ -113,6 +116,74 @@ _PAIR_TAG_BY_DECISION: dict[str, str] = {
     "same_debt_diff_account": "same_debt_pair",
     "same_debt_account_unknown": "same_debt_pair",
 }
+
+
+def _bool_env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    lowered = raw.strip().lower()
+    return lowered not in {"", "0", "false", "no", "off"}
+
+
+def _validation_zero_fastpath_enabled() -> bool:
+    return _bool_env_flag("VALIDATION_ZERO_PACKS_FASTPATH", True)
+
+
+def _ensure_zero_pack_validation_index(
+    sid: str,
+    runs_root: Path,
+    *,
+    merge_zero_packs: bool,
+) -> Path:
+    index_path = validation_index_path(sid, runs_root=runs_root, create=True)
+    if index_path.exists():
+        return index_path
+
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    validation_results_dir(sid, runs_root=runs_root).mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "sid": sid,
+        "generated_at": _isoformat_timestamp(),
+        "packs": [],
+        "totals": {
+            "packs_total": 0,
+            "merge_zero_packs": bool(merge_zero_packs),
+        },
+    }
+
+    try:
+        index_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.warning(
+            "VALIDATION_FASTPATH_INDEX_WRITE_FAILED sid=%s path=%s",
+            sid,
+            index_path,
+            exc_info=True,
+        )
+
+    return index_path
+
+
+def _append_runflow_event(run_dir: Path, payload: Mapping[str, object]) -> None:
+    events_path = run_dir / "runflow_events.jsonl"
+    try:
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        with events_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(dict(payload), ensure_ascii=False))
+            handle.write("\n")
+    except OSError:
+        logger.warning(
+            "RUNFLOW_EVENT_WRITE_FAILED sid=%s path=%s",
+            run_dir.name,
+            events_path,
+            exc_info=True,
+        )
+
 
 def _isoformat_timestamp(now: datetime | None = None) -> str:
     current = now or datetime.now(timezone.utc)
@@ -1110,27 +1181,106 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
 
     _populate_common_paths(payload)
     runs_root = Path(payload["runs_root"])
+    run_dir = runs_root / sid
     index_path = validation_index_path(sid, runs_root=runs_root, create=True)
 
-    if not index_path.exists():
-        logger.info(
-            "VALIDATION_SEND_SKIP sid=%s reason=index_missing path=%s", sid, index_path
-        )
-        runflow_step(
+    zero_fastpath = bool(payload.get("merge_zero_packs")) and _validation_zero_fastpath_enabled()
+    if zero_fastpath:
+        payload["validation_zero_fastpath"] = True
+        index_path = _ensure_zero_pack_validation_index(
             sid,
-            "validation",
-            "send",
-            status="skipped",
-            out={"reason": "index_missing"},
+            runs_root,
+            merge_zero_packs=True,
         )
-        return payload
-
-    logger.info("VALIDATION_SEND_START sid=%s path=%s", sid, index_path)
 
     try:
-        send_validation_packs(index_path, stage="validation")
-    except TypeError as exc:
-        if "stage" not in str(exc):
+        if not index_path.exists():
+            reason = "index_missing_fastpath" if zero_fastpath else "index_missing"
+            logger.info(
+                "VALIDATION_SEND_SKIP sid=%s reason=%s path=%s", sid, reason, index_path
+            )
+            runflow_step(
+                sid,
+                "validation",
+                "send",
+                status="success" if zero_fastpath else "skipped",
+                out={"reason": reason, "fastpath": zero_fastpath},
+            )
+            if zero_fastpath:
+                record_stage_force(
+                    sid,
+                    {
+                        "stages": {
+                            "validation": {
+                                "status": "success",
+                                "sent": True,
+                                "counts": {"findings_count": 0},
+                                "empty_ok": True,
+                                "metrics": {
+                                    "packs_total": 0,
+                                    "merge_zero_packs": True,
+                                },
+                                "last_at": _isoformat_timestamp(),
+                            }
+                        }
+                    },
+                    runs_root=runs_root,
+                    last_writer="validation_send_zero_index",
+                    refresh_barriers=False,
+                )
+                payload["validation_sent"] = True
+                try:
+                    reconcile_umbrella_barriers(sid, runs_root=runs_root)
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.warning(
+                        "VALIDATION_FASTPATH_BARRIERS_RECONCILE_FAILED sid=%s",
+                        sid,
+                        exc_info=True,
+                    )
+            return payload
+
+        logger.info("VALIDATION_SEND_START sid=%s path=%s", sid, index_path)
+
+        stage_start_snapshot: dict[str, object] = {
+            "stages": {
+                "validation": {
+                    "status": "in_progress",
+                    "sent": False,
+                    "last_at": _isoformat_timestamp(),
+                }
+            }
+        }
+        if zero_fastpath:
+            stage_start_snapshot["stages"]["validation"]["metrics"] = {
+                "merge_zero_packs": True
+            }
+        record_stage_force(
+            sid,
+            stage_start_snapshot,
+            runs_root=runs_root,
+            last_writer="validation_send_start",
+            refresh_barriers=False,
+        )
+
+        _append_runflow_event(
+            run_dir,
+            {
+                "ts": _isoformat_timestamp(),
+                "event": "validation.sender.started",
+                "sid": sid,
+                "path": str(index_path),
+                "fastpath": zero_fastpath,
+            },
+        )
+
+        try:
+            try:
+                send_validation_packs(index_path, stage="validation")
+            except TypeError as exc:
+                if "stage" not in str(exc):
+                    raise
+                send_validation_packs(index_path)
+        except Exception as exc:  # pragma: no cover - defensive logging
             logger.error(
                 "VALIDATION_SEND_FAILED sid=%s path=%s", sid, index_path, exc_info=True
             )
@@ -1148,48 +1298,125 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
                 message=str(exc),
                 traceback_tail=format_exception_tail(exc),
                 hint=compose_hint("validation send", exc),
-                summary={"phase": "send"},
+                summary={"phase": "send", "fastpath": zero_fastpath},
+            )
+            record_stage_force(
+                sid,
+                {
+                    "stages": {
+                        "validation": {
+                            "status": "error",
+                            "sent": False,
+                            "last_at": _isoformat_timestamp(),
+                            "metrics": {"fastpath": zero_fastpath},
+                        }
+                    }
+                },
+                runs_root=runs_root,
+                last_writer="validation_send_error",
+                refresh_barriers=False,
+            )
+            _append_runflow_event(
+                run_dir,
+                {
+                    "ts": _isoformat_timestamp(),
+                    "event": "validation.sender.error",
+                    "sid": sid,
+                    "path": str(index_path),
+                    "error": exc.__class__.__name__,
+                    "message": str(exc),
+                    "fastpath": zero_fastpath,
+                },
             )
             raise
-        send_validation_packs(index_path)
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.error(
-            "VALIDATION_SEND_FAILED sid=%s path=%s", sid, index_path, exc_info=True
-        )
+
+        payload["validation_sent"] = True
+        packs_sent = int(payload.get("validation_packs", 0) or 0)
+
+        logger.info("VALIDATION_SEND_DONE sid=%s", sid)
         runflow_step(
             sid,
             "validation",
             "send",
-            status="error",
-            out={"error": exc.__class__.__name__, "msg": str(exc)},
+            status="success",
+            metrics={"packs": packs_sent},
+            out={"fastpath": zero_fastpath},
         )
-        runflow_stage_error(
-            "validation",
-            sid=sid,
-            error_type=exc.__class__.__name__,
-            message=str(exc),
-            traceback_tail=format_exception_tail(exc),
-            hint=compose_hint("validation send", exc),
-            summary={"phase": "send"},
-        )
-        raise
 
-    payload["validation_sent"] = True
-    logger.info("VALIDATION_SEND_DONE sid=%s", sid)
-    runflow_step(
-        sid,
-        "validation",
-        "send",
-        metrics={"packs": int(payload.get("validation_packs", 0) or 0)},
-    )
-    if _maybe_autobuild_review(
-        sid,
-        already_triggered=bool(payload.get("review_autobuild_queued")),
-        source="validation_send",
-    ):
-        payload["review_autobuild_queued"] = True
-    logger.info("REVIEW_AUTO: post_validation_send sid=%s", sid)
-    return payload
+        metrics_update: dict[str, object] = {"packs_sent": packs_sent}
+        if zero_fastpath:
+            metrics_update["merge_zero_packs"] = True
+
+        record_stage_force(
+            sid,
+            {
+                "stages": {
+                    "validation": {
+                        "sent": True,
+                        "last_at": _isoformat_timestamp(),
+                        "metrics": metrics_update,
+                    }
+                }
+            },
+            runs_root=runs_root,
+            last_writer="validation_send_done",
+            refresh_barriers=False,
+        )
+
+        _append_runflow_event(
+            run_dir,
+            {
+                "ts": _isoformat_timestamp(),
+                "event": "validation.sender.completed",
+                "sid": sid,
+                "path": str(index_path),
+                "packs_sent": packs_sent,
+                "fastpath": zero_fastpath,
+            },
+        )
+
+        if zero_fastpath:
+            record_stage_force(
+                sid,
+                {
+                    "stages": {
+                        "validation": {
+                            "status": "success",
+                            "sent": True,
+                            "counts": {"findings_count": 0},
+                            "empty_ok": True,
+                            "metrics": {
+                                "packs_total": packs_sent,
+                                "merge_zero_packs": True,
+                            },
+                            "last_at": _isoformat_timestamp(),
+                        }
+                    }
+                },
+                runs_root=runs_root,
+                last_writer="validation_send_fastpath_success",
+                refresh_barriers=False,
+            )
+            try:
+                reconcile_umbrella_barriers(sid, runs_root=runs_root)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "VALIDATION_FASTPATH_BARRIERS_RECONCILE_FAILED sid=%s",
+                    sid,
+                    exc_info=True,
+                )
+
+        if _maybe_autobuild_review(
+            sid,
+            already_triggered=bool(payload.get("review_autobuild_queued")),
+            source="validation_send",
+        ):
+            payload["review_autobuild_queued"] = True
+
+        logger.info("REVIEW_AUTO: post_validation_send sid=%s", sid)
+        return payload
+    finally:
+        release_validation_fastpath_lock(run_dir)
 
 
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)

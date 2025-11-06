@@ -22,14 +22,15 @@ from backend.core.runflow import (
     runflow_decide_step,
     runflow_end_stage,
     runflow_refresh_umbrella_barriers,
+    runflow_step,
 )
+from backend.pipeline.runs import RunManifest
 from backend.runflow.counters import (
     _has_review_attachments as _frontend_has_review_attachments,
     frontend_answers_counters as _frontend_answers_counters,
     stage_counts as _stage_counts_from_disk,
 )
 from backend.validation.index_schema import load_validation_index
-from backend.ai.note_style_logging import log_note_style_decision
 
 from backend.frontend.packs.config import load_frontend_stage_config
 
@@ -55,6 +56,11 @@ StageName = Literal["merge", "validation", "frontend", "note_style"]
 log = logging.getLogger(__name__)
 
 _RUNFLOW_FILENAME = "runflow.json"
+def _log_note_style_decision(*args: Any, **kwargs: Any) -> None:
+    from backend.ai.note_style_logging import log_note_style_decision as _log
+
+    _log(*args, **kwargs)
+
 
 _STATUS_NORMALIZATION: Dict[str, str] = {
     "completed": "completed",
@@ -84,6 +90,33 @@ def _env_enabled(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _env_non_negative_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(str(raw).strip())
+    except Exception:
+        return default
+    return value if value >= 0 else default
+
+
+_MERGE_SKIP_COUNTS_ENABLED = _env_enabled("MERGE_SKIP_COUNTS_ENABLED", True)
+_MERGE_ZERO_PACKS_SIGNAL_ENABLED = _env_enabled("MERGE_ZERO_PACKS_SIGNAL", True)
+_RUNFLOW_EMIT_ZERO_PACKS_STEP = _env_enabled("RUNFLOW_EMIT_ZERO_PACKS_STEP", True)
+_RUNFLOW_MERGE_ZERO_PACKS_FASTPATH = _env_enabled("RUNFLOW_MERGE_ZERO_PACKS_FASTPATH", True)
+_UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG = _env_enabled(
+    "UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG", True
+)
+_VALIDATION_INDEX_MIN_BYTES = _env_non_negative_int("VALIDATION_INDEX_MIN_BYTES", 20)
+_VALIDATION_FASTPATH_WATCHDOG_LOCK_SECONDS = _env_non_negative_int(
+    "VALIDATION_FASTPATH_WATCHDOG_LOCK_SECONDS", 90
+)
+_VALIDATION_FASTPATH_WATCHDOG_EVENT_SECONDS = _env_non_negative_int(
+    "VALIDATION_FASTPATH_WATCHDOG_EVENT_SECONDS", 180
+)
 
 
 def _umbrella_barriers_enabled() -> bool:
@@ -153,6 +186,194 @@ def _runflow_path(sid: str, runs_root: Optional[str | Path]) -> Path:
     return base / _RUNFLOW_FILENAME
 
 
+def _resolve_merge_index_path(
+    sid: str,
+    run_dir: Path,
+    manifest_payload: Mapping[str, Any] | None = None,
+) -> Path:
+    candidate: Optional[str] = None
+
+    if isinstance(manifest_payload, Mapping):
+        ai_payload = manifest_payload.get("ai")
+        if isinstance(ai_payload, Mapping):
+            packs_payload = ai_payload.get("packs")
+            if isinstance(packs_payload, Mapping):
+                manifest_index = packs_payload.get("index")
+                if isinstance(manifest_index, str) and manifest_index.strip():
+                    candidate = manifest_index.strip()
+
+    if not candidate:
+        env_override = os.getenv("MERGE_INDEX_PATH")
+        if isinstance(env_override, str) and env_override.strip():
+            candidate = env_override.strip()
+
+    if not candidate:
+        candidate = str(config.MERGE_INDEX_PATH)
+
+    index_path = Path(candidate)
+    if not index_path.is_absolute():
+        index_path = (run_dir / index_path).resolve()
+
+    return index_path
+
+
+def _validation_fastpath_lock_path(run_dir: Path) -> Path:
+    return run_dir / ".locks" / "validation_fastpath.lock"
+
+
+def _fastpath_has_lock(run_dir: Path) -> bool:
+    lock_path = _validation_fastpath_lock_path(run_dir)
+    try:
+        return lock_path.exists()
+    except OSError:
+        log.debug(
+            "VALIDATION_FASTPATH_LOCK_CHECK_FAILED sid=%s path=%s",
+            _run_dir_sid(run_dir),
+            lock_path,
+            exc_info=True,
+        )
+        return False
+
+
+def _acquire_validation_fastpath_lock(run_dir: Path) -> Path | None:
+    lock_path = _validation_fastpath_lock_path(run_dir)
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return None
+    except OSError:
+        log.warning(
+            "VALIDATION_FASTPATH_LOCK_WRITE_FAILED sid=%s path=%s",
+            _run_dir_sid(run_dir),
+            lock_path,
+            exc_info=True,
+        )
+        return None
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(_now_iso())
+    except OSError:
+        log.warning(
+            "VALIDATION_FASTPATH_LOCK_WRITE_ABORT sid=%s path=%s",
+            _run_dir_sid(run_dir),
+            lock_path,
+            exc_info=True,
+        )
+        try:
+            lock_path.unlink()
+        except OSError:
+            log.debug(
+                "VALIDATION_FASTPATH_LOCK_CLEANUP_FAILED sid=%s path=%s",
+                _run_dir_sid(run_dir),
+                lock_path,
+                exc_info=True,
+            )
+        return None
+
+    return lock_path
+
+
+def release_validation_fastpath_lock(run_dir: Path) -> None:
+    lock_path = _validation_fastpath_lock_path(run_dir)
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        log.debug(
+            "VALIDATION_FASTPATH_LOCK_RELEASE_FAILED sid=%s path=%s",
+            _run_dir_sid(run_dir),
+            lock_path,
+            exc_info=True,
+        )
+
+
+def _enqueue_validation_fastpath(
+    sid: str,
+    run_dir: Path,
+    *,
+    merge_zero_packs: bool,
+    payload: Mapping[str, Any] | None = None,
+) -> bool:
+    if not merge_zero_packs:
+        return False
+
+    if not _validation_autosend_enabled():
+        return False
+
+    lock_path = _acquire_validation_fastpath_lock(run_dir)
+    if lock_path is None:
+        if _fastpath_has_lock(run_dir):
+            return True
+        return False
+
+    try:
+        from celery import chain
+        from backend.pipeline import auto_ai_tasks
+    except Exception:
+        log.warning(
+            "VALIDATION_FASTPATH_IMPORT_FAILED sid=%s",
+            sid,
+            exc_info=True,
+        )
+        try:
+            lock_path.unlink()
+        except OSError:
+            log.debug(
+                "VALIDATION_FASTPATH_LOCK_RELEASE_FAILED sid=%s path=%s",
+                sid,
+                lock_path,
+                exc_info=True,
+            )
+        return False
+
+    initial_payload: dict[str, Any] = {
+        "sid": sid,
+        "runs_root": str(run_dir.parent),
+        "merge_zero_packs": bool(merge_zero_packs),
+    }
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            if isinstance(key, str):
+                initial_payload[key] = value
+
+    try:
+        workflow = chain(
+            auto_ai_tasks.validation_build_packs.s(initial_payload),
+            # Send must precede compact so results are emitted before pruning.
+            auto_ai_tasks.validation_send.s(),
+            auto_ai_tasks.validation_compact.s(),
+        )
+        workflow.apply_async(queue="validation")
+    except Exception:
+        log.warning(
+            "VALIDATION_FASTPATH_QUEUE_FAILED sid=%s",
+            sid,
+            exc_info=True,
+        )
+        try:
+            lock_path.unlink()
+        except OSError:
+            log.debug(
+                "VALIDATION_FASTPATH_LOCK_RELEASE_FAILED sid=%s path=%s",
+                sid,
+                lock_path,
+                exc_info=True,
+            )
+        return False
+
+    runflow_step(
+        sid,
+        "validation",
+        "fastpath_send",
+        status="queued",
+        out={"merge_zero_packs": True},
+    )
+    log.info("VALIDATION_FASTPATH_ENQUEUED sid=%s", sid)
+    return True
+
 def _coerce_int(value: Any) -> Optional[int]:
     try:
         if value is None:
@@ -160,6 +381,505 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_boolish(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _validation_index_ready(run_dir: Path) -> bool:
+    index_path = _resolve_validation_index_path(run_dir)
+    try:
+        if not index_path.is_file():
+            return False
+        return index_path.stat().st_size >= _VALIDATION_INDEX_MIN_BYTES
+    except OSError:
+        log.debug(
+            "VALIDATION_INDEX_STAT_FAILED sid=%s path=%s",
+            _run_dir_sid(run_dir),
+            index_path,
+            exc_info=True,
+        )
+        return False
+
+
+def _runflow_events_path(run_dir: Path) -> Path:
+    return run_dir / "runflow_events.jsonl"
+
+
+def _last_validation_sender_event_timestamp(run_dir: Path, event_name: str) -> Optional[datetime]:
+    events_path = _runflow_events_path(run_dir)
+    try:
+        if not events_path.exists():
+            return None
+        lines = events_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        log.debug(
+            "VALIDATION_EVENTS_READ_FAILED sid=%s path=%s",
+            _run_dir_sid(run_dir),
+            events_path,
+            exc_info=True,
+        )
+        return None
+
+    for raw in reversed(lines):
+        if not raw.strip():
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        if payload.get("event") != event_name:
+            continue
+        timestamp = _parse_timestamp(payload.get("ts"))
+        if timestamp is not None:
+            return timestamp
+    return None
+
+
+def _rotate_validation_fastpath_lock(run_dir: Path) -> Path:
+    lock_path = _validation_fastpath_lock_path(run_dir)
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.debug(
+            "VALIDATION_FASTPATH_LOCK_ROTATE_UNLINK_FAILED sid=%s path=%s",
+            _run_dir_sid(run_dir),
+            lock_path,
+            exc_info=True,
+        )
+
+    timestamp = _now_iso()
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(timestamp, encoding="utf-8")
+    except OSError:
+        log.warning(
+            "VALIDATION_FASTPATH_LOCK_ROTATE_FAILED sid=%s path=%s",
+            _run_dir_sid(run_dir),
+            lock_path,
+            exc_info=True,
+        )
+    return lock_path
+
+
+def _stage_merge_zero_flag(stage_payload: Mapping[str, Any]) -> bool:
+    candidates: list[Any] = [stage_payload.get("merge_zero_packs")]
+    metrics_payload = stage_payload.get("metrics")
+    if isinstance(metrics_payload, Mapping):
+        candidates.append(metrics_payload.get("merge_zero_packs"))
+    summary_payload = stage_payload.get("summary")
+    if isinstance(summary_payload, Mapping):
+        candidates.append(summary_payload.get("merge_zero_packs"))
+        summary_metrics = summary_payload.get("metrics")
+        if isinstance(summary_metrics, Mapping):
+            candidates.append(summary_metrics.get("merge_zero_packs"))
+
+    for candidate in candidates:
+        boolish = _coerce_boolish(candidate)
+        if boolish is None:
+            continue
+        if boolish:
+            return True
+    return False
+
+
+def _validation_stuck_fastpath(
+    sid: str,
+    run_dir: Path,
+    snapshot: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    stages_payload = snapshot.get("stages")
+    if not isinstance(stages_payload, Mapping):
+        return None
+
+    validation_stage = stages_payload.get("validation")
+    if not isinstance(validation_stage, Mapping):
+        return None
+
+    status_raw = validation_stage.get("status")
+    status_normalized = str(status_raw).strip().lower() if isinstance(status_raw, str) else ""
+    if status_normalized not in {"built", "in_progress"}:
+        return None
+
+    if not _stage_merge_zero_flag(validation_stage):
+        return None
+
+    now = datetime.now(timezone.utc)
+
+    lock_path = _validation_fastpath_lock_path(run_dir)
+    lock_exists = False
+    lock_age_seconds: Optional[float] = None
+    try:
+        stat = lock_path.stat()
+    except FileNotFoundError:
+        stat = None
+    except OSError:
+        stat = None
+        log.debug(
+            "VALIDATION_FASTPATH_LOCK_STAT_FAILED sid=%s path=%s",
+            sid,
+            lock_path,
+            exc_info=True,
+        )
+
+    if stat is not None:
+        lock_exists = True
+        lock_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        lock_age_seconds = (now - lock_mtime).total_seconds()
+
+    last_sender_started = _last_validation_sender_event_timestamp(
+        run_dir, "validation.sender.started"
+    )
+
+    stale_lock = (
+        lock_exists
+        and lock_age_seconds is not None
+        and lock_age_seconds >= _VALIDATION_FASTPATH_WATCHDOG_LOCK_SECONDS
+    )
+
+    stale_events = (
+        last_sender_started is None
+        or (now - last_sender_started).total_seconds() >= _VALIDATION_FASTPATH_WATCHDOG_EVENT_SECONDS
+    )
+
+    if not stale_lock and not stale_events:
+        return None
+
+    context: dict[str, Any] = {
+        "lock_path": str(lock_path),
+        "lock_exists": lock_exists,
+        "lock_age_seconds": lock_age_seconds,
+        "stale_lock": stale_lock,
+        "stale_events": stale_events,
+    }
+    if last_sender_started is not None:
+        context["last_sender_started"] = last_sender_started.isoformat().replace("+00:00", "Z")
+    else:
+        context["last_sender_started"] = None
+
+    return context
+
+
+def _watchdog_trigger_validation_fastpath(
+    sid: str,
+    run_dir: Path,
+    snapshot: dict[str, Any],
+    context: Mapping[str, Any],
+) -> bool:
+    try:
+        from celery import chain
+        from backend.pipeline import auto_ai_tasks
+    except Exception:
+        log.warning(
+            "VALIDATION_FASTPATH_WATCHDOG_IMPORT_FAILED sid=%s",
+            sid,
+            exc_info=True,
+        )
+        return False
+
+    lock_path = _rotate_validation_fastpath_lock(run_dir)
+
+    payload = {
+        "sid": sid,
+        "runs_root": str(run_dir.parent),
+        "merge_zero_packs": True,
+        "fastpath": True,
+    }
+
+    workflow = chain(
+        auto_ai_tasks.validation_build_packs.s(payload),
+        # Watchdog re-enqueue follows the same ordering guarantees: send before compact.
+        auto_ai_tasks.validation_send.s(),
+        auto_ai_tasks.validation_compact.s(),
+    )
+    try:
+        workflow.apply_async(queue="validation")
+    except Exception:
+        log.warning(
+            "VALIDATION_FASTPATH_WATCHDOG_QUEUE_FAILED sid=%s",
+            sid,
+            exc_info=True,
+        )
+        return False
+
+    log.info(
+        "VALIDATION_FASTPATH_WATCHDOG_REENQUEUE sid=%s lock_path=%s lock_age=%.2f last_sender_started=%s",
+        sid,
+        lock_path,
+        float(context.get("lock_age_seconds") or 0.0),
+        context.get("last_sender_started"),
+    )
+
+    stages_payload = snapshot.setdefault("stages", {})
+    if isinstance(stages_payload, Mapping) and not isinstance(stages_payload, dict):
+        stages_payload = dict(stages_payload)
+        snapshot["stages"] = stages_payload
+
+    validation_stage = stages_payload.get("validation")
+    if not isinstance(validation_stage, dict):
+        validation_stage = dict(validation_stage) if isinstance(validation_stage, Mapping) else {}
+        stages_payload["validation"] = validation_stage
+
+    validation_stage["status"] = "in_progress"
+    validation_stage["sent"] = False
+    validation_stage["last_at"] = _now_iso()
+    validation_stage.setdefault("empty_ok", False)
+    validation_stage.setdefault("metrics", {})
+    metrics_payload = validation_stage.get("metrics")
+    if isinstance(metrics_payload, Mapping) and not isinstance(metrics_payload, dict):
+        metrics_payload = dict(metrics_payload)
+        validation_stage["metrics"] = metrics_payload
+    if isinstance(metrics_payload, dict):
+        metrics_payload.setdefault("merge_zero_packs", True)
+
+    return True
+def _maybe_enqueue_validation_fastpath(sid: str, run_dir: Path, snapshot: dict[str, Any]) -> bool:
+    stages_payload = snapshot.get("stages")
+    if isinstance(stages_payload, dict):
+        stages = stages_payload
+    elif isinstance(stages_payload, Mapping):
+        stages = dict(stages_payload)
+        snapshot["stages"] = stages
+    else:
+        stages = {}
+        snapshot["stages"] = stages
+
+    merge_stage_payload = stages.get("merge")
+    if isinstance(merge_stage_payload, dict):
+        merge_stage = merge_stage_payload
+    elif isinstance(merge_stage_payload, Mapping):
+        merge_stage = dict(merge_stage_payload)
+        stages["merge"] = merge_stage
+    else:
+        return False
+
+    merge_zero_candidates: list[Any] = [merge_stage.get("merge_zero_packs")]
+    metrics_payload = merge_stage.get("metrics")
+    if isinstance(metrics_payload, Mapping):
+        merge_zero_candidates.append(metrics_payload.get("merge_zero_packs"))
+    summary_payload = merge_stage.get("summary")
+    if isinstance(summary_payload, Mapping):
+        merge_zero_candidates.append(summary_payload.get("merge_zero_packs"))
+        summary_metrics_payload = summary_payload.get("metrics")
+        if isinstance(summary_metrics_payload, Mapping):
+            merge_zero_candidates.append(summary_metrics_payload.get("merge_zero_packs"))
+
+    merge_zero_flag = False
+    merge_zero_known = False
+    for candidate in merge_zero_candidates:
+        boolish = _coerce_boolish(candidate)
+        if boolish is None:
+            continue
+        merge_zero_known = True
+        if boolish:
+            merge_zero_flag = True
+            break
+    if not merge_zero_flag:
+        if not merge_zero_known:
+            pairs_scored = _coerce_int(merge_stage.get("pairs_scored"))
+            if pairs_scored is None:
+                pairs_scored = _coerce_int(merge_stage.get("scored_pairs"))
+            if pairs_scored is None and isinstance(summary_payload, Mapping):
+                pairs_scored = _coerce_int(summary_payload.get("pairs_scored"))
+            if pairs_scored is None and isinstance(metrics_payload, Mapping):
+                pairs_scored = _coerce_int(metrics_payload.get("pairs_scored"))
+
+            packs_created = _coerce_int(merge_stage.get("packs_created"))
+            if packs_created is None:
+                packs_created = _coerce_int(merge_stage.get("pack_files"))
+            if packs_created is None and isinstance(summary_payload, Mapping):
+                packs_created = _coerce_int(summary_payload.get("packs_created"))
+            if packs_created is None and isinstance(metrics_payload, Mapping):
+                packs_created = _coerce_int(metrics_payload.get("created_packs"))
+
+            if (
+                pairs_scored is not None
+                and packs_created is not None
+                and pairs_scored > 0
+                and packs_created == 0
+            ):
+                merge_zero_flag = True
+
+    if not merge_zero_flag:
+        return False
+
+    validation_stage_payload = stages.get("validation")
+    if isinstance(validation_stage_payload, dict):
+        validation_stage = validation_stage_payload
+    elif isinstance(validation_stage_payload, Mapping):
+        validation_stage = dict(validation_stage_payload)
+        stages["validation"] = validation_stage
+    else:
+        validation_stage = {}
+        stages["validation"] = validation_stage
+
+    sent_flag = bool(validation_stage.get("sent"))
+
+    metrics_existing = validation_stage.get("metrics")
+    summary_existing = validation_stage.get("summary")
+
+    results_payload = validation_stage.get("results")
+    if isinstance(results_payload, Mapping):
+        results = dict(results_payload)
+    else:
+        results = {}
+
+    total = _coerce_int(results.get("results_total"))
+    if total is None:
+        total = _coerce_int(results.get("total"))
+    if total is None:
+        total = 0
+
+    if total <= 0 and isinstance(metrics_existing, Mapping):
+        metrics_total = _coerce_int(metrics_existing.get("packs_total"))
+        if metrics_total is not None and metrics_total > 0:
+            total = metrics_total
+    if total <= 0 and isinstance(summary_existing, Mapping):
+        summary_metrics = summary_existing.get("metrics")
+        if isinstance(summary_metrics, Mapping):
+            summary_total = _coerce_int(summary_metrics.get("packs_total"))
+            if summary_total is not None and summary_total > 0:
+                total = summary_total
+
+    completed = _coerce_int(results.get("completed"))
+    if completed is None:
+        completed = 0
+
+    results_incomplete = completed < total
+
+    if sent_flag and not results_incomplete:
+        return False
+
+    if _fastpath_has_lock(run_dir):
+        return False
+
+    if not _validation_index_ready(run_dir):
+        return False
+
+    skip_counts: dict[str, int] = {}
+    skip_reason: Optional[str] = None
+
+    def _accumulate_skip(source: Mapping[str, Any]) -> None:
+        nonlocal skip_counts, skip_reason
+        reason_candidate = source.get("skip_reason_top")
+        if isinstance(reason_candidate, str) and reason_candidate.strip():
+            if not skip_reason:
+                skip_reason = reason_candidate.strip()
+        counts_candidate = source.get("skip_counts")
+        if isinstance(counts_candidate, Mapping):
+            for key, value in counts_candidate.items():
+                if not isinstance(key, str):
+                    continue
+                coerced = _coerce_int(value)
+                if coerced is None:
+                    continue
+                skip_counts[key] = coerced
+
+    if isinstance(metrics_payload, Mapping):
+        _accumulate_skip(metrics_payload)
+    if isinstance(summary_payload, Mapping):
+        _accumulate_skip(summary_payload)
+        summary_metrics_payload = summary_payload.get("metrics")
+        if isinstance(summary_metrics_payload, Mapping):
+            _accumulate_skip(summary_metrics_payload)
+
+    enqueue_payload: dict[str, Any] = {"merge_zero_fastpath": True}
+    if skip_counts:
+        enqueue_payload["skip_counts"] = dict(skip_counts)
+    if skip_reason:
+        enqueue_payload["skip_reason_top"] = skip_reason
+
+    enqueued = _enqueue_validation_fastpath(
+        sid,
+        run_dir,
+        merge_zero_packs=True,
+        payload=enqueue_payload,
+    )
+
+    if not enqueued:
+        return False
+
+    now_iso = _now_iso()
+
+    validation_stage["sent"] = True
+    validation_status_raw = validation_stage.get("status")
+    validation_status = str(validation_status_raw or "").strip().lower()
+    if validation_status in {"", "empty", "built", "pending"}:
+        validation_stage["status"] = "in_progress"
+    elif validation_status not in {"success", "error", "in_progress"}:
+        validation_stage["status"] = "in_progress"
+
+    validation_stage["last_at"] = now_iso
+
+    metrics_dict = validation_stage.get("metrics")
+    if isinstance(metrics_dict, Mapping):
+        metrics_dict = dict(metrics_dict)
+    else:
+        metrics_dict = {}
+    metrics_dict["merge_zero_packs"] = True
+    if skip_counts:
+        metrics_dict["skip_counts"] = dict(skip_counts)
+    if skip_reason:
+        metrics_dict["skip_reason_top"] = skip_reason
+    validation_stage["metrics"] = metrics_dict
+
+    summary_dict = validation_stage.get("summary")
+    if isinstance(summary_dict, Mapping):
+        summary_dict = dict(summary_dict)
+    else:
+        summary_dict = {}
+    summary_dict["merge_zero_packs"] = True
+    if skip_counts:
+        summary_dict["skip_counts"] = dict(skip_counts)
+    if skip_reason:
+        summary_dict["skip_reason_top"] = skip_reason
+
+    summary_metrics_dict = summary_dict.get("metrics")
+    if isinstance(summary_metrics_dict, Mapping):
+        summary_metrics_dict = dict(summary_metrics_dict)
+    else:
+        summary_metrics_dict = {}
+    summary_metrics_dict["merge_zero_packs"] = True
+    if skip_counts:
+        summary_metrics_dict["skip_counts"] = dict(skip_counts)
+    if skip_reason:
+        summary_metrics_dict["skip_reason_top"] = skip_reason
+    summary_dict["metrics"] = summary_metrics_dict
+    validation_stage["summary"] = summary_dict
+
+    if skip_counts and not isinstance(validation_stage.get("skip_counts"), Mapping):
+        validation_stage["skip_counts"] = dict(skip_counts)
+    if skip_reason and not validation_stage.get("skip_reason_top"):
+        validation_stage["skip_reason_top"] = skip_reason
+
+    validation_stage["results"] = results
+    stages["validation"] = validation_stage
+
+    if snapshot.get("run_state") == "INIT":
+        snapshot["run_state"] = "VALIDATING"
+
+    log.info(
+        "VALIDATION_FASTPATH_AUTO_ENQUEUE sid=%s merge_zero_packs=%s",
+        sid,
+        True,
+    )
+
+    return True
 
 
 _STAGE_STATUS_PRIORITY: dict[str, int] = {
@@ -365,6 +1085,167 @@ def _next_snapshot_version(*values: Any) -> int:
     return max(candidates) + 1
 
 
+def _ensure_merge_zero_pack_metadata(
+    sid: str,
+    run_dir: Path,
+    snapshot: dict[str, Any],
+    *,
+    manifest_payload: Mapping[str, Any] | None = None,
+) -> bool:
+    if not _UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG:
+        return False
+
+    stages_payload = snapshot.get("stages")
+    if isinstance(stages_payload, dict):
+        stages = stages_payload
+    elif isinstance(stages_payload, Mapping):
+        stages = dict(stages_payload)
+        snapshot["stages"] = stages
+    else:
+        return False
+
+    merge_stage_payload = stages.get("merge")
+    if isinstance(merge_stage_payload, dict):
+        merge_stage = merge_stage_payload
+    elif isinstance(merge_stage_payload, Mapping):
+        merge_stage = dict(merge_stage_payload)
+        stages["merge"] = merge_stage
+    else:
+        return False
+
+    metrics_payload = merge_stage.get("metrics")
+    if isinstance(metrics_payload, dict):
+        metrics = metrics_payload
+    elif isinstance(metrics_payload, Mapping):
+        metrics = dict(metrics_payload)
+        merge_stage["metrics"] = metrics
+    else:
+        metrics = {}
+        merge_stage["metrics"] = metrics
+
+    summary_payload = merge_stage.get("summary")
+    if isinstance(summary_payload, dict):
+        summary = summary_payload
+    elif isinstance(summary_payload, Mapping):
+        summary = dict(summary_payload)
+        merge_stage["summary"] = summary
+    else:
+        summary = {}
+        merge_stage["summary"] = summary
+
+    existing_flag = metrics.get("merge_zero_packs")
+    summary_flag = summary.get("merge_zero_packs")
+    if isinstance(existing_flag, bool) and existing_flag:
+        flag_present = True
+    elif isinstance(summary_flag, bool) and summary_flag:
+        flag_present = True
+    else:
+        flag_present = False
+
+    manifest_data = manifest_payload
+    if manifest_data is None:
+        manifest_path = run_dir / "manifest.json"
+        manifest_data = _load_json_mapping(manifest_path)
+
+    index_path = _resolve_merge_index_path(sid, run_dir, manifest_data)
+    if not index_path.exists():
+        return False
+
+    index_payload = _load_json_mapping(index_path)
+    if not isinstance(index_payload, Mapping):
+        return False
+
+    totals_payload = index_payload.get("totals")
+    if not isinstance(totals_payload, Mapping):
+        return False
+
+    merge_zero_raw = totals_payload.get("merge_zero_packs")
+    merge_zero_flag = bool(merge_zero_raw is True)
+
+    if not merge_zero_flag and flag_present:
+        return False
+
+    pairs_scored_value = _coerce_int(totals_payload.get("scored_pairs"))
+    created_packs_value = _coerce_int(totals_payload.get("created_packs"))
+    reason_value = totals_payload.get("reason")
+    reason_text = reason_value.strip() if isinstance(reason_value, str) else None
+    skip_reason_value = totals_payload.get("skip_reason_top")
+    skip_reason_text = skip_reason_value.strip() if isinstance(skip_reason_value, str) else None
+
+    skip_counts_payload = totals_payload.get("skip_counts")
+    normalized_skip_counts: dict[str, int] = {}
+    if isinstance(skip_counts_payload, Mapping):
+        for key, value in skip_counts_payload.items():
+            if not isinstance(key, str):
+                continue
+            coerced = _coerce_int(value)
+            if coerced is None:
+                continue
+            normalized_skip_counts[key] = coerced
+
+    metrics_updated = False
+
+    if pairs_scored_value is not None:
+        metrics["pairs_scored"] = pairs_scored_value
+        metrics.setdefault("scored_pairs", pairs_scored_value)
+        metrics_updated = True
+
+    if created_packs_value is not None:
+        metrics["created_packs"] = created_packs_value
+        metrics_updated = True
+
+    if normalized_skip_counts:
+        metrics["skip_counts"] = dict(normalized_skip_counts)
+        metrics_updated = True
+
+    if skip_reason_text:
+        metrics["skip_reason_top"] = skip_reason_text
+        metrics_updated = True
+
+    if reason_text:
+        metrics["reason"] = reason_text
+        metrics_updated = True
+
+    if merge_zero_flag:
+        metrics["merge_zero_packs"] = True
+        summary["merge_zero_packs"] = True
+        merge_stage["merge_zero_packs"] = True
+        metrics_updated = True
+
+    if pairs_scored_value is not None:
+        summary.setdefault("pairs_scored", pairs_scored_value)
+    if created_packs_value is not None:
+        summary.setdefault("packs_created", created_packs_value)
+    if normalized_skip_counts:
+        summary.setdefault("skip_counts", dict(normalized_skip_counts))
+    if skip_reason_text:
+        summary.setdefault("skip_reason_top", skip_reason_text)
+    if reason_text:
+        summary.setdefault("reason", reason_text)
+        summary.setdefault("merge_reason", reason_text)
+
+    barriers_payload = snapshot.get("umbrella_barriers")
+    if isinstance(barriers_payload, dict):
+        barriers = barriers_payload
+    elif isinstance(barriers_payload, Mapping):
+        barriers = dict(barriers_payload)
+        snapshot["umbrella_barriers"] = barriers
+    else:
+        barriers = {
+            "merge_ready": False,
+            "validation_ready": False,
+            "review_ready": False,
+            "style_ready": False,
+            "all_ready": False,
+        }
+        snapshot["umbrella_barriers"] = barriers
+
+    if merge_zero_flag:
+        barriers["merge_zero_packs"] = True
+
+    return metrics_updated or merge_zero_flag
+
+
 def _run_dir_sid(run_dir: Path) -> str:
     name = run_dir.name
     if name:
@@ -523,6 +1404,17 @@ def _load_runflow(path: Path, sid: str) -> dict[str, Any]:
     }
 
 
+def get_runflow_snapshot(
+    sid: str,
+    runs_root: Optional[str | Path] = None,
+) -> dict[str, Any]:
+    """Return a deep copy of the runflow snapshot for ``sid``."""
+
+    path = _runflow_path(sid, runs_root)
+    snapshot = _load_runflow(path, sid)
+    return json.loads(json.dumps(snapshot))
+
+
 def record_stage(
     sid: str,
     stage: StageName,
@@ -555,23 +1447,87 @@ def record_stage(
     else:
         existing_stage = None
 
+    existing_stage_metrics: dict[str, Any] = {}
+    existing_stage_results: dict[str, Any] = {}
+    existing_summary_metrics: dict[str, Any] = {}
+    existing_summary_results: dict[str, Any] = {}
+    if isinstance(existing_stage, Mapping):
+        existing_metrics_payload = existing_stage.get("metrics")
+        if isinstance(existing_metrics_payload, Mapping):
+            existing_stage_metrics = dict(existing_metrics_payload)
+        existing_results_payload = existing_stage.get("results")
+        if isinstance(existing_results_payload, Mapping):
+            existing_stage_results = dict(existing_results_payload)
+        summary_payload_existing = existing_stage.get("summary")
+        if isinstance(summary_payload_existing, Mapping):
+            summary_metrics_existing = summary_payload_existing.get("metrics")
+            if isinstance(summary_metrics_existing, Mapping):
+                existing_summary_metrics = dict(summary_metrics_existing)
+            summary_results_existing = summary_payload_existing.get("results")
+            if isinstance(summary_results_existing, Mapping):
+                existing_summary_results = dict(summary_results_existing)
+
     normalized_counts: dict[str, int] = {}
     for key, value in (counts or {}).items():
         coerced = _coerce_int(value)
         if coerced is not None:
             normalized_counts[str(key)] = coerced
 
-    def _normalize_mapping(payload: Optional[Mapping[str, Any]]) -> dict[str, int]:
-        normalized: dict[str, int] = {}
+    def _normalize_mapping(payload: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
         if not isinstance(payload, Mapping):
             return normalized
         for key, value in payload.items():
+            str_key = str(key)
+            if isinstance(value, Mapping):
+                nested: dict[str, Any] = {}
+                for nested_key, nested_value in value.items():
+                    nested_coerced = _coerce_int(nested_value)
+                    if nested_coerced is not None:
+                        nested[str(nested_key)] = nested_coerced
+                    elif isinstance(nested_value, bool):
+                        nested[str(nested_key)] = bool(nested_value)
+                    elif isinstance(nested_value, str):
+                        nested[str(nested_key)] = nested_value
+                normalized[str_key] = nested
+                continue
+            if isinstance(value, bool):
+                normalized[str_key] = bool(value)
+                continue
+            if isinstance(value, str):
+                normalized[str_key] = value
+                continue
             coerced_value = _coerce_int(value)
             if coerced_value is not None:
-                normalized[str(key)] = coerced_value
+                normalized[str_key] = coerced_value
         return normalized
 
     normalized_metrics = _normalize_mapping(metrics)
+    merge_reason: Optional[str] = None
+    merge_skip_reason_top: Optional[str] = None
+    merge_zero_flag: Optional[bool] = None
+    merge_skip_counts: dict[str, int] = {}
+    if stage == "merge":
+        reason_candidate = normalized_metrics.get("merge_reason")
+        if isinstance(reason_candidate, str) and reason_candidate.strip():
+            merge_reason = reason_candidate.strip()
+        elif isinstance(normalized_metrics.get("reason"), str):
+            legacy_reason = str(normalized_metrics["reason"]).strip()
+            if legacy_reason:
+                merge_reason = legacy_reason
+        skip_candidate = normalized_metrics.get("skip_reason_top")
+        if isinstance(skip_candidate, str) and skip_candidate.strip():
+            merge_skip_reason_top = skip_candidate.strip()
+        skip_counts_candidate = normalized_metrics.get("skip_counts")
+        if isinstance(skip_counts_candidate, Mapping):
+            for key, value in skip_counts_candidate.items():
+                coerced_skip = _coerce_int(value)
+                if coerced_skip is None:
+                    continue
+                merge_skip_counts[str(key)] = coerced_skip
+        merge_zero_candidate = normalized_metrics.get("merge_zero_packs")
+        if merge_zero_candidate is not None:
+            merge_zero_flag = bool(merge_zero_candidate)
     normalized_results = _normalize_mapping(results)
 
     if stage == "frontend":
@@ -598,11 +1554,17 @@ def record_stage(
     for key, value in normalized_counts.items():
         stage_payload[key] = value
 
+    merged_stage_metrics = dict(existing_stage_metrics)
     if normalized_metrics:
-        stage_payload["metrics"] = dict(normalized_metrics)
+        merged_stage_metrics.update(normalized_metrics)
+    if merged_stage_metrics:
+        stage_payload["metrics"] = merged_stage_metrics
 
+    merged_stage_results = dict(existing_stage_results)
     if normalized_results:
-        stage_payload["results"] = dict(normalized_results)
+        merged_stage_results.update(normalized_results)
+    if merged_stage_results:
+        stage_payload["results"] = merged_stage_results
 
     if notes:
         stage_payload["notes"] = str(notes)
@@ -700,13 +1662,166 @@ def record_stage(
     )
 
     summary_payload: dict[str, Any] = {str(key): value for key, value in normalized_counts.items()}
-    if normalized_metrics:
-        summary_payload["metrics"] = dict(normalized_metrics)
-    if normalized_results:
-        summary_payload["results"] = dict(normalized_results)
+
+    def _apply_merge_summary_metrics(target: dict[str, Any], metrics_payload: Mapping[str, Any]) -> None:
+        merge_zero_candidate = metrics_payload.get("merge_zero_packs")
+        if merge_zero_candidate is not None:
+            target["merge_zero_packs"] = bool(merge_zero_candidate)
+        skip_reason_candidate = metrics_payload.get("skip_reason_top")
+        if isinstance(skip_reason_candidate, str) and skip_reason_candidate.strip():
+            target["skip_reason_top"] = skip_reason_candidate.strip()
+        skip_counts_candidate = metrics_payload.get("skip_counts")
+        if isinstance(skip_counts_candidate, Mapping):
+            normalized_skip_counts: dict[str, int] = {}
+            for skip_key, skip_val in skip_counts_candidate.items():
+                if not isinstance(skip_key, str):
+                    continue
+                coerced_skip = _coerce_int(skip_val)
+                if coerced_skip is None:
+                    continue
+                normalized_skip_counts[skip_key] = coerced_skip
+            if normalized_skip_counts:
+                target["skip_counts"] = normalized_skip_counts
+
+    metrics_source_for_summary: Mapping[str, Any] | None
+    if merged_stage_metrics:
+        metrics_source_for_summary = merged_stage_metrics
+    elif normalized_metrics:
+        metrics_source_for_summary = normalized_metrics
+    else:
+        metrics_source_for_summary = None
+
+    summary_metrics_copy = (
+        json.loads(json.dumps(metrics_source_for_summary)) if metrics_source_for_summary else {}
+    )
+    if normalized_metrics and stage == "merge":
+        _apply_merge_summary_metrics(summary_payload, normalized_metrics)
+        _apply_merge_summary_metrics(stage_payload, normalized_metrics)
+
+    if existing_summary_metrics or summary_metrics_copy:
+        merged_summary_metrics = dict(existing_summary_metrics)
+        merged_summary_metrics.update(summary_metrics_copy)
+        if merged_summary_metrics:
+            summary_payload["metrics"] = merged_summary_metrics
+
+    summary_results_copy = dict(normalized_results) if normalized_results else {}
+    if existing_summary_results or summary_results_copy:
+        merged_summary_results = dict(existing_summary_results)
+        merged_summary_results.update(summary_results_copy)
+        if merged_summary_results:
+            summary_payload["results"] = merged_summary_results
     summary_payload["empty_ok"] = bool(empty_ok)
     if notes:
         summary_payload["notes"] = str(notes)
+
+    if stage == "merge":
+        merge_zero_from_metrics = normalized_metrics.get("merge_zero_packs") if isinstance(normalized_metrics, Mapping) else None
+        if merge_zero_from_metrics is not None and "merge_zero_packs" not in summary_payload:
+            summary_payload["merge_zero_packs"] = bool(merge_zero_from_metrics)
+        if merge_zero_from_metrics is not None and "merge_zero_packs" not in stage_payload:
+            stage_payload["merge_zero_packs"] = bool(merge_zero_from_metrics)
+
+        if "pairs_scored" in normalized_counts:
+            summary_payload["pairs_scored"] = normalized_counts["pairs_scored"]
+        if "packs_created" in normalized_counts:
+            summary_payload["packs_created"] = normalized_counts["packs_created"]
+
+        if "pairs_scored" not in summary_payload:
+            summary_pairs = _coerce_int(stage_payload.get("pairs_scored"))
+            if summary_pairs is None:
+                summary_pairs = _coerce_int(normalized_counts.get("pairs_scored"))
+            if summary_pairs is not None:
+                summary_payload["pairs_scored"] = summary_pairs
+        if "packs_created" not in summary_payload:
+            summary_created = _coerce_int(stage_payload.get("packs_created"))
+            if summary_created is None:
+                summary_created = _coerce_int(normalized_counts.get("packs_created"))
+            if summary_created is not None:
+                summary_payload["packs_created"] = summary_created
+
+        skip_reason_from_metrics = normalized_metrics.get("skip_reason_top") if isinstance(normalized_metrics, Mapping) else None
+        if isinstance(skip_reason_from_metrics, str) and skip_reason_from_metrics.strip():
+            summary_payload.setdefault("skip_reason_top", skip_reason_from_metrics.strip())
+            stage_payload.setdefault("skip_reason_top", skip_reason_from_metrics.strip())
+
+        merge_reason_from_metrics = normalized_metrics.get("merge_reason") if isinstance(normalized_metrics, Mapping) else None
+        if isinstance(merge_reason_from_metrics, str) and merge_reason_from_metrics.strip():
+            normalized_reason = merge_reason_from_metrics.strip()
+            summary_payload["merge_reason"] = normalized_reason
+            stage_payload["merge_reason"] = normalized_reason
+            summary_payload.setdefault("reason", normalized_reason)
+            stage_payload.setdefault("reason", normalized_reason)
+
+        skip_counts_from_metrics = normalized_metrics.get("skip_counts") if isinstance(normalized_metrics, Mapping) else None
+        if isinstance(skip_counts_from_metrics, Mapping):
+            normalized_skip_counts: dict[str, int] = {}
+            for skip_key, skip_val in skip_counts_from_metrics.items():
+                if not isinstance(skip_key, str):
+                    continue
+                coerced_skip = _coerce_int(skip_val)
+                if coerced_skip is None:
+                    continue
+                normalized_skip_counts[skip_key] = coerced_skip
+            if normalized_skip_counts:
+                summary_payload.setdefault("skip_counts", dict(normalized_skip_counts))
+                stage_payload.setdefault("skip_counts", dict(normalized_skip_counts))
+
+        if merge_zero_flag is None:
+            if isinstance(existing_stage, Mapping):
+                existing_zero = existing_stage.get("merge_zero_packs")
+                if existing_zero is not None:
+                    merge_zero_flag = bool(existing_zero)
+                else:
+                    existing_summary_payload = existing_stage.get("summary")
+                    if isinstance(existing_summary_payload, Mapping):
+                        existing_summary_zero = existing_summary_payload.get("merge_zero_packs")
+                        if existing_summary_zero is not None:
+                            merge_zero_flag = bool(existing_summary_zero)
+                        else:
+                            existing_metrics_payload = existing_summary_payload.get("metrics")
+                            if isinstance(existing_metrics_payload, Mapping):
+                                merge_zero_candidate = existing_metrics_payload.get("merge_zero_packs")
+                                if merge_zero_candidate is not None:
+                                    merge_zero_flag = bool(merge_zero_candidate)
+        if merge_zero_flag is not None:
+            stage_payload["merge_zero_packs"] = bool(merge_zero_flag)
+            summary_payload["merge_zero_packs"] = bool(merge_zero_flag)
+
+        stage_metrics_for_summary = stage_payload.get("metrics")
+        if isinstance(stage_metrics_for_summary, Mapping):
+            summary_payload.setdefault("metrics", json.loads(json.dumps(stage_metrics_for_summary)))
+
+        if not merge_skip_counts and isinstance(existing_stage, Mapping):
+            existing_skip_counts = existing_stage.get("skip_counts")
+            if isinstance(existing_skip_counts, Mapping):
+                for key, value in existing_skip_counts.items():
+                    coerced_skip = _coerce_int(value)
+                    if coerced_skip is not None:
+                        merge_skip_counts[str(key)] = coerced_skip
+            if not merge_skip_counts:
+                existing_summary_payload = existing_stage.get("summary")
+                if isinstance(existing_summary_payload, Mapping):
+                    summary_skip_counts = existing_summary_payload.get("skip_counts")
+                    if isinstance(summary_skip_counts, Mapping):
+                        for key, value in summary_skip_counts.items():
+                            coerced_skip = _coerce_int(value)
+                            if coerced_skip is not None:
+                                merge_skip_counts[str(key)] = coerced_skip
+
+        if merge_skip_counts:
+            stage_payload["skip_counts"] = dict(merge_skip_counts)
+            summary_payload["skip_counts"] = dict(merge_skip_counts)
+
+        if merge_reason:
+            stage_payload["merge_reason"] = merge_reason
+            summary_payload["merge_reason"] = merge_reason
+            summary_payload.setdefault("reason", merge_reason)
+            stage_payload.setdefault("reason", merge_reason)
+        if merge_skip_reason_top:
+            stage_payload.setdefault("skip_reason_top", merge_skip_reason_top)
+            summary_payload.setdefault("skip_reason_top", merge_skip_reason_top)
+
+        _ensure_merge_zero_pack_metadata(sid, base_dir, data)
 
     if stage == "merge":
         result_files_value = _coerce_int(summary_payload.get("result_files"))
@@ -760,6 +1875,61 @@ def record_stage(
             existing_summary_payload = final_stage_info.get("summary")
 
         if isinstance(existing_summary_payload, Mapping) and existing_summary_payload:
+            if stage == "merge":
+                summary_target = dict(existing_summary_payload)
+                summary_pairs_val = summary_target.get("pairs_scored")
+                if summary_pairs_val is None:
+                    stage_pairs = _coerce_int(final_stage_info.get("pairs_scored"))
+                    if stage_pairs is None:
+                        stage_pairs = _coerce_int(normalized_counts.get("pairs_scored"))
+                    if stage_pairs is not None:
+                        summary_target["pairs_scored"] = stage_pairs
+                summary_packs_val = summary_target.get("packs_created")
+                if summary_packs_val is None:
+                    stage_packs = _coerce_int(final_stage_info.get("packs_created"))
+                    if stage_packs is None:
+                        stage_packs = _coerce_int(normalized_counts.get("packs_created"))
+                    if stage_packs is not None:
+                        summary_target["packs_created"] = stage_packs
+
+                stage_metrics_payload = final_stage_info.get("metrics")
+                if isinstance(stage_metrics_payload, Mapping):
+                    stage_metrics_copy = json.loads(json.dumps(stage_metrics_payload))
+                    existing_summary_metrics = summary_target.get("metrics")
+                    if isinstance(existing_summary_metrics, Mapping):
+                        merged_summary_metrics = dict(existing_summary_metrics)
+                        merged_summary_metrics.update(stage_metrics_copy)
+                        summary_target["metrics"] = merged_summary_metrics
+                    else:
+                        summary_target["metrics"] = stage_metrics_copy
+
+                summary_reason_value = summary_target.get("merge_reason")
+                if not isinstance(summary_reason_value, str) or not summary_reason_value.strip():
+                    candidate_reason: Optional[str] = None
+                    stage_reason_value = stage_payload.get("merge_reason")
+                    if isinstance(stage_reason_value, str) and stage_reason_value.strip():
+                        candidate_reason = stage_reason_value.strip()
+                    elif isinstance(stage_metrics_payload, Mapping):
+                        stage_metrics_reason = stage_metrics_payload.get("merge_reason")
+                        if isinstance(stage_metrics_reason, str) and stage_metrics_reason.strip():
+                            candidate_reason = stage_metrics_reason.strip()
+                    if candidate_reason is None:
+                        summary_metrics_payload = summary_target.get("metrics")
+                        if isinstance(summary_metrics_payload, Mapping):
+                            summary_metrics_reason = summary_metrics_payload.get("merge_reason")
+                            if isinstance(summary_metrics_reason, str) and summary_metrics_reason.strip():
+                                candidate_reason = summary_metrics_reason.strip()
+                    if candidate_reason:
+                        summary_target["merge_reason"] = candidate_reason
+                        summary_target.setdefault("reason", candidate_reason)
+                        stage_payload["merge_reason"] = candidate_reason
+                        stage_payload.setdefault("reason", candidate_reason)
+                        final_stage_info["merge_reason"] = candidate_reason
+                        final_stage_info.setdefault("reason", candidate_reason)
+
+                existing_summary_payload = summary_target
+                final_stage_info["summary"] = dict(summary_target)
+
             summary_payload = dict(existing_summary_payload)
 
         empty_ok_value = final_stage_info.get("empty_ok")
@@ -792,6 +1962,50 @@ def record_stage(
         if isinstance(umbrella_ready_existing, bool):
             umbrella_ready_value = umbrella_ready_existing
 
+    if stage == "merge":
+        merge_barrier_flag: Optional[bool] = None
+        stage_merge_zero = stage_payload.get("merge_zero_packs")
+        if isinstance(stage_merge_zero, (bool, int, float)) and not isinstance(stage_merge_zero, str):
+            merge_barrier_flag = bool(stage_merge_zero)
+        elif isinstance(summary_payload, Mapping):
+            summary_merge_zero = summary_payload.get("merge_zero_packs")
+            if isinstance(summary_merge_zero, (bool, int, float)) and not isinstance(summary_merge_zero, str):
+                merge_barrier_flag = bool(summary_merge_zero)
+        if merge_barrier_flag is None and isinstance(summary_payload, Mapping):
+            summary_metrics_payload = summary_payload.get("metrics")
+            if isinstance(summary_metrics_payload, Mapping):
+                metrics_merge_zero = summary_metrics_payload.get("merge_zero_packs")
+                if isinstance(metrics_merge_zero, (bool, int, float)) and not isinstance(metrics_merge_zero, str):
+                    merge_barrier_flag = bool(metrics_merge_zero)
+        if merge_barrier_flag is None:
+            pairs_scored_val = _coerce_int(summary_payload.get("pairs_scored")) if isinstance(summary_payload, Mapping) else None
+            if pairs_scored_val is None:
+                pairs_scored_val = _coerce_int(stage_payload.get("pairs_scored"))
+            packs_created_val = _coerce_int(summary_payload.get("packs_created")) if isinstance(summary_payload, Mapping) else None
+            if packs_created_val is None:
+                packs_created_val = _coerce_int(stage_payload.get("packs_created"))
+            if (
+                pairs_scored_val is not None
+                and packs_created_val is not None
+                and pairs_scored_val > 0
+                and packs_created_val == 0
+            ):
+                merge_barrier_flag = True
+
+        if merge_barrier_flag is not None:
+            if barrier_event is None:
+                barrier_event = {}
+            barrier_event["merge_zero_packs"] = bool(merge_barrier_flag)
+            existing_barriers_payload = data.get("umbrella_barriers")
+            if isinstance(existing_barriers_payload, Mapping):
+                existing_barriers_payload = dict(existing_barriers_payload)
+                existing_barriers_payload["merge_zero_packs"] = bool(merge_barrier_flag)
+                data["umbrella_barriers"] = existing_barriers_payload
+            else:
+                data["umbrella_barriers"] = {
+                    "merge_zero_packs": bool(merge_barrier_flag),
+                }
+
     _atomic_write_json(path, data)
 
     runflow_end_stage(
@@ -812,6 +2026,54 @@ def record_stage(
     return data
 
 
+def _persist_runflow_data(
+    sid: str,
+    snapshot: Mapping[str, Any],
+    *,
+    runs_root: Optional[str | Path],
+    last_writer: str,
+) -> dict[str, Any]:
+    path = _runflow_path(sid, runs_root)
+    baseline = _load_runflow(path, sid)
+    merged_snapshot = _merge_runflow_snapshots(baseline, dict(snapshot))
+    merged_snapshot["snapshot_version"] = _next_snapshot_version(
+        baseline.get("snapshot_version"), merged_snapshot.get("snapshot_version")
+    )
+    timestamp = _now_iso()
+    merged_snapshot["last_writer"] = last_writer
+    merged_snapshot["updated_at"] = timestamp
+    _atomic_write_json(path, merged_snapshot)
+    return merged_snapshot
+
+
+def record_stage_force(
+    sid: str,
+    snapshot: Mapping[str, Any],
+    *,
+    runs_root: Optional[str | Path] = None,
+    last_writer: str = "record_stage_force",
+    refresh_barriers: bool = False,
+) -> dict[str, Any]:
+    merged_snapshot = _persist_runflow_data(
+        sid,
+        snapshot,
+        runs_root=runs_root,
+        last_writer=last_writer,
+    )
+
+    if refresh_barriers:
+        try:
+            reconcile_umbrella_barriers(sid, runs_root=runs_root)
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "RUNFLOW_FORCE_BARRIERS_FAILED sid=%s",
+                sid,
+                exc_info=True,
+            )
+
+    return merged_snapshot
+
+
 def finalize_merge_stage(
     sid: str,
     *,
@@ -829,10 +2091,87 @@ def finalize_merge_stage(
     existing_runflow = _load_runflow(runflow_path, sid)
     previous_status = _stage_status(existing_runflow.get("stages"), "merge")
 
-    index_path = merge_paths.index_file
+    manifest_index: Optional[Path] = None
+    manifest_payload: Mapping[str, Any] | None = None
+    manifest_path = base_dir / "manifest.json"
+    try:
+        manifest = RunManifest(manifest_path).load()
+    except FileNotFoundError:
+        manifest = None
+    except Exception:  # pragma: no cover - defensive logging
+        manifest = None
+        log.debug(
+            "RUNFLOW_MANIFEST_LOAD_FAILED sid=%s path=%s",
+            sid,
+            manifest_path,
+            exc_info=True,
+        )
+    else:
+        manifest_payload = manifest.data if isinstance(manifest.data, Mapping) else None
+        try:
+            manifest_index = manifest.get_ai_index_path()
+        except Exception:  # pragma: no cover - defensive logging
+            manifest_index = None
+            log.debug(
+                "RUNFLOW_MANIFEST_INDEX_RESOLVE_FAILED sid=%s path=%s",
+                sid,
+                manifest_path,
+                exc_info=True,
+            )
+
+    if manifest_payload is None:
+        manifest_payload = _load_json_mapping(manifest_path)
+
+    preferred_index = _resolve_merge_index_path(sid, base_dir, manifest_payload)
+    index_candidates: list[Path] = []
+    candidate_set: set[Path] = set()
+
+    def _append_candidate(path: Path) -> None:
+        resolved = path.resolve()
+        if resolved not in candidate_set:
+            candidate_set.add(resolved)
+            index_candidates.append(resolved)
+
+    _append_candidate(preferred_index)
+    if isinstance(manifest_index, Path):
+        _append_candidate(manifest_index)
+    if merge_paths.index_file not in candidate_set:
+        _append_candidate(merge_paths.index_file)
+
+    index_path = index_candidates[-1]
+    for candidate in index_candidates:
+        if candidate.exists():
+            index_path = candidate
+            break
+
+    verbose_logging = _env_enabled("RUNFLOW_VERBOSE", False)
+    if verbose_logging:
+        try:
+            log.info(
+                "MERGE_INDEX_RESOLVE sid=%s path=%s exists=%s",
+                sid,
+                str(index_path),
+                index_path.exists(),
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.debug(
+                "MERGE_INDEX_RESOLVE_LOG_FAILED sid=%s path=%s",
+                sid,
+                str(index_path),
+                exc_info=True,
+            )
+
     index_payload = _load_json_mapping(index_path)
     if not isinstance(index_payload, Mapping):
-        index_payload = {}
+        legacy_index_path = merge_dir / "index.json"
+        if legacy_index_path != index_path:
+            legacy_payload = _load_json_mapping(legacy_index_path)
+        else:
+            legacy_payload = None
+        if isinstance(legacy_payload, Mapping):
+            index_payload = legacy_payload
+        else:
+            index_payload = {}
 
     totals_payload = index_payload.get("totals")
     totals = dict(totals_payload) if isinstance(totals_payload, Mapping) else {}
@@ -841,7 +2180,59 @@ def finalize_merge_stage(
         coerced = _coerce_int(value)
         return coerced if coerced is not None else None
 
-    metrics: dict[str, int] = {}
+    def _maybe_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return None
+
+    totals_pairs_scored = _maybe_int(totals.get("scored_pairs"))
+    totals_created_packs = _maybe_int(totals.get("created_packs"))
+
+    skip_counts_payload = totals.get("skip_counts")
+    skip_counts_override: dict[str, int] = {}
+    if isinstance(skip_counts_payload, Mapping):
+        for k, v in skip_counts_payload.items():
+            coerced = _coerce_int(v)
+            if coerced is None:
+                continue
+            skip_counts_override[str(k)] = coerced
+
+    skip_reason_top_value = totals.get("skip_reason_top")
+    skip_reason_top_text: Optional[str]
+    if isinstance(skip_reason_top_value, str) and skip_reason_top_value.strip():
+        skip_reason_top_text = skip_reason_top_value.strip()
+    else:
+        skip_reason_top_text = None
+
+    reason_candidate = totals.get("reason")
+    merge_reason_text: Optional[str]
+    if isinstance(reason_candidate, str) and reason_candidate.strip():
+        merge_reason_text = reason_candidate.strip()
+    else:
+        merge_reason_text = None
+
+    merge_zero_override: Optional[bool] = _maybe_bool(totals.get("merge_zero_packs"))
+
+    merge_zero_totals_flag = merge_zero_override is True
+    zero_pack_success = (
+        merge_zero_totals_flag
+        and totals_created_packs == 0
+        and totals_pairs_scored is not None
+        and totals_pairs_scored > 0
+    )
+
+    pairs_payload = index_payload.get("pairs")
+    pairs_count = len(pairs_payload) if isinstance(pairs_payload, Sequence) else None
+
+    metrics: dict[str, Any] = {}
     for key in (
         "scored_pairs",
         "matches_strong",
@@ -857,20 +2248,41 @@ def finalize_merge_stage(
         if coerced is not None:
             metrics[key] = coerced
 
-    if "scored_pairs" not in metrics:
-        fallback_scored = _maybe_int(index_payload.get("scored_pairs"))
-        if fallback_scored is not None:
-            metrics["scored_pairs"] = fallback_scored
-    if "created_packs" not in metrics:
-        fallback_created = _maybe_int(index_payload.get("created_packs"))
-        if fallback_created is not None:
-            metrics["created_packs"] = fallback_created
+    fallback_scored = _maybe_int(index_payload.get("scored_pairs"))
+    if fallback_scored is not None:
+        metrics.setdefault("scored_pairs", fallback_scored)
 
-    pairs_payload = index_payload.get("pairs")
-    if isinstance(pairs_payload, list):
-        metrics["pairs_index_entries"] = len(pairs_payload)
-        if "created_packs" not in metrics:
-            metrics["created_packs"] = len(pairs_payload)
+    fallback_created = _maybe_int(index_payload.get("created_packs"))
+    if fallback_created is not None:
+        metrics.setdefault("created_packs", fallback_created)
+
+    if totals_pairs_scored is not None:
+        metrics["pairs_scored"] = totals_pairs_scored
+        metrics["scored_pairs"] = totals_pairs_scored
+    else:
+        metrics.setdefault("pairs_scored", metrics.get("scored_pairs", 0))
+        metrics.setdefault("scored_pairs", metrics.get("pairs_scored", 0))
+
+    if totals_created_packs is not None:
+        metrics["created_packs"] = totals_created_packs
+    else:
+        metrics.setdefault("created_packs", metrics.get("packs_built", fallback_created or 0))
+
+    if isinstance(skip_counts_payload, Mapping):
+        metrics["skip_counts"] = dict(skip_counts_override)
+
+    if skip_reason_top_text is not None:
+        metrics["skip_reason_top"] = skip_reason_top_text
+
+    if merge_reason_text is not None:
+        metrics["merge_reason"] = merge_reason_text
+        metrics["reason"] = merge_reason_text
+
+    if merge_zero_override is not None:
+        metrics["merge_zero_packs"] = bool(merge_zero_override)
+
+    if pairs_count is not None:
+        metrics["pairs_index_entries"] = pairs_count
 
     results_dir = merge_paths.results_dir
     result_glob = merge_result_glob_pattern()
@@ -881,7 +2293,32 @@ def finalize_merge_stage(
     except OSError:
         result_files_total = 0
 
-    metrics["result_files"] = result_files_total
+    if result_files_total == 0:
+        fallback_pattern = "pair-*.result.json"
+        try:
+            result_files_total = sum(
+                1 for path in results_dir.glob(fallback_pattern) if path.is_file()
+            )
+        except OSError:
+            pass
+
+    if result_files_total == 0:
+        fallback_pattern = "pair-*.result.json"
+        try:
+            result_files_total = sum(
+                1 for path in results_dir.glob(fallback_pattern) if path.is_file()
+            )
+        except OSError:
+            pass
+
+    if result_files_total == 0:
+        fallback_pattern = "pair-*.result.json"
+        try:
+            result_files_total = sum(
+                1 for path in results_dir.glob(fallback_pattern) if path.is_file()
+            )
+        except OSError:
+            pass
 
     packs_dir = merge_paths.packs_dir
     pack_glob = config.MERGE_PACK_GLOB or "pair_*.jsonl"
@@ -892,24 +2329,30 @@ def finalize_merge_stage(
     except OSError:
         pack_files_total = 0
 
+    metrics["result_files"] = result_files_total
     metrics["pack_files"] = pack_files_total
 
-    scored_pairs_value = metrics.get("scored_pairs")
+    scored_pairs_value = _maybe_int(metrics.get("pairs_scored"))
+    if scored_pairs_value is None:
+        scored_pairs_value = _maybe_int(metrics.get("scored_pairs"))
     if scored_pairs_value is None:
         scored_pairs_value = 0
-        metrics["scored_pairs"] = 0
+    metrics["pairs_scored"] = scored_pairs_value
+    metrics.setdefault("scored_pairs", scored_pairs_value)
 
     expected_candidates: list[int] = []
-    existing_created = _maybe_int(totals.get("created_packs"))
-    if existing_created is not None:
-        expected_candidates.append(existing_created)
-
-    fallback_created = _maybe_int(index_payload.get("created_packs"))
+    if totals_created_packs is not None:
+        expected_candidates.append(totals_created_packs)
+    packs_built_total = _maybe_int(totals.get("packs_built"))
+    if packs_built_total is not None:
+        expected_candidates.append(packs_built_total)
+    total_packs_total = _maybe_int(totals.get("total_packs"))
+    if total_packs_total is not None:
+        expected_candidates.append(total_packs_total)
     if fallback_created is not None:
         expected_candidates.append(fallback_created)
-
-    if isinstance(pairs_payload, list):
-        expected_candidates.append(len(pairs_payload))
+    if pairs_count is not None:
+        expected_candidates.append(pairs_count)
 
     expected_total: Optional[int]
     if expected_candidates:
@@ -917,9 +2360,13 @@ def finalize_merge_stage(
     else:
         expected_total = None
 
-    ready_counts_match = result_files_total == pack_files_total
-    if expected_total is not None:
-        ready_counts_match = ready_counts_match and result_files_total == expected_total
+    if zero_pack_success:
+        expected_total = 0
+        ready_counts_match = True
+    else:
+        ready_counts_match = result_files_total == pack_files_total
+        if expected_total is not None:
+            ready_counts_match = ready_counts_match and result_files_total == expected_total
 
     if not ready_counts_match:
         raise RuntimeError(
@@ -927,7 +2374,11 @@ def finalize_merge_stage(
             % (result_files_total, pack_files_total, expected_total)
         )
 
-    created_packs_value = result_files_total
+    created_packs_value = (
+        totals_created_packs
+        if totals_created_packs is not None
+        else result_files_total
+    )
     metrics["created_packs"] = created_packs_value
 
     counts: dict[str, int] = {
@@ -936,9 +2387,17 @@ def finalize_merge_stage(
         "result_files": result_files_total,
     }
 
-    empty_ok = created_packs_value == 0 or scored_pairs_value == 0
+    empty_ok = zero_pack_success or created_packs_value == 0 or scored_pairs_value == 0
 
     results_payload = {"result_files": result_files_total}
+
+    merge_zero_flag = merge_zero_override
+    if merge_zero_flag is None:
+        merge_zero_flag = created_packs_value == 0 and scored_pairs_value > 0
+    metrics["merge_zero_packs"] = bool(merge_zero_flag)
+
+    if isinstance(skip_counts_payload, Mapping) and not metrics.get("skip_counts"):
+        metrics["skip_counts"] = dict(skip_counts_override)
 
     record_stage(
         sid,
@@ -952,6 +2411,18 @@ def finalize_merge_stage(
         notes=notes,
         refresh_barriers=False,
     )
+
+    if _RUNFLOW_EMIT_ZERO_PACKS_STEP and metrics.get("merge_zero_packs"):
+        runflow_step(
+            sid,
+            "merge",
+            "merge_zero_packs",
+            status="success",
+            out={
+                "skip_reason_top": metrics.get("skip_reason_top"),
+                "skip_counts": metrics.get("skip_counts", {}),
+            },
+        )
 
     if previous_status != "success":
         log.info("MERGE_STAGE_PROMOTED sid=%s result_files=%s", sid, result_files_total)
@@ -1130,6 +2601,38 @@ def _apply_merge_stage_promotion(
         results = {}
     results["result_files"] = result_files_total
     stage_payload["results"] = results
+
+    metrics_payload = stage_payload.get("metrics")
+    if isinstance(metrics_payload, Mapping):
+        merge_zero_candidate = metrics_payload.get("merge_zero_packs")
+        if merge_zero_candidate is not None:
+            merge_zero_value = bool(merge_zero_candidate)
+            stage_payload["merge_zero_packs"] = merge_zero_value
+            summary["merge_zero_packs"] = merge_zero_value
+        skip_reason_candidate = metrics_payload.get("skip_reason_top")
+        if isinstance(skip_reason_candidate, str) and skip_reason_candidate.strip():
+            normalized_reason = skip_reason_candidate.strip()
+            stage_payload.setdefault("skip_reason_top", normalized_reason)
+            summary.setdefault("skip_reason_top", normalized_reason)
+        skip_counts_candidate = metrics_payload.get("skip_counts")
+        if isinstance(skip_counts_candidate, Mapping):
+            normalized_skip_counts: dict[str, int] = {}
+            for skip_key, skip_val in skip_counts_candidate.items():
+                if not isinstance(skip_key, str):
+                    continue
+                coerced_skip = _coerce_int(skip_val)
+                if coerced_skip is None:
+                    continue
+                normalized_skip_counts[skip_key] = coerced_skip
+            if normalized_skip_counts:
+                stage_payload.setdefault("skip_counts", dict(normalized_skip_counts))
+                existing_summary_skip_counts = summary.get("skip_counts")
+                if isinstance(existing_summary_skip_counts, Mapping):
+                    merged_counts = dict(existing_summary_skip_counts)
+                    merged_counts.update(normalized_skip_counts)
+                    summary["skip_counts"] = merged_counts
+                else:
+                    summary["skip_counts"] = dict(normalized_skip_counts)
 
     stage_payload["summary"] = summary
 
@@ -1390,7 +2893,7 @@ def _apply_note_style_stage_promotion(
         "completed_at": completed_at_value,
     }
 
-    log_note_style_decision(
+    _log_note_style_decision(
         "NOTE_STYLE_STAGE_STATUS_WRITE",
         logger=log,
         sid=run_dir.name,
@@ -1914,6 +3417,22 @@ def _validation_stage_ready(
     if packs_total is None:
         return False
 
+    status_raw = validation_stage.get("status")
+    status_normalized = str(status_raw).strip().lower() if isinstance(status_raw, str) else ""
+    sent_flag = bool(validation_stage.get("sent"))
+
+    if _stage_merge_zero_flag(validation_stage):
+        if status_normalized in {"success", "completed"}:
+            return True
+        if sent_flag:
+            last_sender_started = _last_validation_sender_event_timestamp(
+                run_dir, "validation.sender.started"
+            )
+            if last_sender_started is not None:
+                age_seconds = (datetime.now(timezone.utc) - last_sender_started).total_seconds()
+                if age_seconds <= _VALIDATION_FASTPATH_WATCHDOG_EVENT_SECONDS:
+                    return True
+
     if not _validation_autosend_enabled():
         return packs_total == 0
 
@@ -2096,6 +3615,15 @@ def _merge_artifacts_progress(
     except OSError:
         result_files_total = 0
 
+    if result_files_total == 0:
+        fallback_pattern = "pair-*.result.json"
+        try:
+            result_files_total = sum(
+                1 for path in results_dir.glob(fallback_pattern) if path.is_file()
+            )
+        except OSError:
+            pass
+
     try:
         pack_files_total = sum(
             1 for path in packs_dir.glob(pack_glob) if path.is_file()
@@ -2169,6 +3697,19 @@ def _compute_umbrella_barriers(
     else:
         stages = {}
 
+    def _flag_from_value(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return None
+
     def _stage_mapping(stage_name: str) -> Mapping[str, Any] | None:
         candidate = stages.get(stage_name)
         if isinstance(candidate, Mapping):
@@ -2220,7 +3761,10 @@ def _compute_umbrella_barriers(
         if merge_stage_result_files is None:
             merge_ready = merge_empty_ok and merge_disk_result_files == 0
         else:
-            merge_ready = merge_stage_result_files == merge_disk_result_files
+            if merge_disk_result_files == 0 and merge_stage_result_files > 0:
+                merge_ready = True
+            else:
+                merge_ready = merge_stage_result_files == merge_disk_result_files
 
     if not _umbrella_require_merge():
         if merge_stage_result_files is None:
@@ -2283,10 +3827,12 @@ def _compute_umbrella_barriers(
         if not review_ready and _stage_empty_ok(frontend_stage):
             review_ready = True
 
-    _style_total, _style_completed, _style_failed, style_ready_disk = (
+    style_total, style_completed, style_failed, style_ready_disk = (
         _note_style_results_progress(run_dir)
     )
     style_ready = style_ready_disk
+    if style_ready and style_total == 0 and not isinstance(note_style_stage, Mapping):
+        style_ready = False
     if not style_ready:
         if _stage_status_success(note_style_stage):
             style_ready = True
@@ -2299,6 +3845,55 @@ def _compute_umbrella_barriers(
     else:
         all_ready = all_ready_base
 
+    merge_zero_packs_flag = False
+    if _UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG:
+        merge_zero_candidate: Optional[bool] = None
+        if isinstance(merge_stage, Mapping):
+            containers: list[Mapping[str, Any]] = [merge_stage]
+            metrics_payload = merge_stage.get("metrics")
+            if isinstance(metrics_payload, Mapping):
+                containers.append(metrics_payload)
+            summary_payload = merge_stage.get("summary")
+            if isinstance(summary_payload, Mapping):
+                containers.append(summary_payload)
+                summary_metrics_payload = summary_payload.get("metrics")
+                if isinstance(summary_metrics_payload, Mapping):
+                    containers.append(summary_metrics_payload)
+            for container in containers:
+                candidate = _flag_from_value(container.get("merge_zero_packs"))
+                if candidate is not None:
+                    merge_zero_candidate = candidate
+                    break
+
+            if merge_zero_candidate is None:
+                summary_payload = merge_stage.get("summary")
+                scored_val: Optional[int] = None
+                created_val: Optional[int] = None
+                if isinstance(summary_payload, Mapping):
+                    scored_val = _coerce_int(summary_payload.get("pairs_scored"))
+                    created_val = _coerce_int(summary_payload.get("packs_created"))
+                    if created_val is None:
+                        created_val = _coerce_int(summary_payload.get("created_packs"))
+                metrics_payload = merge_stage.get("metrics")
+                if isinstance(metrics_payload, Mapping):
+                    if scored_val is None:
+                        scored_val = _coerce_int(metrics_payload.get("pairs_scored"))
+                        if scored_val is None:
+                            scored_val = _coerce_int(metrics_payload.get("scored_pairs"))
+                    if created_val is None:
+                        created_val = _coerce_int(metrics_payload.get("created_packs"))
+                        if created_val is None:
+                            created_val = _coerce_int(metrics_payload.get("packs_created"))
+                if (
+                    created_val is not None
+                    and scored_val is not None
+                    and created_val == 0
+                    and scored_val > 0
+                ):
+                    merge_zero_candidate = True
+
+        merge_zero_packs_flag = bool(merge_zero_candidate)
+
     readiness: dict[str, bool] = {
         "merge_ready": merge_ready,
         "validation_ready": validation_ready,
@@ -2306,6 +3901,9 @@ def _compute_umbrella_barriers(
         "style_ready": style_ready,
         "all_ready": all_ready,
     }
+
+    if _UMBRELLA_INCLUDE_MERGE_ZERO_PACKS_FLAG:
+        readiness["merge_zero_packs"] = merge_zero_packs_flag
 
     if _document_verifier_enabled():
         readiness["document_ready"] = False
@@ -2556,6 +4154,14 @@ def reconcile_umbrella_barriers(
     if "umbrella_barriers" not in data or not isinstance(data["umbrella_barriers"], Mapping):
         data["umbrella_barriers"] = _default_umbrella_barriers()
 
+    _ensure_merge_zero_pack_metadata(sid, run_dir, data)
+
+    _maybe_enqueue_validation_fastpath(sid, run_dir, data)
+
+    watchdog_context: Optional[dict[str, Any]] = _validation_stuck_fastpath(sid, run_dir, data)
+    if watchdog_context is not None:
+        _watchdog_trigger_validation_fastpath(sid, run_dir, data, watchdog_context)
+
     data["snapshot_version"] = _next_snapshot_version(
         latest_snapshot.get("snapshot_version"), data.get("snapshot_version")
     )
@@ -2704,16 +4310,40 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
     path = _runflow_path(sid, runs_root)
     data = _load_runflow(path, sid)
     stages: Mapping[str, Mapping[str, Any]] = data.get("stages", {})  # type: ignore[assignment]
+    if not isinstance(stages, dict):
+        stages = dict(stages)
+        data["stages"] = stages  # type: ignore[assignment]
+
+    run_dir = path.parent
 
     next_action = "run_validation"
     reason = "validation_pending"
     new_state: RunState = "VALIDATING"
+    skip_merge_wait = False
+    decision_metadata: dict[str, Any] = {}
+    stages_mutated = False
 
     def _set(next_value: str, reason_value: str, state_value: RunState) -> None:
         nonlocal next_action, reason, new_state
         next_action = next_value
         reason = reason_value
         new_state = state_value
+
+    def _normalize_skip_counts(payload: Optional[Mapping[str, Any]]) -> dict[str, int]:
+        normalized: dict[str, int] = {}
+        if not isinstance(payload, Mapping):
+            return normalized
+        for key, value in payload.items():
+            if not isinstance(key, str):
+                continue
+            coerced = _coerce_int(value)
+            if coerced is None:
+                continue
+            normalized[key] = coerced
+        return normalized
+
+    merge_stage: Mapping[str, Any] = {}
+    has_merge_stage = False
 
     for stage_name, stage_info in stages.items():
         if not isinstance(stage_info, Mapping):
@@ -2723,21 +4353,159 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
             _set("stop_error", f"{stage_name}_error", "ERROR")
             break
     else:
-        merge_stage = stages.get("merge")
+        merge_stage_payload = stages.get("merge")
+        has_merge_stage = isinstance(merge_stage_payload, Mapping)
+        if has_merge_stage:
+            merge_stage = merge_stage_payload  # type: ignore[assignment]
+        else:
+            merge_stage = {}
+
         accounts_count: Optional[int] = None
-        if isinstance(merge_stage, Mapping):
+        if has_merge_stage:
             for key in ("count", "accounts_count", "total_accounts"):
                 accounts_count = _coerce_int(merge_stage.get(key))
                 if accounts_count is not None:
                     break
 
+        metrics_payload = merge_stage.get("metrics") if has_merge_stage else None
+        skip_counts_metadata: dict[str, int] = {}
+
+        if isinstance(metrics_payload, Mapping):
+            skip_reason_top = metrics_payload.get("skip_reason_top")
+            if isinstance(skip_reason_top, str) and skip_reason_top.strip():
+                decision_metadata["skip_reason_top"] = skip_reason_top.strip()
+            skip_counts_metadata = _normalize_skip_counts(metrics_payload.get("skip_counts"))
+        else:
+            skip_reason_top = None
+
+        summary_payload = merge_stage.get("summary") if has_merge_stage else None
+        if skip_reason_top is None and isinstance(summary_payload, Mapping):
+            summary_metrics = summary_payload.get("metrics")
+            if isinstance(summary_metrics, Mapping):
+                candidate_reason = summary_metrics.get("skip_reason_top")
+                if isinstance(candidate_reason, str) and candidate_reason.strip():
+                    skip_reason_top = candidate_reason.strip()
+                    decision_metadata["skip_reason_top"] = skip_reason_top
+        if not skip_counts_metadata and isinstance(summary_payload, Mapping):
+            summary_metrics = summary_payload.get("metrics")
+            if isinstance(summary_metrics, Mapping):
+                skip_counts_metadata = _normalize_skip_counts(summary_metrics.get("skip_counts"))
+        if skip_counts_metadata:
+            decision_metadata.setdefault("skip_counts", skip_counts_metadata)
+
+        merge_zero_packs_flag = False
+        if isinstance(metrics_payload, Mapping):
+            merge_zero_packs_flag = bool(metrics_payload.get("merge_zero_packs"))
+        if not merge_zero_packs_flag and isinstance(summary_payload, Mapping):
+            summary_direct_flag = summary_payload.get("merge_zero_packs")
+            if isinstance(summary_direct_flag, str):
+                lowered = summary_direct_flag.strip().lower()
+                if lowered in {"1", "true", "yes", "on"}:
+                    merge_zero_packs_flag = True
+                elif lowered in {"0", "false", "no", "off"}:
+                    merge_zero_packs_flag = False
+            elif isinstance(summary_direct_flag, (int, float, bool)) and not isinstance(summary_direct_flag, str):
+                merge_zero_packs_flag = bool(summary_direct_flag)
+        if not merge_zero_packs_flag and isinstance(summary_payload, Mapping):
+            summary_metrics = summary_payload.get("metrics")
+            if isinstance(summary_metrics, Mapping):
+                merge_zero_packs_flag = bool(summary_metrics.get("merge_zero_packs"))
+
+        merge_status_value = str(merge_stage.get("status", "") or "").strip().lower()
+        merge_successful = merge_status_value in {"success", "built"}
+
         if accounts_count == 0:
             _set("complete_no_action", "no_accounts", "COMPLETE_NO_ACTION")
         else:
-            validation_stage = stages.get("validation")
-            if not isinstance(validation_stage, Mapping):
-                _set("run_validation", "validation_pending", "VALIDATING")
+            validation_stage = stages.get("validation") if isinstance(stages, Mapping) else None
+            validation_status_value = str(
+                validation_stage.get("status", "") if isinstance(validation_stage, Mapping) else ""
+            ).strip().lower()
+            validation_sent_flag = bool(validation_stage.get("sent")) if isinstance(validation_stage, Mapping) else False
+            validation_fastpath_locked = _fastpath_has_lock(run_dir)
+            zero_packs_fastpath = (
+                _RUNFLOW_MERGE_ZERO_PACKS_FASTPATH
+                and merge_successful
+                and merge_zero_packs_flag
+                and (
+                    not isinstance(validation_stage, Mapping)
+                    or validation_status_value in {"empty", "built", "pending"}
+                )
+            )
+
+            fastpath_enqueued = False
+            if zero_packs_fastpath and not validation_sent_flag and not validation_fastpath_locked:
+                fastpath_enqueued = _enqueue_validation_fastpath(
+                    sid,
+                    run_dir,
+                    merge_zero_packs=True,
+                    payload={"merge_zero_fastpath": True},
+                )
+                validation_fastpath_locked = validation_fastpath_locked or fastpath_enqueued
+
+            if zero_packs_fastpath and (validation_sent_flag or validation_fastpath_locked or fastpath_enqueued):
+                skip_merge_wait = True
+                _set("run_validation", "merge_zero_packs", "VALIDATING")
+                decision_metadata["validation_fastpath"] = True
+
+                if not isinstance(validation_stage, Mapping):
+                    validation_stage = {}
+                else:
+                    validation_stage = dict(validation_stage)
+
+                validation_stage["sent"] = True
+                stage_status_normalized = validation_status_value
+                if stage_status_normalized in {"empty", "built", "", "pending"}:
+                    validation_stage["status"] = "in_progress"
+
+                validation_stage["last_at"] = _now_iso()
+
+                metrics_payload = validation_stage.get("metrics")
+                if isinstance(metrics_payload, Mapping):
+                    metrics_payload = dict(metrics_payload)
+                else:
+                    metrics_payload = {}
+                metrics_payload["merge_zero_packs"] = True
+                if skip_counts_metadata:
+                    metrics_payload["skip_counts"] = dict(skip_counts_metadata)
+                if skip_reason_top:
+                    metrics_payload["skip_reason_top"] = skip_reason_top
+                validation_stage["metrics"] = metrics_payload
+
+                summary_payload = validation_stage.get("summary")
+                if isinstance(summary_payload, Mapping):
+                    summary_payload = dict(summary_payload)
+                else:
+                    summary_payload = {}
+                summary_payload["merge_zero_packs"] = True
+                if skip_counts_metadata:
+                    summary_payload["skip_counts"] = dict(skip_counts_metadata)
+                if skip_reason_top:
+                    summary_payload["skip_reason_top"] = skip_reason_top
+
+                summary_metrics_payload = summary_payload.get("metrics")
+                if isinstance(summary_metrics_payload, Mapping):
+                    summary_metrics_payload = dict(summary_metrics_payload)
+                else:
+                    summary_metrics_payload = {}
+                summary_metrics_payload["merge_zero_packs"] = True
+                if skip_counts_metadata:
+                    summary_metrics_payload["skip_counts"] = dict(skip_counts_metadata)
+                if skip_reason_top:
+                    summary_metrics_payload["skip_reason_top"] = skip_reason_top
+                summary_payload["metrics"] = summary_metrics_payload
+                validation_stage["summary"] = summary_payload
+
+                if skip_counts_metadata:
+                    validation_stage["skip_counts"] = dict(skip_counts_metadata)
+                if skip_reason_top:
+                    validation_stage["skip_reason_top"] = skip_reason_top
+
+                stages_mutated = True
+                stages["validation"] = validation_stage  # type: ignore[index]
             else:
+                if not isinstance(validation_stage, Mapping):
+                    validation_stage = {}
                 validation_status = str(validation_stage.get("status") or "")
                 normalized_validation_status = validation_status.strip().lower()
                 findings_count = _coerce_int(validation_stage.get("findings_count"))
@@ -2781,17 +4549,18 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
                         else:
                             _set("gen_frontend_packs", "validation_has_findings", "VALIDATING")
 
-    if data.get("run_state") != new_state:
+    run_state_changed = data.get("run_state") != new_state
+    if run_state_changed:
         data["run_state"] = new_state
-        latest_snapshot = _load_runflow(path, sid)
-        data = _merge_runflow_snapshots(latest_snapshot, data)
-        data["snapshot_version"] = _next_snapshot_version(
-            latest_snapshot.get("snapshot_version"), data.get("snapshot_version")
+
+    if run_state_changed or stages_mutated:
+        data = record_stage_force(
+            sid,
+            data,
+            runs_root=runs_root,
+            last_writer="decide_next",
+            refresh_barriers=False,
         )
-        data["last_writer"] = "decide_next"
-        timestamp = _now_iso()
-        data["updated_at"] = timestamp
-        _atomic_write_json(path, data)
         try:
             reconcile_umbrella_barriers(sid, runs_root=runs_root)
         except Exception:  # pragma: no cover - defensive logging
@@ -2829,7 +4598,29 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
                 exc_info=True,
             )
 
-    return {"next": next_action, "reason": reason}
+    decision_payload: dict[str, Any] = {"next": next_action, "reason": reason}
+    if skip_merge_wait:
+        decision_payload["skip_merge_wait"] = True
+    decision_payload.update(decision_metadata)
+    if (
+        _MERGE_ZERO_PACKS_SIGNAL_ENABLED
+        and "merge_zero_packs" not in decision_payload
+        and merge_stage
+    ):
+        merge_metrics_payload = merge_stage.get("metrics") if isinstance(merge_stage, Mapping) else None
+        merge_zero_flag = False
+        if isinstance(merge_metrics_payload, Mapping):
+            merge_zero_flag = bool(merge_metrics_payload.get("merge_zero_packs"))
+        if not merge_zero_flag and isinstance(merge_stage, Mapping):
+            summary_payload = merge_stage.get("summary")
+            if isinstance(summary_payload, Mapping):
+                summary_metrics_payload = summary_payload.get("metrics")
+                if isinstance(summary_metrics_payload, Mapping):
+                    merge_zero_flag = bool(summary_metrics_payload.get("merge_zero_packs"))
+        if merge_zero_flag:
+            decision_payload["merge_zero_packs"] = True
+
+    return decision_payload
 
 
 __all__ = [
@@ -2837,6 +4628,7 @@ __all__ = [
     "decide_next",
     "StageStatus",
     "RunState",
+    "get_runflow_snapshot",
     "refresh_validation_stage_from_index",
     "refresh_note_style_stage_from_index",
     "refresh_frontend_stage_from_responses",
@@ -2844,6 +4636,7 @@ __all__ = [
 ]
 if TYPE_CHECKING:
     from backend.ai.note_style.io import NoteStyleSnapshot
+    from backend.validation.index_schema import ValidationIndex
 
 
 def _note_style_snapshot_for_run(run_dir: Path) -> "NoteStyleSnapshot":

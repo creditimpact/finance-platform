@@ -7,20 +7,13 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from functools import lru_cache
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Union
 
 from backend.core.io.tags import read_tags
 from backend.core.merge.acctnum import normalize_level
 from backend.core.logic.normalize import last4 as normalize_last4
 from backend.core.logic.normalize import normalize_acctnum
-from backend.core.logic.report_analysis.account_merge import (
-    coerce_score_value,
-    detect_points_mode_from_payload,
-    get_merge_cfg,
-    normalize_parts_for_serialization,
-    resolve_identity_debt_fields,
-)
-from backend.core.logic.report_analysis.ai_pack import build_context_flags
 from backend.core.logic.report_analysis.constants import BUREAUS
 from backend.core.logic.report_analysis.keys import normalize_issuer
 
@@ -30,39 +23,180 @@ from . import config as merge_config
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = (
-    "You are a meticulous adjudicator for credit tradeline pairing. Decide if A & B "
-    "describe the same obligation. Consider high-precision cues (account numbers, "
-    "balances, dates) and lender/brand name variants. Use the numeric summary as a "
-    "hint but override it if context contradicts the data.\n"
-    "Allowed decisions (exact strings, choose one):\n"
-    "- same_account_same_debt        # accounts align and refer to the same debt\n"
-    "- same_account_diff_debt        # same account, but debt details clearly differ\n"
-    "- same_account_debt_unknown     # same account, debt status cannot be confirmed\n"
-    "- same_debt_diff_account        # same debt, but reported under a different account\n"
-    "- same_debt_account_unknown     # same debt, account identity cannot be confirmed\n"
-    "- different                     # neither the account nor the debt matches\n"
-    "Legacy labels (merge, same_debt, same_debt_account_different, same_account, "
-    "same_account_debt_different, different) may appear in reference material, but "
-    "you MUST respond using only the six decisions above.\n"
-    "If only last four digits match but stems differ, never choose any same_account_*.\n"
-    "If account identifiers DO NOT match, but:\n"
-    "- amounts_equal_within_tol is true for positive debt (balance and/or past due), AND\n"
-    "- one side is a collection agent (is_collection_agency_*) while the other is an original creditor (is_original_creditor_*), AND\n"
-    "- dates_plausible_chain is true (collection reported/opened after the original),\n"
-    "then prefer \"same_debt_diff_account\" over \"different\".\n"
-    "When BOTH sides are collection agencies:\n"
-    "- If amounts_equal_within_tol is true for positive debt and dates_plausible_chain is true, prefer \"same_debt_diff_account\" over \"different\".\n"
-    "- If amounts match but timing is ambiguous, use \"same_debt_account_unknown\".\n"
-    "- Do NOT pick \"different\" solely because account numbers or lender names differ.\n"
-    "Allowed outputs: same_account_same_debt, same_account_diff_debt, same_account_debt_unknown, same_debt_diff_account, same_debt_account_unknown, different.\n"
-    "Flags guidance:\n"
-    "- account_match = true only for same_account_* decisions; false for same_debt_* or different.\n"
-    "- debt_match = true for same_*_same_debt and same_debt_*; false for *_diff_debt and different; use \"unknown\" only when instructed (e.g., same_account_debt_unknown or same_debt_account_unknown).\n"
-    "Return strict JSON only: {\"decision\":\"<one above>\",\"reason\":\"short natural "
-    "language\",\"flags\":{\"account_match\":true|false|\"unknown\",\"debt_match\":true|false|"
-    "\"unknown\"}}. Do not add commentary or extra keys."
+@lru_cache(maxsize=1)
+def _account_merge_module():
+    from backend.core.logic.report_analysis import account_merge
+
+    return account_merge
+
+
+DUPLICATE_DEBT_SYSTEM = (
+    "You are an adjudicator for credit-report disputes.\n"
+    "Decide whether two accounts represent the same underlying debt shown twice (a duplicate).\n"
+    "Focus strictly on:\n"
+    "- Original creditor (OC) linkage and naming chains.\n"
+    "- Whether one account identifies the other account’s creditor as its OC.\n"
+    "- Whether names indicate a creditor → collection/servicer relationship.\n"
+    "- Only use the provided JSON (bureaus per account, account display name, primary_issue).\n"
+    "- If a bureau’s normalized original_creditor matches the other account’s normalized name, treat as duplicate unless explicit evidence disproves it.\n"
+    "\n"
+    "Output JSON only: {\"decision\": \"...\", \"reason\": \"...\", \"flags\": {\"duplicate\": true|false}}\n"
+    "Valid decisions: \"duplicate\" | \"not_duplicate\".\n"
+    "Make the reason short and cite which bureau/field(s) established the OC link or disproved it.\n"
+    "If data is insufficient, lean \"not_duplicate\" and say why."
 )
+
+
+def _load_json(path: Path, default: object) -> object:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return default
+    except OSError:
+        logger.warning("MERGE_DUP_AUDIT_FILE_READ_FAILED path=%s", path, exc_info=True)
+        return default
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning("MERGE_DUP_AUDIT_JSON_DECODE_FAILED path=%s", path, exc_info=True)
+        return default
+
+
+def _extract_account_name(meta_payload: Mapping[str, object] | None) -> str:
+    if not isinstance(meta_payload, Mapping):
+        return ""
+
+    for key in ("account_name", "label", "heading", "heading_guess", "name"):
+        value = meta_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _extract_primary_issue(tags_payload: object) -> str | None:
+    if isinstance(tags_payload, Mapping):
+        candidate = tags_payload.get("primary_issue")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    if isinstance(tags_payload, Sequence):
+        for entry in tags_payload:
+            if not isinstance(entry, Mapping):
+                continue
+            candidate = entry.get("primary_issue")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+            if str(entry.get("kind")).lower() == "issue":
+                issue_value = entry.get("type")
+                if isinstance(issue_value, str) and issue_value.strip():
+                    return issue_value.strip()
+
+    return None
+
+
+_DUPLICATE_NAME_PREFIX_RE = re.compile(r"^[0-9]+[\s\-:./]*")
+_DUPLICATE_NAME_SANITIZE_RE = re.compile(r"[^A-Z0-9]+")
+
+
+def _normalize_duplicate_name(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    text = _DUPLICATE_NAME_PREFIX_RE.sub("", text)
+    text = text.upper()
+    text = _DUPLICATE_NAME_SANITIZE_RE.sub(" ", text)
+    normalized = re.sub(r"\s+", " ", text).strip()
+    return normalized or None
+
+
+def _augment_bureaus_with_normalized_creditor(
+    bureaus_payload: object,
+) -> object:
+    if not isinstance(bureaus_payload, Mapping):
+        return bureaus_payload
+
+    enriched: Dict[str, object] = {}
+    for key, value in bureaus_payload.items():
+        if key in BUREAUS and isinstance(value, Mapping):
+            entry = dict(value)
+            normalized_oc = _normalize_duplicate_name(entry.get("original_creditor"))
+            if normalized_oc:
+                entry["original_creditor_normalized"] = normalized_oc
+            else:
+                entry.pop("original_creditor_normalized", None)
+            enriched[key] = entry
+        else:
+            enriched[key] = value
+    return enriched
+
+
+def build_duplicate_audit_payload(
+    runs_root: Path | str,
+    sid: str,
+    account_a: int,
+    account_b: int,
+) -> Dict[str, object]:
+    """Return minimal payload for duplicate debt adjudication."""
+
+    base = Path(runs_root) / str(sid) / "cases" / "accounts"
+
+    def load_account(idx: int) -> Dict[str, object]:
+        account_dir = base / str(idx)
+        bureaus_raw = _load_json(account_dir / "bureaus.json", {})
+        meta_raw = _load_json(account_dir / "meta.json", {})
+        tags_raw = _load_json(account_dir / "tags.json", [])
+
+        name = _extract_account_name(meta_raw)
+        name_normalized = _normalize_duplicate_name(name)
+        primary_issue = _extract_primary_issue(tags_raw)
+        bureaus = _augment_bureaus_with_normalized_creditor(bureaus_raw)
+
+        return {
+            "name": name,
+            "name_normalized": name_normalized,
+            "primary_issue": primary_issue,
+            "bureaus": bureaus,
+        }
+
+    return {
+        "sid": sid,
+        "pair": {"a": account_a, "b": account_b},
+        "a": load_account(account_a),
+        "b": load_account(account_b),
+        "contract": {
+            "response_format": "json",
+            "fields": ["decision", "reason", "flags"],
+        },
+    }
+
+
+def build_duplicate_debt_messages(payload: Mapping[str, object]) -> List[Dict[str, str]]:
+    user_payload = {
+        "sid": payload.get("sid"),
+        "pair": payload.get("pair"),
+        "a": {
+            "name": payload.get("a", {}).get("name"),
+            "name_normalized": payload.get("a", {}).get("name_normalized"),
+            "primary_issue": payload.get("a", {}).get("primary_issue"),
+            "bureaus": payload.get("a", {}).get("bureaus"),
+        },
+        "b": {
+            "name": payload.get("b", {}).get("name"),
+            "name_normalized": payload.get("b", {}).get("name_normalized"),
+            "primary_issue": payload.get("b", {}).get("primary_issue"),
+            "bureaus": payload.get("b", {}).get("bureaus"),
+        },
+    }
+
+    user_json = json.dumps(user_payload, ensure_ascii=False)
+
+    return [
+        {"role": "system", "content": DUPLICATE_DEBT_SYSTEM},
+        {"role": "user", "content": user_json},
+    ]
 
 MAX_CONTEXT_LINE_LENGTH = 240
 
@@ -374,8 +508,8 @@ def _select_primary_tag(entries: Sequence[_PairTag]) -> Mapping[str, object] | N
     best_score = None
     for entry in entries:
         payload = entry.payload
-        points_mode_active = detect_points_mode_from_payload(payload)
-        total = coerce_score_value(
+        points_mode_active = _account_merge_module().detect_points_mode_from_payload(payload)
+        total = _account_merge_module().coerce_score_value(
             payload.get("total"), points_mode=points_mode_active
         )
         score = (total, 1 if entry.kind == "merge_pair" else 0)
@@ -388,8 +522,8 @@ def _select_primary_tag(entries: Sequence[_PairTag]) -> Mapping[str, object] | N
 def _build_highlights(tag_payload: Mapping[str, object]) -> Mapping[str, object]:
     aux = tag_payload.get("aux") if isinstance(tag_payload.get("aux"), Mapping) else {}
     raw_parts = tag_payload.get("parts") if isinstance(tag_payload.get("parts"), Mapping) else {}
-    points_mode_active = detect_points_mode_from_payload(tag_payload)
-    parts = normalize_parts_for_serialization(
+    points_mode_active = _account_merge_module().detect_points_mode_from_payload(tag_payload)
+    parts = _account_merge_module().normalize_parts_for_serialization(
         raw_parts, points_mode=points_mode_active
     )
     conflicts = (
@@ -398,7 +532,7 @@ def _build_highlights(tag_payload: Mapping[str, object]) -> Mapping[str, object]
         else []
     )
 
-    identity_fields, debt_fields = resolve_identity_debt_fields()
+    identity_fields, debt_fields = _account_merge_module().resolve_identity_debt_fields()
     identity_score = _sum_parts(
         parts,
         identity_fields,
@@ -410,13 +544,15 @@ def _build_highlights(tag_payload: Mapping[str, object]) -> Mapping[str, object]
         as_float=points_mode_active,
     )
 
-    total_value = coerce_score_value(
+    total_value = _account_merge_module().coerce_score_value(
         tag_payload.get("total"), points_mode=points_mode_active
     )
     mid_candidate = tag_payload.get("mid")
     if mid_candidate is None:
         mid_candidate = tag_payload.get("mid_sum")
-    mid_value = coerce_score_value(mid_candidate, points_mode=points_mode_active)
+    mid_value = _account_merge_module().coerce_score_value(
+        mid_candidate, points_mode=points_mode_active
+    )
 
     return {
         "total": total_value,
@@ -435,7 +571,7 @@ def _build_highlights(tag_payload: Mapping[str, object]) -> Mapping[str, object]
 
 
 def _tolerance_hint() -> Mapping[str, float | int]:
-    cfg = get_merge_cfg()
+    cfg = _account_merge_module().get_merge_cfg()
     tolerances = cfg.tolerances if isinstance(cfg.tolerances, Mapping) else {}
 
     def _get_float(key: str, default: float) -> float:
@@ -505,6 +641,9 @@ def _collect_pair_entries(accounts_root: Path) -> tuple[Dict[tuple[int, int], Li
             if kind not in allowed_kinds:
                 continue
             decision = str(tag.get("decision", "")).lower()
+            pack_allowed_flag = tag.get("pack_allowed")
+            if pack_allowed_flag is not None and not bool(pack_allowed_flag):
+                continue
             acct_level = _extract_acct_level(tag)
             if decision != "ai":
                 is_hard_auto = decision == "auto" and acct_level == "exact_or_known_match"
@@ -558,23 +697,9 @@ def build_merge_ai_packs(
     runs_root: Path | str,
     *,
     only_merge_best: bool = True,
-    max_lines_per_side: int = 20,
+    max_lines_per_side: int = 20,  # Legacy signature retained; value unused for duplicate packs.
 ) -> List[Mapping[str, object]]:
-    """Build merge AI packs for ``sid``.
-
-    Parameters
-    ----------
-    sid:
-        The session identifier.
-    runs_root:
-        Root directory containing the ``runs/<sid>`` layout.
-    only_merge_best:
-        When ``True`` include only pairs that appear as ``merge_best`` partners.
-    max_lines_per_side:
-        Maximum number of context lines per account. Values greater than the
-        ``AI_PACK_MAX_LINES_PER_SIDE`` environment configuration are clamped to
-        that cap.
-    """
+    """Build duplicate-debt audit packs for merge adjudication."""
 
     sid_str = str(sid)
     runs_root_path = Path(runs_root)
@@ -585,21 +710,14 @@ def build_merge_ai_packs(
             f"cases/accounts directory not found for sid={sid_str!r} under {runs_root_path}"
         )
 
-    env_limit = merge_config.get_ai_pack_max_lines_per_side()
-    requested_limit = max_lines_per_side if max_lines_per_side and max_lines_per_side > 0 else env_limit
-    context_limit = min(env_limit, requested_limit) if env_limit > 0 else max(requested_limit, 1)
-
     pair_entries, best_partners = _collect_pair_entries(accounts_root)
-    tolerance_hint = _tolerance_hint()
-
-    cache: Dict[int, Mapping[str, object]] = {}
     packs: List[Mapping[str, object]] = []
 
     for pair in sorted(pair_entries.keys()):
         entries = pair_entries.get(pair, [])
         primary_tag = _select_primary_tag(entries)
         if primary_tag is None:
-            logger.warning("MERGE_V2_PACK_MISSING_TAG sid=%s pair=%s", sid_str, pair)
+            logger.warning("MERGE_DUP_PACK_MISSING_TAG sid=%s pair=%s", sid_str, pair)
             continue
 
         a_idx, b_idx = pair
@@ -609,140 +727,46 @@ def build_merge_ai_packs(
         hard_acct = acct_level == "exact_or_known_match"
         include_pair = (not only_merge_best) or is_merge_best or hard_acct
 
-        pair_log = {
-            "sid": sid_str,
-            "pair": {"a": a_idx, "b": b_idx},
-            "only_merge_best": bool(only_merge_best),
-            "is_merge_best": bool(is_merge_best),
-            "acctnum_level": acct_level,
-            "include": bool(include_pair),
-        }
-
         if not include_pair:
-            pair_log["reason"] = "filtered_only_merge_best"
-            logger.info("MERGE_V2_PACK_SKIP %s", json.dumps(pair_log, sort_keys=True))
-            continue
-
-        if hard_acct and only_merge_best and not is_merge_best:
-            pair_log["reason"] = "hard_acct_override"
-        elif is_merge_best:
-            pair_log["reason"] = "merge_best"
-        elif not only_merge_best:
-            pair_log["reason"] = "all_pairs"
-        else:
-            pair_log["reason"] = "unknown"
-
-        logger.info("MERGE_V2_PACK_CONSIDER %s", json.dumps(pair_log, sort_keys=True))
-
-        try:
-            account_a = _load_account_payload(accounts_root, a_idx, cache, context_limit)
-            account_b = _load_account_payload(accounts_root, b_idx, cache, context_limit)
-        except FileNotFoundError as exc:
-            logger.warning(
-                "MERGE_V2_PACK_MISSING_LINES sid=%s pair=%s error=%s",
-                sid_str,
-                pair,
-                exc,
+            logger.info(
+                "MERGE_DUP_PACK_SKIP %s",
+                json.dumps(
+                    {
+                        "sid": sid_str,
+                        "pair": {"a": a_idx, "b": b_idx},
+                        "only_merge_best": bool(only_merge_best),
+                        "is_merge_best": bool(is_merge_best),
+                        "acctnum_level": acct_level,
+                        "include": False,
+                        "reason": "filtered_only_merge_best",
+                    },
+                    sort_keys=True,
+                ),
             )
             continue
 
-        context_a = list(account_a.get("context", []))[:context_limit]
-        context_b = list(account_b.get("context", []))[:context_limit]
-        highlights = _build_highlights(primary_tag)
+        pack_payload = build_duplicate_audit_payload(runs_root_path, sid_str, a_idx, b_idx)
+        messages = build_duplicate_debt_messages(pack_payload)
 
-        account_number_a = account_a.get("account_number")
-        account_number_b = account_b.get("account_number")
-        normalized_a = (
-            normalize_acctnum(str(account_number_a)) if account_number_a else None
+        points_mode_active = _account_merge_module().detect_points_mode_from_payload(primary_tag)
+        total_score = _account_merge_module().coerce_score_value(
+            primary_tag.get("total"), points_mode=points_mode_active
         )
-        normalized_b = (
-            normalize_acctnum(str(account_number_b)) if account_number_b else None
-        )
-        last4_a = (
-            normalize_last4(str(account_number_a)) if account_number_a is not None else None
-        )
-        last4_b = (
-            normalize_last4(str(account_number_b)) if account_number_b is not None else None
-        )
-        ids_payload = {
-            "account_number_a": account_number_a if account_number_a else None,
-            "account_number_b": account_number_b if account_number_b else None,
-            "account_number_a_normalized": normalized_a,
-            "account_number_b_normalized": normalized_b,
-            "account_number_a_last4": last4_a,
-            "account_number_b_last4": last4_b,
-        }
-        ids_by_bureau = {
-            "a": _extract_account_numbers_by_bureau(account_a.get("lines", [])),
-            "b": _extract_account_numbers_by_bureau(account_b.get("lines", [])),
-        }
 
-        digits_a = re.sub(r"\D", "", str(account_number_a or ""))
-        digits_b = re.sub(r"\D", "", str(account_number_b or ""))
-        stem_a = digits_a[:-4] if len(digits_a) > 4 else ""
-        stem_b = digits_b[:-4] if len(digits_b) > 4 else ""
-        acct_last4_equal = bool(last4_a and last4_b and last4_a == last4_b)
-        acct_stem_equal = bool(stem_a and stem_b and stem_a == stem_b)
-        acctnum_conflict = bool(digits_a and digits_b and digits_a != digits_b)
-
-        context_flags = build_context_flags(
-            highlights,
-            account_a.get("lines", []),
-            account_b.get("lines", []),
-        )
-        context_flags["acct_last4_equal"] = acct_last4_equal
-        context_flags["acct_stem_equal"] = acct_stem_equal
-        context_flags["acctnum_conflict"] = acctnum_conflict
-        summary = dict(highlights)
-        summary["context_flags"] = context_flags
-
-        user_payload = {
+        pack_record: Dict[str, object] = {
             "sid": sid_str,
             "pair": {"a": a_idx, "b": b_idx},
-            "ids": ids_payload,
-            "ids_by_bureau": ids_by_bureau,
-            "numeric_match_summary": summary,
-            "context_flags": dict(context_flags),
-            "tolerances_hint": dict(tolerance_hint),
-            "limits": {"max_lines_per_side": context_limit},
-            "context": {"a": context_a, "b": context_b},
-            "output_contract": {
-                "decision": [
-                    "same_account_same_debt",
-                    "same_account_diff_debt",
-                    "same_account_debt_unknown",
-                    "same_debt_diff_account",
-                    "same_debt_account_unknown",
-                    "different",
-                ],
-                "reason": "short natural language",
-                "flags": {
-                    "account_match": ["true", "false", "unknown"],
-                    "debt_match": ["true", "false", "unknown"],
-                },
+            "messages": messages,
+            "schema": "duplicate_debt_audit:v1",
+            "sources": {
+                "a": ["bureaus.json", "meta.json", "tags.json"],
+                "b": ["bureaus.json", "meta.json", "tags.json"],
             },
+            "score_total": total_score,
+            "points_mode": points_mode_active,
         }
 
-        pack = {
-            "sid": sid_str,
-            "pair": {"a": a_idx, "b": b_idx},
-            "ids": ids_payload,
-            "ids_by_bureau": ids_by_bureau,
-            "highlights": summary,
-            "context_flags": dict(context_flags),
-            "tolerances_hint": dict(tolerance_hint),
-            "limits": {"max_lines_per_side": context_limit},
-            "context": {"a": context_a, "b": context_b},
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True),
-                },
-            ],
-        }
-
-        packs.append(pack)
+        packs.append(pack_record)
 
     return packs
 
